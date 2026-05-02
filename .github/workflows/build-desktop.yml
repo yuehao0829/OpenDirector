@@ -60,6 +60,7 @@ jobs:
         env:
           PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+          PKG_CONFIG_LIBDIR: ${{ matrix.pkg_config_path }}
 
       - name: Add rpath to binary
         run: |
