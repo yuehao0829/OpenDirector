@@ -65,7 +65,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app
-        run: pnpm build:desktop
+        run: |
+          echo "=== PKG_CONFIG debug ==="
+          echo "PKG_CONFIG=$PKG_CONFIG"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
+          ${{ matrix.pkg_config_bin }} --libs gobject-2.0 2>&1 || true
+          echo "=== End debug ==="
+          pnpm build:desktop
         env:
           PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
