@@ -31,6 +31,9 @@ find "$TARGET_DIR" -type d -name "pkgconfig" -exec rm -rf {} + 2>/dev/null || tr
 find "$TARGET_DIR" -type d -name "cmake" -exec rm -rf {} + 2>/dev/null || true
 find "$TARGET_DIR" -type d -name "include" -exec rm -rf {} + 2>/dev/null || true
 
+# 删除指向 Homebrew 外部的破损符号链接（如 libgstnice.dylib -> /opt/libnice-gstreamer/...）
+find "$TARGET_DIR" -type l ! -exec test -e {} \; -delete 2>/dev/null || true
+
 # 修复所有 dylib 的 install_name
 # 将 /opt/homebrew/lib/..., /usr/local/lib/..., /opt/local/lib/... 替换为 @rpath/...
 REWRITE_PREFIX="@rpath"
