@@ -104,7 +104,7 @@ jobs:
           $url = "https://gstreamer.freedesktop.org/data/pkg/windows/${{ env.GSTREAMER_MSVC_VERSION }}/msvc/gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
           $out = "${{ runner.temp }}\gstreamer-installer.exe"
           Write-Host "Downloading GStreamer from $url"
-          curl.exe -L -A "Mozilla/5.0" -o $out $url
+          curl.exe -L -A "Wget/1.21.4" -o $out $url
 
       - name: Install GStreamer MSVC runtime
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
