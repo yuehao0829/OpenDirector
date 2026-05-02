@@ -1,7 +1,7 @@
 import type { XgesTimelineClip, XgesTimelineExportPayload } from '../types/media-exchange';
 import { buildProjectMediaTimeline, type BuildProjectMediaTimelineOptions } from './project-media-timeline';
 
-export interface BuildXgesExportTimelineOptions extends BuildProjectMediaTimelineOptions {}
+export type BuildXgesExportTimelineOptions = BuildProjectMediaTimelineOptions;
 
 export function buildXgesExportTimeline(
   options: BuildXgesExportTimelineOptions,

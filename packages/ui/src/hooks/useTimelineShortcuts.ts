@@ -151,7 +151,7 @@ export function useTimelineShortcuts() {
           break;
 
         case 'arrowleft':
-        case 'arrowright':
+        case 'arrowright': {
           if (previewMode !== 'timeline' || isModKey) {
             break;
           }
@@ -172,6 +172,7 @@ export function useTimelineShortcuts() {
             );
           }
           break;
+        }
 
         case 'escape':
           // Cancel current operation
