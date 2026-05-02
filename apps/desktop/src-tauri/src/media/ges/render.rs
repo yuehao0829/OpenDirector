@@ -12,6 +12,7 @@ use super::super::runtime;
 use super::args::{fps_fraction, sanitize_clip_token};
 use super::clip_modifiers::build_cli_modifier_args;
 use super::{builder, effects};
+use crate::commands::metadata::MediaMetadataResult;
 use crate::media::gstreamer::command::{
     canonicalize_media_path, file_uri, run_tool, GstreamerTool,
 };
@@ -370,7 +371,7 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
         format!("--outputuri={}", file_uri(output_path)),
         format!(
             "--format={}",
-            output_format_caps(media_type, request.output_format.as_deref())
+            output_format_caps(media_type, request.output_format.as_deref(), &metadata)
         ),
         "+clip".to_string(),
         file_uri(&input_path),
@@ -384,6 +385,7 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
         args.push(format!("duration={duration_seconds}"));
     }
 
+    let mut forced_output_dimensions: Option<(u32, u32)> = None;
     if let Some(crop) = effects::extract_crop_effect(request) {
         if let (Some(width), Some(height)) = (metadata.width, metadata.height) {
             let left = ((crop.x * width as f64).round() as u32).min(width.saturating_sub(1));
@@ -392,6 +394,7 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
             let crop_height = ((crop.height * height as f64).round() as u32).clamp(1, height - top);
             let right = width.saturating_sub(left + crop_width);
             let bottom = height.saturating_sub(top + crop_height);
+            forced_output_dimensions = Some((crop_width, crop_height));
 
             args.extend([
                 "+effect".to_string(),
@@ -408,11 +411,29 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
         }
     }
 
-    if let (Some(max_width), Some(max_height)) = (request.max_width, request.max_height) {
+    let scaled_output_dimensions = if media_type == "video" {
+        if let (Some(max_width), Some(max_height)) = (request.max_width, request.max_height) {
+            Some((
+                normalize_video_dimension(max_width),
+                normalize_video_dimension(max_height),
+            ))
+        } else {
+            forced_output_dimensions.map(|(width, height)| {
+                (
+                    normalize_video_dimension(width),
+                    normalize_video_dimension(height),
+                )
+            })
+        }
+    } else {
+        None
+    };
+
+    if let Some((output_width, output_height)) = scaled_output_dimensions {
         args.extend([
             "+effect".to_string(),
             format!(
-                "videoscale ! capsfilter caps=video/x-raw,width={max_width},height={max_height},pixel-aspect-ratio=1/1"
+                "videoscale ! capsfilter caps=video/x-raw,width={output_width},height={output_height},pixel-aspect-ratio=1/1"
             ),
         ]);
     }
@@ -498,6 +519,15 @@ fn allocate_output_path(output_dir: &str, extension: &str) -> Result<PathBuf, St
     Ok(Path::new(output_dir).join(format!("processed_{timestamp}.{extension}")))
 }
 
+fn normalize_video_dimension(value: u32) -> u32 {
+    let normalized = value.max(2);
+    if normalized % 2 == 0 {
+        normalized
+    } else {
+        normalized - 1
+    }
+}
+
 fn sanitize_filename(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -546,26 +576,47 @@ fn output_extension(media_type: &str, output_format: Option<&str>) -> &'static s
     }
 }
 
-fn output_format_caps(media_type: &str, output_format: Option<&str>) -> &'static str {
+fn output_format_caps(
+    media_type: &str,
+    output_format: Option<&str>,
+    metadata: &MediaMetadataResult,
+) -> String {
     match (media_type, output_format.unwrap_or("")) {
-        ("audio", "mp3") => "audio/mpeg,mpegversion=1,layer=3",
-        ("audio", _) => "audio/x-wav",
-        (_, _) => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4",
+        ("audio", "mp3") => "audio/mpeg,mpegversion=1,layer=3".to_string(),
+        ("audio", _) => wav_audio_output_format_caps(
+            metadata.channels.filter(|value| *value > 0),
+            metadata.sample_rate.filter(|value| *value > 0),
+        ),
+        (_, _) => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4".to_string(),
     }
 }
 
-fn timeline_output_format_caps(output_format: Option<&str>, has_video: bool) -> &'static str {
+fn timeline_output_format_caps(output_format: Option<&str>, has_video: bool) -> String {
     if !has_video {
         return match output_format.unwrap_or("") {
-            "mp3" => "audio/mpeg,mpegversion=1,layer=3",
-            _ => "audio/x-wav",
+            "mp3" => "audio/mpeg,mpegversion=1,layer=3".to_string(),
+            _ => wav_audio_output_format_caps(Some(2), Some(44_100)),
         };
     }
 
     match output_format.unwrap_or("") {
-        "mov" => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4",
-        _ => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4",
+        "mov" => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4".to_string(),
+        _ => "video/quicktime:video/x-h264:audio/mpeg,mpegversion=4".to_string(),
     }
+}
+
+fn wav_audio_output_format_caps(channels: Option<u32>, sample_rate: Option<u32>) -> String {
+    let mut caps = "audio/x-wav:audio/x-raw,format=S16LE,layout=interleaved".to_string();
+
+    if let Some(rate) = sample_rate {
+        caps.push_str(&format!(",rate={rate}"));
+    }
+
+    if let Some(channel_count) = channels {
+        caps.push_str(&format!(",channels={channel_count}"));
+    }
+
+    caps
 }
 
 #[cfg(test)]
@@ -721,6 +772,36 @@ mod tests {
     }
 
     #[test]
+    fn output_format_caps_uses_audio_stream_profile_for_wav() {
+        let metadata = MediaMetadataResult {
+            duration_ms: Some(2_000.0),
+            width: None,
+            height: None,
+            frame_rate: None,
+            channels: Some(1),
+            sample_rate: Some(44_100),
+            codec: Some("audio/x-wav".to_string()),
+        };
+
+        let caps = output_format_caps("audio", None, &metadata);
+
+        assert_eq!(
+            caps,
+            "audio/x-wav:audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=1"
+        );
+    }
+
+    #[test]
+    fn timeline_output_format_caps_uses_audio_stream_profile_for_audio_only_wav() {
+        let caps = timeline_output_format_caps(None, false);
+
+        assert_eq!(
+            caps,
+            "audio/x-wav:audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2"
+        );
+    }
+
+    #[test]
     fn validate_timeline_request_rejects_invalid_payload() {
         let invalid = TimelineRenderRequest {
             backend: None,
@@ -864,5 +945,65 @@ mod tests {
             "expected rendered audio track: {:?}",
             metadata
         );
+    }
+
+    #[test]
+    #[ignore = "requires a local GStreamer runtime"]
+    fn render_audio_only_timeline_smoke() {
+        let case_dir = temp_case_dir("timeline-render-audio-only");
+        let audio_path = case_dir.join("tone.wav");
+        let output_path = case_dir.join("timeline.wav");
+
+        write_test_wav(&audio_path, 2.0);
+
+        let result = render_timeline(&TimelineRenderRequest {
+            backend: None,
+            output_path: output_path.to_string_lossy().to_string(),
+            output_format: Some("wav".to_string()),
+            width: 640,
+            height: 360,
+            fps: 25.0,
+            tracks: vec![TimelineRenderTrack {
+                id: "audio-main".to_string(),
+                track_type: TimelineTrackType::Audio,
+                muted: false,
+                order: 0,
+            }],
+            clips: vec![TimelineRenderClip {
+                id: "audio-clip".to_string(),
+                track_id: "audio-main".to_string(),
+                input_path: audio_path.to_string_lossy().to_string(),
+                start_ms: 0.0,
+                duration_ms: 1_000.0,
+                trim_start_ms: Some(250.0),
+                mute: None,
+                crop: None,
+                transform: None,
+            }],
+        })
+        .expect("audio-only timeline render should succeed");
+
+        assert_eq!(result.output_path, output_path.to_string_lossy());
+        assert!(
+            output_path.exists(),
+            "audio-only timeline output should exist"
+        );
+        assert!(
+            result.file_size > 0,
+            "audio-only timeline output should not be empty"
+        );
+
+        let metadata = crate::media::gstreamer::discoverer::probe_media(&MediaProbeRequest {
+            path: output_path.to_string_lossy().to_string(),
+        })
+        .expect("audio-only timeline output should be probe-able");
+
+        assert!(
+            metadata.duration_ms.unwrap_or_default() > 900.0,
+            "unexpected audio-only timeline metadata: {:?}",
+            metadata
+        );
+        assert_eq!(metadata.sample_rate, Some(44_100));
+        assert_eq!(metadata.channels, Some(2));
     }
 }

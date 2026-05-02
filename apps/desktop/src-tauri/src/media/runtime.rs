@@ -166,7 +166,7 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
         );
     }
 
-    push_existing_candidate(
+    push_existing_preview_candidate(
         &mut candidates,
         bootstrap::infer_runtime_root_from_path(std::env::var_os("PATH")),
     );
@@ -174,7 +174,7 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         for prefix in ["/opt/homebrew", "/usr/local", "/opt/local"] {
-            push_existing_tool_candidate(&mut candidates, Some(PathBuf::from(prefix)));
+            push_existing_preview_candidate(&mut candidates, Some(PathBuf::from(prefix)));
         }
     }
 
@@ -198,14 +198,13 @@ fn push_existing_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<Path
     }
 }
 
-#[cfg(target_os = "macos")]
-fn push_existing_tool_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+fn push_existing_preview_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
     let Some(candidate) = candidate else {
         return;
     };
 
     let normalized = normalize_candidate(candidate);
-    if !candidate_contains_required_gstreamer_tools(normalized.as_path()) {
+    if !candidate_contains_preview_gstreamer_tools(normalized.as_path()) {
         return;
     }
 
@@ -219,28 +218,36 @@ fn normalize_candidate(candidate: PathBuf) -> PathBuf {
         candidate
     } else if cfg!(feature = "custom-protocol") {
         exe_parent_dir()
-            .map(|exe_dir| exe_dir.join(candidate))
+            .map(|exe_dir| exe_dir.join(&candidate))
             .unwrap_or(candidate)
     } else {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(candidate)
     }
 }
 
-fn candidate_contains_required_gstreamer_tools(candidate: &Path) -> bool {
+fn candidate_contains_preview_gstreamer_tools(candidate: &Path) -> bool {
     if !candidate.exists() {
         return false;
     }
 
-    [
-        "gst-discoverer-1.0",
-        "gst-inspect-1.0",
-        "ges-launch-1.0",
-    ]
-    .into_iter()
-    .map(gstreamer_executable_name)
-    .all(|executable| {
-        candidate.join("bin").join(&executable).exists() || candidate.join(&executable).exists()
-    })
+    ["gst-discoverer-1.0", "gst-inspect-1.0"]
+        .into_iter()
+        .map(gstreamer_executable_name)
+        .all(|executable| {
+            candidate.join("bin").join(&executable).exists() || candidate.join(&executable).exists()
+        })
+}
+
+#[cfg(test)]
+fn candidate_contains_required_gstreamer_tools(candidate: &Path) -> bool {
+    candidate_contains_preview_gstreamer_tools(candidate)
+        && ["ges-launch-1.0"]
+            .into_iter()
+            .map(gstreamer_executable_name)
+            .all(|executable| {
+                candidate.join("bin").join(&executable).exists()
+                    || candidate.join(&executable).exists()
+            })
 }
 
 fn gstreamer_executable_name(base_name: &str) -> String {
@@ -418,16 +425,28 @@ mod tests {
         dir
     }
 
+    fn build_runtime_state(bootstrap: bootstrap::BootstrapReport) -> GstreamerRuntimeState {
+        GstreamerRuntimeState {
+            compiled: true,
+            bootstrap,
+            plugin_check: plugin_check::PluginCheckReport {
+                search_paths: Vec::new(),
+                missing_elements: Vec::new(),
+            },
+        }
+    }
+
     #[test]
     fn candidate_contains_required_gstreamer_tools_rejects_plain_prefix() {
         let prefix = unique_temp_dir("plain-prefix");
 
+        assert!(!candidate_contains_preview_gstreamer_tools(prefix.as_path()));
         assert!(!candidate_contains_required_gstreamer_tools(prefix.as_path()));
     }
 
     #[test]
-    fn candidate_contains_required_gstreamer_tools_rejects_partial_prefix() {
-        let prefix = unique_temp_dir("tool-prefix");
+    fn candidate_contains_preview_gstreamer_tools_rejects_partial_prefix() {
+        let prefix = unique_temp_dir("preview-partial-prefix");
         let bin_dir = prefix.join("bin");
         fs::create_dir_all(&bin_dir).expect("bin dir");
         fs::write(
@@ -436,7 +455,36 @@ mod tests {
         )
         .expect("gst-inspect");
 
+        assert!(!candidate_contains_preview_gstreamer_tools(prefix.as_path()));
         assert!(!candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[test]
+    fn candidate_contains_preview_gstreamer_tools_accepts_preview_only_prefix() {
+        let prefix = unique_temp_dir("preview-only-prefix");
+        let bin_dir = prefix.join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0"] {
+            fs::write(bin_dir.join(gstreamer_executable_name(tool_name)), []).expect("tool");
+        }
+
+        assert!(candidate_contains_preview_gstreamer_tools(prefix.as_path()));
+        assert!(!candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[test]
+    fn push_existing_preview_candidate_accepts_preview_only_runtime_root() {
+        let prefix = unique_temp_dir("preview-runtime-root");
+        let bin_dir = prefix.join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0"] {
+            fs::write(bin_dir.join(gstreamer_executable_name(tool_name)), []).expect("tool");
+        }
+
+        let mut candidates = Vec::new();
+        push_existing_preview_candidate(&mut candidates, Some(prefix.clone()));
+
+        assert_eq!(candidates, vec![prefix]);
     }
 
     #[test]
@@ -449,6 +497,24 @@ mod tests {
         }
 
         assert!(candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[test]
+    fn preview_runtime_accepts_runtime_root_without_cli_tools() {
+        let runtime_root = unique_temp_dir("bundled-preview-runtime");
+        let runtime = build_runtime_state(bootstrap::BootstrapReport {
+            runtime_root: Some(runtime_root),
+            plugin_search_paths: Vec::new(),
+            gst_discoverer_path: None,
+            gst_inspect_path: None,
+            ges_launch_path: None,
+            diagnostics: vec![
+                "gst-discoverer-1.0 was not found in the runtime".to_string(),
+                "gst-inspect-1.0 was not found in the runtime".to_string(),
+            ],
+        });
+
+        assert!(runtime.is_preview_ready());
     }
 
     #[cfg(target_os = "macos")]
@@ -466,8 +532,8 @@ mod tests {
         }
 
         let mut candidates = Vec::new();
-        push_existing_candidate(&mut candidates, Some(path_runtime.clone()));
-        push_existing_tool_candidate(&mut candidates, Some(fallback_prefix.clone()));
+        push_existing_preview_candidate(&mut candidates, Some(path_runtime.clone()));
+        push_existing_preview_candidate(&mut candidates, Some(fallback_prefix.clone()));
 
         assert_eq!(candidates, vec![path_runtime, fallback_prefix]);
     }

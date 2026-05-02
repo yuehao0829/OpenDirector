@@ -5,18 +5,56 @@ use std::path::PathBuf;
 use super::bootstrap::BootstrapReport;
 use super::command::{run_tool, GstreamerTool};
 
-const REQUIRED_ELEMENTS: &[&str] = &[
-    "playbin",
-    "decodebin",
-    "videoconvert",
-    "videoscale",
-    "videocrop",
-    "audioconvert",
-    "audioresample",
-    "audiomixer",
-    "x264enc",
-    "voaacenc",
-    "mp4mux",
+struct RequiredElementGroup {
+    label: &'static str,
+    candidates: &'static [&'static str],
+}
+
+const REQUIRED_ELEMENT_GROUPS: &[RequiredElementGroup] = &[
+    RequiredElementGroup {
+        label: "playbin",
+        candidates: &["playbin"],
+    },
+    RequiredElementGroup {
+        label: "decodebin",
+        candidates: &["decodebin"],
+    },
+    RequiredElementGroup {
+        label: "videoconvert",
+        candidates: &["videoconvert"],
+    },
+    RequiredElementGroup {
+        label: "videoscale",
+        candidates: &["videoscale"],
+    },
+    RequiredElementGroup {
+        label: "videocrop",
+        candidates: &["videocrop"],
+    },
+    RequiredElementGroup {
+        label: "audioconvert",
+        candidates: &["audioconvert"],
+    },
+    RequiredElementGroup {
+        label: "audioresample",
+        candidates: &["audioresample"],
+    },
+    RequiredElementGroup {
+        label: "audiomixer",
+        candidates: &["audiomixer"],
+    },
+    RequiredElementGroup {
+        label: "x264enc",
+        candidates: &["x264enc"],
+    },
+    RequiredElementGroup {
+        label: "aac encoder",
+        candidates: &["voaacenc", "avenc_aac", "fdkaacenc", "faac"],
+    },
+    RequiredElementGroup {
+        label: "mp4mux",
+        candidates: &["mp4mux"],
+    },
 ];
 
 #[derive(Debug, Clone)]
@@ -37,19 +75,21 @@ pub fn check_required_plugins(bootstrap: &BootstrapReport) -> PluginCheckReport 
 pub fn check_required_plugins(bootstrap: &BootstrapReport) -> PluginCheckReport {
     let missing_elements =
         if bootstrap.runtime_root.is_none() || bootstrap.plugin_search_paths.is_empty() {
-            REQUIRED_ELEMENTS
+            REQUIRED_ELEMENT_GROUPS
                 .iter()
-                .map(|name| (*name).to_string())
+                .map(|requirement| requirement.label.to_string())
                 .collect()
         } else if bootstrap.gst_inspect_path.is_none() {
             vec!["gst-inspect-1.0".to_string()]
         } else {
-            REQUIRED_ELEMENTS
+            REQUIRED_ELEMENT_GROUPS
                 .iter()
-                .filter_map(|name| match inspect_element(bootstrap, name) {
-                    Ok(true) => None,
-                    Ok(false) => Some((*name).to_string()),
-                    Err(_) => Some((*name).to_string()),
+                .filter_map(|requirement| {
+                    match inspect_any_element(bootstrap, requirement.candidates) {
+                        Ok(true) => None,
+                        Ok(false) => Some(requirement.label.to_string()),
+                        Err(_) => Some(requirement.label.to_string()),
+                    }
                 })
                 .collect()
         };
@@ -64,4 +104,31 @@ fn inspect_element(bootstrap: &BootstrapReport, element: &str) -> Result<bool, S
     let args = vec!["--exists".to_string(), element.to_string()];
     let output = run_tool(bootstrap, GstreamerTool::GstInspect, &args)?;
     Ok(output.status.success())
+}
+
+fn inspect_any_element(bootstrap: &BootstrapReport, elements: &[&str]) -> Result<bool, String> {
+    for element in elements {
+        if inspect_element(bootstrap, element)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aac_requirement_accepts_any_supported_encoder() {
+        let group = REQUIRED_ELEMENT_GROUPS
+            .iter()
+            .find(|group| group.label == "aac encoder")
+            .expect("aac encoder group should exist");
+
+        assert!(group.candidates.contains(&"voaacenc"));
+        assert!(group.candidates.contains(&"avenc_aac"));
+        assert!(group.candidates.contains(&"fdkaacenc"));
+    }
 }

@@ -4,6 +4,7 @@ import { applyReference } from '@opendirector/core/services/reference-processor'
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { usePreviewStore } from '@opendirector/core/stores/previewStore';
 import { useProjectStore } from '@opendirector/core/stores/projectStore';
+import { storeEvents } from '@opendirector/core/stores/store-events';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { Asset, CropRect, Reference, TrimRange } from '@opendirector/core/types/asset';
 import type { PreviewSessionState } from '@opendirector/core/types/media-preview';
@@ -13,6 +14,7 @@ import {
   computeCropFrameRect,
   computeCropDrawParams,
   computeContainLayout,
+  computeInitialCropRect,
   parseAspectRatio,
 } from '../../utils/crop';
 import { useImageCanvas } from '../../hooks/useImageCanvas';
@@ -25,10 +27,50 @@ import { WaveformPreview } from './WaveformPreview';
 import { CropOverlay } from './CropOverlay';
 import { Crop } from 'lucide-react';
 
+interface PendingReferenceUpdate {
+  fragmentId: string;
+  refId: string;
+  cropRect?: CropRect;
+  trimRange?: TrimRange;
+}
+
+function isSameCropRect(left?: CropRect | null, right?: CropRect | null): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.x - right.x) < 0.001 &&
+    Math.abs(left.y - right.y) < 0.001 &&
+    Math.abs(left.width - right.width) < 0.001 &&
+    Math.abs(left.height - right.height) < 0.001
+  );
+}
+
+function isSameTrimRange(left?: TrimRange | null, right?: TrimRange | null): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.startMs - right.startMs) < 1 &&
+    Math.abs(left.endMs - right.endMs) < 1
+  );
+}
+
+function isDefaultTrimRange(trimRange?: TrimRange | null, assetDuration?: number | null): boolean {
+  if (!trimRange) return true;
+  return isSameTrimRange(trimRange, {
+    startMs: 0,
+    endMs: Math.max(0, assetDuration ?? 0),
+  });
+}
+
 export function PreviewPanel() {
   const tauriEnvironment = isTauri();
   // Get preview source from hook (video only, topmost video track)
   const source = usePreviewSource();
+  const referenceTargetAspectRatio = parseAspectRatio(source.targetAspectRatio);
+  const referenceKey =
+    source.mode === 'reference' && source.reference
+      ? `${source.referenceFragmentId ?? 'unknown'}:${source.reference.id}:${source.reference.assetId}`
+      : null;
   const [nativeTimelinePreviewError, setNativeTimelinePreviewError] = useState<string | null>(null);
   const [nativeTimelinePreviewState, setNativeTimelinePreviewState] =
     useState<PreviewSessionState>('idle');
@@ -53,9 +95,76 @@ export function PreviewPanel() {
   const setTime = usePreviewStore((s) => s.setTime);
   const setDuration = usePreviewStore((s) => s.setDuration);
 
+  const [draftCropRect, setDraftCropRect] = useState<CropRect | undefined>(undefined);
+  const [draftTrimRange, setDraftTrimRange] = useState<TrimRange | undefined>(undefined);
+  const draftCropRectRef = useRef<CropRect | undefined>(undefined);
+  const draftTrimRangeRef = useRef<TrimRange | undefined>(undefined);
+  draftCropRectRef.current = draftCropRect;
+  draftTrimRangeRef.current = draftTrimRange;
+
+  const previousReferenceSnapshotRef = useRef<{
+    referenceKey: string | null;
+    cropRect?: CropRect;
+    trimRange?: TrimRange;
+  }>({
+    referenceKey: null,
+    cropRect: undefined,
+    trimRange: undefined,
+  });
+  useEffect(() => {
+    const nextCropRect = source.mode === 'reference' ? source.reference?.cropRect : undefined;
+    const nextTrimRange = source.mode === 'reference' ? source.reference?.trimRange : undefined;
+    const previous = previousReferenceSnapshotRef.current;
+    const referenceChanged = previous.referenceKey !== referenceKey;
+    const cropChanged = !isSameCropRect(previous.cropRect, nextCropRect);
+    const trimChanged = !isSameTrimRange(previous.trimRange, nextTrimRange);
+
+    if (!referenceChanged && !cropChanged && !trimChanged) {
+      return;
+    }
+
+    previousReferenceSnapshotRef.current = {
+      referenceKey,
+      cropRect: nextCropRect,
+      trimRange: nextTrimRange,
+    };
+    setDraftCropRect(nextCropRect);
+    setDraftTrimRange(nextTrimRange);
+  }, [referenceKey, source.mode, source.reference]);
+
   const desktopTimelinePreviewActive = tauriEnvironment && source.mode === 'timeline';
   const nativeTimelinePlaybackActive =
     desktopTimelinePreviewActive && nativeTimelinePreviewState === 'playing';
+
+  const inferredDefaultCropRect = useMemo(() => {
+    if (
+      source.mode !== 'reference' ||
+      !source.asset ||
+      (source.previewType !== 'image' && source.previewType !== 'video')
+    ) {
+      return null;
+    }
+
+    const width = source.asset.width ?? 0;
+    const height = source.asset.height ?? 0;
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+
+    return computeInitialCropRect(width, height, referenceTargetAspectRatio);
+  }, [
+    source.mode,
+    source.asset,
+    source.previewType,
+    source.asset?.width,
+    source.asset?.height,
+    referenceTargetAspectRatio,
+  ]);
+
+  const effectiveTrimRange =
+    source.mode === 'reference'
+      ? (draftTrimRange ?? source.reference?.trimRange)
+      : undefined;
 
   // Determine effective values based on mode
   const isIndependentPlayback = source.mode === 'asset' || source.mode === 'reference';
@@ -64,8 +173,8 @@ export function PreviewPanel() {
   // but PlaybackControls and VideoPreview work in absolute time [0, asset.duration].
   // Convert accordingly.
   const referenceTrimStart =
-    source.mode === 'reference' && source.reference?.trimRange
-      ? source.reference.trimRange.startMs
+    source.mode === 'reference' && effectiveTrimRange
+      ? effectiveTrimRange.startMs
       : 0;
   const effectiveCurrentTime = isIndependentPlayback
     ? currentTime + referenceTrimStart
@@ -83,8 +192,8 @@ export function PreviewPanel() {
         : source.duration;
 
   const referenceTrimEnd =
-    source.mode === 'reference' && source.reference?.trimRange
-      ? source.reference.trimRange.endMs
+    source.mode === 'reference' && effectiveTrimRange
+      ? effectiveTrimRange.endMs
       : 0;
 
   const handleTimeUpdate = useCallback(
@@ -138,13 +247,26 @@ export function PreviewPanel() {
   const updateFragment = useTimelineStore((s) => s.updateFragment);
 
   // Unified update for crop/trim with rAF throttling to avoid store mutation spam during drag
-  const pendingUpdateRef = useRef<{
-    fragmentId: string;
-    refId: string;
-    field: 'cropRect' | 'trimRange';
-    value: CropRect | TrimRange;
-  } | null>(null);
+  const pendingUpdateRef = useRef<PendingReferenceUpdate | null>(null);
   const rafRef = useRef(0);
+
+  useEffect(() => {
+    return storeEvents.subscribe((event) => {
+      if (event.type !== 'SNAPSHOT_RESTORED') return;
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+      pendingUpdateRef.current = null;
+      previousReferenceSnapshotRef.current = {
+        referenceKey: null,
+        cropRect: undefined,
+        trimRange: undefined,
+      };
+      setDraftCropRect(undefined);
+      setDraftTrimRange(undefined);
+    });
+  }, []);
 
   const flushReferenceUpdate = useCallback(() => {
     const pending = pendingUpdateRef.current;
@@ -152,9 +274,15 @@ export function PreviewPanel() {
     pendingUpdateRef.current = null;
     const fragment = useTimelineStore.getState().fragments.find((f) => f.id === pending.fragmentId);
     if (!fragment) return;
-    const updatedRefs = fragment.references.map((r) =>
-      r.id === pending.refId ? { ...r, [pending.field]: pending.value } : r,
-    );
+    const updatedRefs = fragment.references.map((r) => {
+      if (r.id !== pending.refId) return r;
+
+      return {
+        ...r,
+        ...(pending.cropRect !== undefined ? { cropRect: pending.cropRect } : {}),
+        ...(pending.trimRange !== undefined ? { trimRange: pending.trimRange } : {}),
+      };
+    });
     updateFragment(pending.fragmentId, { references: updatedRefs });
   }, [updateFragment]);
 
@@ -162,10 +290,25 @@ export function PreviewPanel() {
     (
       fragmentId: string,
       refId: string,
-      field: 'cropRect' | 'trimRange',
-      value: CropRect | TrimRange,
+      patch: Pick<PendingReferenceUpdate, 'cropRect' | 'trimRange'>,
     ) => {
-      pendingUpdateRef.current = { fragmentId, refId, field, value };
+      const previous = pendingUpdateRef.current;
+      if (
+        previous &&
+        previous.fragmentId === fragmentId &&
+        previous.refId === refId
+      ) {
+        pendingUpdateRef.current = {
+          ...previous,
+          ...patch,
+        };
+      } else {
+        pendingUpdateRef.current = {
+          fragmentId,
+          refId,
+          ...patch,
+        };
+      }
       if (!rafRef.current) {
         rafRef.current = requestAnimationFrame(() => {
           rafRef.current = 0;
@@ -187,7 +330,6 @@ export function PreviewPanel() {
   const [cropOverlayVisible, setCropOverlayVisible] = useState(false);
 
   // Track whether crop is at default (reported by sub-components via useReferenceCrop)
-  const [isDefaultCrop, setIsDefaultCrop] = useState(true);
   const [defaultCropRect, setDefaultCropRect] = useState<CropRect | null>(null);
   const defaultCropRectRef = useRef<CropRect | null>(null);
   defaultCropRectRef.current = defaultCropRect;
@@ -198,11 +340,11 @@ export function PreviewPanel() {
       // when hidden, pan/zoom is disabled and no state should be persisted.
       if (!cropOverlayVisible) return;
       if (source.mode !== 'reference' || !source.reference || !source.referenceFragmentId) return;
+      setDraftCropRect(newCropRect);
       scheduleReferenceUpdate(
         source.referenceFragmentId,
         source.reference.id,
-        'cropRect',
-        newCropRect,
+        { cropRect: newCropRect },
       );
     },
     [
@@ -217,11 +359,11 @@ export function PreviewPanel() {
   const handleTrimChange = useCallback(
     (newTrimRange: TrimRange) => {
       if (source.mode !== 'reference' || !source.reference || !source.referenceFragmentId) return;
+      setDraftTrimRange(newTrimRange);
       scheduleReferenceUpdate(
         source.referenceFragmentId,
         source.reference.id,
-        'trimRange',
-        newTrimRange,
+        { trimRange: newTrimRange },
       );
     },
     [source.mode, source.reference, source.referenceFragmentId, scheduleReferenceUpdate],
@@ -230,8 +372,7 @@ export function PreviewPanel() {
   // ── Apply: crop/trim → generate new file → replace reference ──
   const [isApplying, setIsApplying] = useState(false);
 
-  const handleDefaultCropChange = useCallback((isDefault: boolean, defCr: CropRect) => {
-    setIsDefaultCrop(isDefault);
+  const handleDefaultCropChange = useCallback((_isDefault: boolean, defCr: CropRect) => {
     setDefaultCropRect((prev) => {
       if (
         prev &&
@@ -269,18 +410,38 @@ export function PreviewPanel() {
       const fs = adapter.fs;
       if (!fs) throw new Error('No file system adapter available');
 
+      const sourceAr = asset.width && asset.height ? asset.width / asset.height : null;
+      const hasAspectRatioCrop =
+        referenceTargetAspectRatio !== null &&
+        sourceAr !== null &&
+        Math.abs(referenceTargetAspectRatio - sourceAr) > 0.01;
+      const effectiveDefaultCropRect = defaultCropRectRef.current ?? inferredDefaultCropRect;
+      const draftEffectiveCropRect =
+        cropOverlayVisible ? (draftCropRectRef.current ?? ref.cropRect) : undefined;
+      const hasExplicitCropChange = draftEffectiveCropRect
+        ? (
+            effectiveDefaultCropRect
+              ? !isSameCropRect(draftEffectiveCropRect, effectiveDefaultCropRect)
+              : true
+          )
+        : false;
+
       // All types: media crop/trim — cropRect only when overlay visible, trimRange always active
-      // Use isDefaultCrop (which reflects user's actual zoom/pan state) rather than
-      // ratio comparison alone. When the source aspect matches the target, the user
-      // can still zoom/pan the contain layout, and that crop must be applied.
-      const effectiveRef = cropOverlayVisible
-        ? {
-            ...ref,
-            cropRect:
-              ref.cropRect ??
-              (isDefaultCrop ? undefined : (defaultCropRectRef.current ?? undefined)),
-          }
-        : { ...ref, cropRect: undefined };
+      // Apply should always use the latest local draft, even before the rAF-throttled
+      // store sync has flushed. When the user only opens the crop editor without
+      // adjusting the frame, the default aspect-ratio crop still counts while the
+      // crop editor is active.
+      const effectiveRef = {
+        ...ref,
+        cropRect: cropOverlayVisible
+          ? (
+              hasExplicitCropChange
+                ? draftEffectiveCropRect
+                : (hasAspectRatioCrop ? (effectiveDefaultCropRect ?? undefined) : undefined)
+            )
+          : undefined,
+        trimRange: draftTrimRangeRef.current ?? ref.trimRange,
+      };
 
       const result = await applyReference({
         asset,
@@ -335,7 +496,8 @@ export function PreviewPanel() {
     source.asset,
     source.referenceFragmentId,
     source.targetAspectRatio,
-    isDefaultCrop,
+    referenceTargetAspectRatio,
+    inferredDefaultCropRect,
     cropOverlayVisible,
     addAsset,
     updateFragment,
@@ -345,26 +507,37 @@ export function PreviewPanel() {
     if (source.mode !== 'reference' || !source.reference || !source.asset) return true;
 
     const asset = source.asset;
-    const targetAr = parseAspectRatio(source.targetAspectRatio);
+    const targetAr = referenceTargetAspectRatio;
     const sourceAr = asset.width && asset.height ? asset.width / asset.height : null;
 
     const hasAspectRatioCrop =
       targetAr !== null && sourceAr !== null && Math.abs(targetAr - sourceAr) > 0.01;
-    const hasCropChange = cropOverlayVisible && (!isDefaultCrop || hasAspectRatioCrop);
+    const effectiveDefaultCropRect = defaultCropRect ?? inferredDefaultCropRect;
+    const pendingCropRect = cropOverlayVisible
+      ? (draftCropRect ?? source.reference.cropRect)
+      : undefined;
+    const hasExplicitCropChange = pendingCropRect
+      ? (
+          effectiveDefaultCropRect
+            ? !isSameCropRect(pendingCropRect, effectiveDefaultCropRect)
+            : true
+        )
+      : false;
+    const hasCropChange = hasExplicitCropChange || (cropOverlayVisible && hasAspectRatioCrop);
 
-    const tr = source.reference.trimRange;
-    const assetDuration = source.asset.duration ?? 0;
-    const isDefaultTrim =
-      !tr || (Math.abs(tr.startMs) < 1 && Math.abs(tr.endMs - assetDuration) < 1);
+    const isDefaultTrim = isDefaultTrimRange(effectiveTrimRange, source.asset.duration);
 
     return !hasCropChange && isDefaultTrim;
   }, [
     source.mode,
     source.reference,
     source.asset,
-    source.targetAspectRatio,
+    referenceTargetAspectRatio,
     cropOverlayVisible,
-    isDefaultCrop,
+    defaultCropRect,
+    inferredDefaultCropRect,
+    draftCropRect,
+    effectiveTrimRange,
   ]);
 
   // Render preview content based on type
@@ -457,6 +630,7 @@ export function PreviewPanel() {
           <ReferenceImagePreview
             asset={asset}
             reference={ref}
+            referenceIdentity={referenceKey ?? `${ref.id}:${ref.assetId}`}
             targetAspectRatio={source.targetAspectRatio}
             onCropChange={handleCropChange}
             onDefaultCropChange={handleDefaultCropChange}
@@ -472,6 +646,7 @@ export function PreviewPanel() {
             src={source.previewUrl!}
             asset={asset}
             reference={ref}
+            referenceIdentity={referenceKey ?? `${ref.id}:${ref.assetId}`}
             targetAspectRatio={targetAr}
             isPlaying={isPlaying}
             currentTime={effectiveCurrentTime}
@@ -557,7 +732,7 @@ export function PreviewPanel() {
         onSeek={handleSeek}
         trimRange={
           source.mode === 'reference' && source.asset?.duration
-            ? (source.reference?.trimRange ?? { startMs: 0, endMs: source.asset.duration })
+            ? (effectiveTrimRange ?? { startMs: 0, endMs: source.asset.duration })
             : undefined
         }
         onTrimChange={source.mode === 'reference' ? handleTrimChange : undefined}
@@ -575,6 +750,7 @@ export function PreviewPanel() {
 function ReferenceImagePreview({
   asset,
   reference,
+  referenceIdentity,
   targetAspectRatio,
   onCropChange,
   onDefaultCropChange,
@@ -582,6 +758,7 @@ function ReferenceImagePreview({
 }: {
   asset: Asset;
   reference: Reference;
+  referenceIdentity: string;
   targetAspectRatio: string | null;
   onCropChange: (rect: CropRect) => void;
   onDefaultCropChange: (isDefault: boolean, defaultCropRect: CropRect) => void;
@@ -592,8 +769,8 @@ function ReferenceImagePreview({
   // Bridge state: passes cropRect from useReferenceCrop to useImageCanvas
   // without waiting for store round-trip (avoids 1-frame lag during pan/zoom).
   // Reset when overlay closes so stale values from a previous image don't leak
-  // into the next crop session. Only syncs the initial default — during drag,
-  // the CropOverlay callback sets canvasCropRect directly.
+  // into the next crop session, and keep it synced with external crop restores
+  // while the overlay stays open.
   const [canvasCropRect, setCanvasCropRect] = useState<CropRect | undefined>(undefined);
 
   // Canvas rendering
@@ -605,6 +782,7 @@ function ReferenceImagePreview({
 
   const { cropRect, defaultCropRect, isDefaultCrop } = useReferenceCrop({
     reference,
+    referenceIdentity,
     imageInfo,
     targetAspectRatio: targetAr,
     onCropChange: (cr) => {
@@ -614,20 +792,15 @@ function ReferenceImagePreview({
     enabled: cropOverlayVisible,
   });
 
-  // Sync canvasCropRect with useReferenceCrop's initial default.
-  // useReferenceCrop skips the first onCropChange call (to avoid writing the
-  // default back to the store), so canvasCropRect would otherwise stay stale
-  // until the user starts panning/zooming. After the initial sync, the
-  // CropOverlay callback handles all subsequent updates directly.
-  const cropSyncedRef = useRef(false);
   useEffect(() => {
     if (!cropOverlayVisible) {
       setCanvasCropRect(undefined);
-      cropSyncedRef.current = false;
-    } else if (cropRect && !cropSyncedRef.current) {
-      setCanvasCropRect(cropRect);
-      cropSyncedRef.current = true;
+      return;
     }
+
+    if (!cropRect) return;
+
+    setCanvasCropRect((prev) => (isSameCropRect(prev, cropRect) ? prev : cropRect));
   }, [cropOverlayVisible, cropRect]);
 
   useEffect(() => {
@@ -662,6 +835,7 @@ function ReferenceVideoPreview({
   src,
   asset,
   reference,
+  referenceIdentity,
   targetAspectRatio,
   isPlaying,
   currentTime,
@@ -677,6 +851,7 @@ function ReferenceVideoPreview({
   src: string;
   asset: Asset;
   reference: Reference;
+  referenceIdentity: string;
   targetAspectRatio: number | null;
   isPlaying: boolean;
   currentTime: number;
@@ -693,6 +868,7 @@ function ReferenceVideoPreview({
 
   const { cropRect, defaultCropRect, isDefaultCrop } = useReferenceCrop({
     reference,
+    referenceIdentity,
     imageInfo: { naturalWidth: asset.width ?? 1920, naturalHeight: asset.height ?? 1080 },
     targetAspectRatio,
     onCropChange,

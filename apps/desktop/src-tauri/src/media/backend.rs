@@ -7,9 +7,12 @@ use super::{ges, gstreamer, runtime};
 use crate::commands::metadata::MediaMetadataResult;
 
 pub fn process_asset(request: AssetProcessRequest) -> MediaResult<AssetProcessResult> {
-    match runtime::require_gstreamer_runtime() {
-        Ok(_) => ges::render::process_asset(&request),
-        Err(reason) => Err(backend_not_ready("gstreamerGes", &reason)),
+    match detect_media_type(&request.input_path) {
+        "image" => ges::render::process_asset(&request),
+        _ => match runtime::require_gstreamer_runtime() {
+            Ok(_) => ges::render::process_asset(&request),
+            Err(reason) => Err(backend_not_ready("gstreamerGes", &reason)),
+        },
     }
 }
 
@@ -34,8 +37,24 @@ pub fn render_timeline(request: TimelineRenderRequest) -> MediaResult<TimelineRe
     }
 }
 
+fn detect_media_type(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "wmv" => "video",
+        "mp3" | "wav" | "ogg" | "m4a" | "flac" | "aac" => "audio",
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tiff" | "tif" | "gif" => "image",
+        _ => "video",
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::PI;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,6 +99,27 @@ mod tests {
             "expected rendered clip at {}",
             output_path.display()
         );
+    }
+
+    fn write_test_wav(output_path: &Path, duration_secs: f32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer =
+            hound::WavWriter::create(output_path, spec).expect("failed to create wav writer");
+        let sample_count = (spec.sample_rate as f32 * duration_secs) as usize;
+
+        for sample_index in 0..sample_count {
+            let t = sample_index as f32 / spec.sample_rate as f32;
+            let sample = (t * 440.0 * 2.0 * PI).sin();
+            let value = (sample * i16::MAX as f32 * 0.3) as i16;
+            writer.write_sample(value).expect("failed to write sample");
+        }
+
+        writer.finalize().expect("failed to finalize wav");
     }
 
     #[test]
@@ -189,5 +229,38 @@ mod tests {
             "unexpected concat metadata: {:?}",
             concat_meta
         );
+    }
+
+    #[test]
+    #[ignore = "requires a local GStreamer runtime"]
+    fn process_audio_smoke() {
+        let case_dir = temp_case_dir("process-audio");
+        let input_path = case_dir.join("input.wav");
+        let processed_dir = case_dir.join("processed");
+        write_test_wav(&input_path, 2.0);
+
+        let processed = process_asset(AssetProcessRequest {
+            backend: None,
+            input_path: input_path.to_string_lossy().to_string(),
+            output_dir: processed_dir.to_string_lossy().to_string(),
+            crop_x: None,
+            crop_y: None,
+            crop_w: None,
+            crop_h: None,
+            trim_start_ms: Some(250.0),
+            trim_end_ms: Some(1250.0),
+            max_width: None,
+            max_height: None,
+            target_aspect_ratio: None,
+            output_format: None,
+        })
+        .expect("audio process_asset should succeed");
+
+        let reader =
+            hound::WavReader::open(&processed.output_path).expect("processed audio should exist");
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 44_100);
+        assert_eq!(reader.duration(), 44_100);
     }
 }

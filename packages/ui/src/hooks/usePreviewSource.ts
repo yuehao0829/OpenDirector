@@ -18,7 +18,7 @@
  * - previewType: 'video' | 'image' | 'audio'
  */
 
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { usePreviewStore } from '@opendirector/core/stores/previewStore';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
@@ -41,6 +41,23 @@ export interface PreviewSource {
   waveformDataPath?: string;  // Path to binary peak data file (audio assets)
 }
 
+function getReferencePreviewIdentity(source: PreviewSource): string | null {
+  if (source.mode !== 'reference' || !source.asset || !source.reference) {
+    return null;
+  }
+
+  return [
+    source.referenceFragmentId ?? 'unknown',
+    source.reference.id,
+    source.asset.id,
+    source.previewType,
+  ].join(':');
+}
+
+function getReferenceTrimStartMs(reference: Reference): number {
+  return reference.trimRange?.startMs ?? 0;
+}
+
 export function usePreviewSource(): PreviewSource {
   // Secondary focus controls Preview window only (reference/asset navigation)
   const secondaryFocus = useSelectionStore((s) => s.secondaryFocus);
@@ -55,6 +72,9 @@ export function usePreviewSource(): PreviewSource {
   const setAssetPreview = usePreviewStore((s) => s.setAssetPreview);
   const setReferencePreview = usePreviewStore((s) => s.setReferencePreview);
   const setTimelinePreview = usePreviewStore((s) => s.setTimelinePreview);
+  const setPreviewDuration = usePreviewStore((s) => s.setDuration);
+  const previousReferencePreviewIdentityRef = useRef<string | null>(null);
+  const previousReferenceTrimStartMsRef = useRef(0);
 
   // Compute preview source (read-only)
   const source = useMemo((): PreviewSource => {
@@ -182,14 +202,74 @@ export function usePreviewSource(): PreviewSource {
       useTimelineStore.getState().pause();
     }
 
-    if (source.mode === 'reference' && source.asset) {
-      setReferencePreview(source.asset.id, source.previewType, source.duration);
+    if (source.mode === 'reference' && source.asset && source.reference) {
+      const previewState = usePreviewStore.getState();
+      const referencePreviewIdentity = getReferencePreviewIdentity(source);
+      const referenceTrimStartMs = getReferenceTrimStartMs(source.reference);
+      const sameReferencePreview =
+        previewState.mode === 'reference' &&
+        previewState.assetId === source.asset.id &&
+        previewState.assetType === source.previewType &&
+        previousReferencePreviewIdentityRef.current === referencePreviewIdentity;
+      const shouldResetForVideoTrimStartChange =
+        sameReferencePreview &&
+        source.previewType === 'video' &&
+        previewState.isPlaying &&
+        previousReferenceTrimStartMsRef.current !== referenceTrimStartMs;
+      const shouldClampPlayingVideoToNewEnd =
+        sameReferencePreview &&
+        source.previewType === 'video' &&
+        previewState.isPlaying &&
+        previewState.currentTime > source.duration;
+      if (shouldResetForVideoTrimStartChange) {
+        setReferencePreview(source.asset.id, source.previewType, source.duration);
+      } else if (shouldClampPlayingVideoToNewEnd) {
+        setReferencePreview(source.asset.id, source.previewType, source.duration);
+        usePreviewStore.getState().seek(source.duration);
+      } else if (sameReferencePreview) {
+        setPreviewDuration(source.duration);
+        if (previewState.currentTime > source.duration) {
+          previewState.seek(source.duration);
+        }
+      } else {
+        setReferencePreview(source.asset.id, source.previewType, source.duration);
+      }
+      previousReferencePreviewIdentityRef.current = referencePreviewIdentity;
+      previousReferenceTrimStartMsRef.current = referenceTrimStartMs;
     } else if (source.mode === 'asset' && source.asset) {
-      setAssetPreview(source.asset.id, source.previewType, source.duration);
+      previousReferencePreviewIdentityRef.current = null;
+      previousReferenceTrimStartMsRef.current = 0;
+      const previewState = usePreviewStore.getState();
+      const sameAssetPreview =
+        previewState.mode === 'asset' &&
+        previewState.assetId === source.asset.id &&
+        previewState.assetType === source.previewType;
+      if (sameAssetPreview) {
+        setPreviewDuration(source.duration);
+        if (previewState.currentTime > source.duration) {
+          previewState.seek(source.duration);
+        }
+      } else {
+        setAssetPreview(source.asset.id, source.previewType, source.duration);
+      }
     } else {
-      setTimelinePreview();
+      previousReferencePreviewIdentityRef.current = null;
+      previousReferenceTrimStartMsRef.current = 0;
+      if (usePreviewStore.getState().mode !== 'timeline') {
+        setTimelinePreview();
+      }
     }
-  }, [source.mode, source.asset, source.previewType, source.duration, setAssetPreview, setReferencePreview, setTimelinePreview]);
+  }, [
+    source.mode,
+    source.asset,
+    source.reference,
+    source.previewType,
+    source.duration,
+    setAssetPreview,
+    setReferencePreview,
+    setTimelinePreview,
+    setPreviewDuration,
+  ]);
 
   return source;
 }
