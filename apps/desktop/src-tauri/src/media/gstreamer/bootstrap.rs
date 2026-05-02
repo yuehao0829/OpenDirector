@@ -71,7 +71,7 @@ pub fn bootstrap(candidates: Vec<PathBuf>) -> BootstrapReport {
     }
 }
 
-fn infer_runtime_root_from_path(path_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+pub(crate) fn infer_runtime_root_from_path(path_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
     let path_value = path_value?;
     let executable_names = if cfg!(target_os = "windows") {
         [

@@ -34,6 +34,9 @@
         "installMode": "currentUser"
       }
     },
+    "resources": {
+      "gstreamer-runtime/": "gstreamer-runtime/"
+    },
     "macOS": {
       "entitlements": "entitlements.plist"
     }

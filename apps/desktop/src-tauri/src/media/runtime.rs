@@ -127,7 +127,6 @@ pub fn prepare_gstreamer_process_environment() -> MediaResult<()> {
 }
 
 fn detect_gstreamer_candidates() -> Vec<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut candidates = Vec::new();
 
     push_existing_candidate(
@@ -138,17 +137,54 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
         &mut candidates,
         std::env::var_os("GSTREAMER_1_0_ROOT_X86_64").map(PathBuf::from),
     );
-    push_existing_candidate(&mut candidates, Some(manifest_dir.join("gstreamer-dev")));
+
+    if cfg!(feature = "custom-protocol") {
+        // 生产构建：相对于可执行文件路径
+        if let Some(exe_dir) = exe_parent_dir() {
+            #[cfg(target_os = "macos")]
+            {
+                // exe: Contents/MacOS/OpenDirector -> Contents/Resources/gstreamer-runtime
+                push_existing_candidate(
+                    &mut candidates,
+                    Some(exe_dir.join("../Resources/gstreamer-runtime")),
+                );
+            }
+            #[cfg(target_os = "windows")]
+            {
+                // exe: install-dir/OpenDirector.exe -> install-dir/gstreamer-runtime
+                push_existing_candidate(&mut candidates, Some(exe_dir.join("gstreamer-runtime")));
+            }
+        }
+    } else {
+        // 开发模式：用 CARGO_MANIFEST_DIR
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        push_existing_candidate(&mut candidates, Some(manifest_dir.join("gstreamer-dev")));
+        push_existing_candidate(&mut candidates, Some(manifest_dir.join("gstreamer-runtime")));
+        push_existing_candidate(
+            &mut candidates,
+            Some(manifest_dir.join("binaries").join("gstreamer")),
+        );
+    }
+
     push_existing_candidate(
         &mut candidates,
-        Some(manifest_dir.join("gstreamer-runtime")),
-    );
-    push_existing_candidate(
-        &mut candidates,
-        Some(manifest_dir.join("binaries").join("gstreamer")),
+        bootstrap::infer_runtime_root_from_path(std::env::var_os("PATH")),
     );
 
+    #[cfg(target_os = "macos")]
+    {
+        for prefix in ["/opt/homebrew", "/usr/local", "/opt/local"] {
+            push_existing_tool_candidate(&mut candidates, Some(PathBuf::from(prefix)));
+        }
+    }
+
     candidates
+}
+
+fn exe_parent_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
 }
 
 fn push_existing_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
@@ -162,11 +198,56 @@ fn push_existing_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<Path
     }
 }
 
+#[cfg(target_os = "macos")]
+fn push_existing_tool_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    let normalized = normalize_candidate(candidate);
+    if !candidate_contains_required_gstreamer_tools(normalized.as_path()) {
+        return;
+    }
+
+    if !candidates.iter().any(|existing| existing == &normalized) {
+        candidates.push(normalized);
+    }
+}
+
 fn normalize_candidate(candidate: PathBuf) -> PathBuf {
     if candidate.is_absolute() {
         candidate
+    } else if cfg!(feature = "custom-protocol") {
+        exe_parent_dir()
+            .map(|exe_dir| exe_dir.join(candidate))
+            .unwrap_or(candidate)
     } else {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(candidate)
+    }
+}
+
+fn candidate_contains_required_gstreamer_tools(candidate: &Path) -> bool {
+    if !candidate.exists() {
+        return false;
+    }
+
+    [
+        "gst-discoverer-1.0",
+        "gst-inspect-1.0",
+        "ges-launch-1.0",
+    ]
+    .into_iter()
+    .map(gstreamer_executable_name)
+    .all(|executable| {
+        candidate.join("bin").join(&executable).exists() || candidate.join(&executable).exists()
+    })
+}
+
+fn gstreamer_executable_name(base_name: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("{base_name}.exe")
+    } else {
+        base_name.to_string()
     }
 }
 
@@ -318,4 +399,76 @@ fn resolve_plugin_scanner_path(bootstrap: &bootstrap::BootstrapReport) -> Option
 fn shell_single_quote(path: &Path) -> String {
     let value = path.to_string_lossy();
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(case_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("opendirector-runtime-{case_name}-{unique}"));
+        fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn candidate_contains_required_gstreamer_tools_rejects_plain_prefix() {
+        let prefix = unique_temp_dir("plain-prefix");
+
+        assert!(!candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[test]
+    fn candidate_contains_required_gstreamer_tools_rejects_partial_prefix() {
+        let prefix = unique_temp_dir("tool-prefix");
+        let bin_dir = prefix.join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        fs::write(
+            bin_dir.join(gstreamer_executable_name("gst-inspect-1.0")),
+            [],
+        )
+        .expect("gst-inspect");
+
+        assert!(!candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[test]
+    fn candidate_contains_required_gstreamer_tools_accepts_prefix_with_all_tools_in_bin() {
+        let prefix = unique_temp_dir("full-tool-prefix");
+        let bin_dir = prefix.join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0", "ges-launch-1.0"] {
+            fs::write(bin_dir.join(gstreamer_executable_name(tool_name)), []).expect("tool");
+        }
+
+        assert!(candidate_contains_required_gstreamer_tools(prefix.as_path()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn path_runtime_candidate_precedes_fixed_macos_prefixes() {
+        let path_runtime = unique_temp_dir("path-runtime");
+        let fallback_prefix = unique_temp_dir("fallback-prefix");
+
+        for root in [&path_runtime, &fallback_prefix] {
+            let bin_dir = root.join("bin");
+            fs::create_dir_all(&bin_dir).expect("bin dir");
+            for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0", "ges-launch-1.0"] {
+                fs::write(bin_dir.join(gstreamer_executable_name(tool_name)), []).expect("tool");
+            }
+        }
+
+        let mut candidates = Vec::new();
+        push_existing_candidate(&mut candidates, Some(path_runtime.clone()));
+        push_existing_tool_candidate(&mut candidates, Some(fallback_prefix.clone()));
+
+        assert_eq!(candidates, vec![path_runtime, fallback_prefix]);
+    }
 }
