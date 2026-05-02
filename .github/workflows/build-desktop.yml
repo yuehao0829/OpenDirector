@@ -49,6 +49,15 @@ jobs:
       - name: Install GStreamer (Homebrew)
         run: brew install gstreamer
 
+      - name: Verify pkg-config can find glib
+        run: |
+          export PKG_CONFIG_PATH="${{ matrix.pkg_config_path }}"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          ls "${{ matrix.pkg_config_path }}"/gobject-2.0.pc 2>/dev/null || echo "gobject-2.0.pc not found in PKG_CONFIG_PATH"
+          ${{ matrix.pkg_config_bin }} --libs gobject-2.0 2>&1 || echo "pkg-config cannot find gobject-2.0"
+          brew --prefix glib
+          ls "$(brew --prefix glib)/lib/pkgconfig/gobject-2.0.pc" 2>/dev/null || echo "gobject-2.0.pc not found in glib prefix either"
+
       - name: Bundle GStreamer runtime
         run: bash scripts/bundle-gstreamer-macos.sh
 
