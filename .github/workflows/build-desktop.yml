@@ -46,24 +46,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
 
-      - name: Cache Homebrew GStreamer
-        id: cache-brew-gst
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ matrix.pkg_config_path }}/..
-            /opt/homebrew/Cellar/gstreamer
-            /opt/homebrew/Cellar/gst-plugins-*
-            /opt/homebrew/Cellar/gst-libav
-            /opt/homebrew/Cellar/gst-rtsp-server-*
-            /usr/local/Cellar/gstreamer
-            /usr/local/Cellar/gst-plugins-*
-            /usr/local/Cellar/gst-libav
-            /usr/local/Cellar/gst-rtsp-server-*
-          key: brew-gstreamer-${{ runner.os }}-${{ matrix.arch }}-v1
-
       - name: Install GStreamer (Homebrew)
-        if: steps.cache-brew-gst.outputs.cache-hit != 'true'
         run: brew install gstreamer
 
       - name: Bundle GStreamer runtime
