@@ -15,6 +15,7 @@ jobs:
     name: Build macOS (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: macos-latest
@@ -43,7 +44,24 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
 
+      - name: Cache Homebrew GStreamer
+        id: cache-brew-gst
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ matrix.pkg_config_path }}/..
+            /opt/homebrew/Cellar/gstreamer
+            /opt/homebrew/Cellar/gst-plugins-*
+            /opt/homebrew/Cellar/gst-libav
+            /opt/homebrew/Cellar/gst-rtsp-server-*
+            /usr/local/Cellar/gstreamer
+            /usr/local/Cellar/gst-plugins-*
+            /usr/local/Cellar/gst-libav
+            /usr/local/Cellar/gst-rtsp-server-*
+          key: brew-gstreamer-${{ runner.os }}-${{ matrix.arch }}-v1
+
       - name: Install GStreamer (Homebrew)
+        if: steps.cache-brew-gst.outputs.cache-hit != 'true'
         run: brew install gstreamer
 
       - name: Bundle GStreamer runtime
@@ -104,7 +122,17 @@ jobs:
           $url = "https://gstreamer.freedesktop.org/data/pkg/windows/${{ env.GSTREAMER_MSVC_VERSION }}/msvc/gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
           $out = "${{ runner.temp }}\gstreamer-installer.exe"
           Write-Host "Downloading GStreamer from $url"
-          curl.exe -L -A "Wget/1.21.4" -o $out $url
+          curl.exe -L --retry 3 --retry-delay 5 -A "Wget/1.21.4" -o $out $url
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Download failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          $size = (Get-Item $out).Length
+          if ($size -lt 1MB) {
+            Write-Error "Downloaded file is only $size bytes, likely an error page"
+            exit 1
+          }
+          Write-Host "Downloaded $size bytes"
 
       - name: Install GStreamer MSVC runtime
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
