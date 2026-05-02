@@ -1,5 +1,7 @@
 [env]
-PKG_CONFIG = { value = "gstreamer-dev/bin/pkg-config.exe", relative = true }
-PKG_CONFIG_PATH = { value = "gstreamer-dev/lib/pkgconfig", relative = true }
-PKG_CONFIG_LIBDIR = { value = "gstreamer-dev/lib/pkgconfig", relative = true }
-GSTREAMER_1_0_ROOT_MSVC_X86_64 = { value = "gstreamer-dev", relative = true }
+# These defaults are for local development using gstreamer-dev/.
+# In CI, environment variables override these values.
+# force = false means environment variables take precedence.
+PKG_CONFIG = { value = "gstreamer-dev/bin/pkg-config.exe", relative = true, force = false }
+PKG_CONFIG_PATH = { value = "gstreamer-dev/lib/pkgconfig", relative = true, force = false }
+GSTREAMER_1_0_ROOT_MSVC_X86_64 = { value = "gstreamer-dev", relative = true, force = false }

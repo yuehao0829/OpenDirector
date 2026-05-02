@@ -366,77 +366,8 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
             path: request.input_path.clone(),
         },
     )?;
-
-    let mut args = vec![
-        format!("--outputuri={}", file_uri(output_path)),
-        format!(
-            "--format={}",
-            output_format_caps(media_type, request.output_format.as_deref(), &metadata)
-        ),
-        "+clip".to_string(),
-        file_uri(&input_path),
-    ];
-
-    if let Some(start_seconds) = trim_start_seconds(request) {
-        args.push(format!("inpoint={start_seconds}"));
-    }
-
-    if let Some(duration_seconds) = trim_duration_seconds(request) {
-        args.push(format!("duration={duration_seconds}"));
-    }
-
-    let mut forced_output_dimensions: Option<(u32, u32)> = None;
-    if let Some(crop) = effects::extract_crop_effect(request) {
-        if let (Some(width), Some(height)) = (metadata.width, metadata.height) {
-            let left = ((crop.x * width as f64).round() as u32).min(width.saturating_sub(1));
-            let top = ((crop.y * height as f64).round() as u32).min(height.saturating_sub(1));
-            let crop_width = ((crop.width * width as f64).round() as u32).clamp(1, width - left);
-            let crop_height = ((crop.height * height as f64).round() as u32).clamp(1, height - top);
-            let right = width.saturating_sub(left + crop_width);
-            let bottom = height.saturating_sub(top + crop_height);
-            forced_output_dimensions = Some((crop_width, crop_height));
-
-            args.extend([
-                "+effect".to_string(),
-                "videocrop".to_string(),
-                "set-left".to_string(),
-                left.to_string(),
-                "set-right".to_string(),
-                right.to_string(),
-                "set-top".to_string(),
-                top.to_string(),
-                "set-bottom".to_string(),
-                bottom.to_string(),
-            ]);
-        }
-    }
-
-    let scaled_output_dimensions = if media_type == "video" {
-        if let (Some(max_width), Some(max_height)) = (request.max_width, request.max_height) {
-            Some((
-                normalize_video_dimension(max_width),
-                normalize_video_dimension(max_height),
-            ))
-        } else {
-            forced_output_dimensions.map(|(width, height)| {
-                (
-                    normalize_video_dimension(width),
-                    normalize_video_dimension(height),
-                )
-            })
-        }
-    } else {
-        None
-    };
-
-    if let Some((output_width, output_height)) = scaled_output_dimensions {
-        args.extend([
-            "+effect".to_string(),
-            format!(
-                "videoscale ! capsfilter caps=video/x-raw,width={output_width},height={output_height},pixel-aspect-ratio=1/1"
-            ),
-        ]);
-    }
+    let args =
+        build_timed_asset_render_args(request, output_path, &input_path, media_type, &metadata);
 
     let output = run_tool(&runtime.bootstrap, GstreamerTool::GesLaunch, &args)?;
     if !output.status.success() {
@@ -447,6 +378,180 @@ fn process_timed_asset(request: &AssetProcessRequest, output_path: &Path) -> Med
     }
 
     Ok(())
+}
+
+fn build_timed_asset_render_args(
+    request: &AssetProcessRequest,
+    output_path: &Path,
+    input_path: &Path,
+    media_type: &str,
+    metadata: &MediaMetadataResult,
+) -> Vec<String> {
+    let mut args = vec![
+        format!("--outputuri={}", file_uri(output_path)),
+        format!(
+            "--format={}",
+            output_format_caps(media_type, request.output_format.as_deref(), metadata)
+        ),
+    ];
+
+    let crop_bounds = resolve_timed_asset_crop_bounds(request, metadata);
+    let scaled_output_dimensions = resolve_timed_asset_output_dimensions(
+        media_type,
+        request,
+        crop_bounds
+            .as_ref()
+            .map(|bounds| (bounds.crop_width, bounds.crop_height)),
+    );
+
+    if let Some((output_width, output_height)) = scaled_output_dimensions {
+        args.extend([
+            "+track".to_string(),
+            "video".to_string(),
+            build_video_track_restrictions(output_width, output_height, metadata.frame_rate),
+        ]);
+
+        if timed_asset_has_audio_stream(media_type, metadata) {
+            args.extend([
+                "+track".to_string(),
+                "audio".to_string(),
+                build_audio_track_restrictions(
+                    metadata.channels.filter(|value| *value > 0),
+                    metadata.sample_rate.filter(|value| *value > 0),
+                ),
+            ]);
+        }
+    }
+
+    args.extend(["+clip".to_string(), file_uri(input_path)]);
+
+    if let Some(start_seconds) = trim_start_seconds(request) {
+        args.push(format!("inpoint={start_seconds}"));
+    }
+
+    if let Some(duration_seconds) = trim_duration_seconds(request) {
+        args.push(format!("duration={duration_seconds}"));
+    }
+
+    if let Some(crop_bounds) = crop_bounds {
+        args.extend([
+            "+effect".to_string(),
+            "videocrop".to_string(),
+            "set-left".to_string(),
+            crop_bounds.left.to_string(),
+            "set-right".to_string(),
+            crop_bounds.right.to_string(),
+            "set-top".to_string(),
+            crop_bounds.top.to_string(),
+            "set-bottom".to_string(),
+            crop_bounds.bottom.to_string(),
+        ]);
+    }
+
+    if let Some((output_width, output_height)) = scaled_output_dimensions {
+        args.extend(build_video_clip_layout_args(output_width, output_height));
+    }
+
+    args
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimedAssetCropBounds {
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+    crop_width: u32,
+    crop_height: u32,
+}
+
+fn resolve_timed_asset_crop_bounds(
+    request: &AssetProcessRequest,
+    metadata: &MediaMetadataResult,
+) -> Option<TimedAssetCropBounds> {
+    let crop = effects::extract_crop_effect(request)?;
+    let (width, height) = (metadata.width?, metadata.height?);
+    let left = ((crop.x * width as f64).round() as u32).min(width.saturating_sub(1));
+    let top = ((crop.y * height as f64).round() as u32).min(height.saturating_sub(1));
+    let crop_width = ((crop.width * width as f64).round() as u32).clamp(1, width - left);
+    let crop_height = ((crop.height * height as f64).round() as u32).clamp(1, height - top);
+
+    Some(TimedAssetCropBounds {
+        left,
+        right: width.saturating_sub(left + crop_width),
+        top,
+        bottom: height.saturating_sub(top + crop_height),
+        crop_width,
+        crop_height,
+    })
+}
+
+fn resolve_timed_asset_output_dimensions(
+    media_type: &str,
+    request: &AssetProcessRequest,
+    cropped_dimensions: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    if media_type != "video" {
+        return None;
+    }
+
+    if let (Some(max_width), Some(max_height)) = (request.max_width, request.max_height) {
+        return Some((
+            normalize_video_dimension(max_width),
+            normalize_video_dimension(max_height),
+        ));
+    }
+
+    cropped_dimensions.map(|(width, height)| {
+        (
+            normalize_video_dimension(width),
+            normalize_video_dimension(height),
+        )
+    })
+}
+
+fn build_video_track_restrictions(width: u32, height: u32, frame_rate: Option<f64>) -> String {
+    let mut restrictions =
+        format!("restrictions=video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1");
+
+    if let Some(frame_rate) = frame_rate.filter(|value| value.is_finite() && *value > 0.0) {
+        restrictions.push_str(&format!(",framerate={}", fps_fraction(frame_rate)));
+    }
+
+    restrictions
+}
+
+fn build_video_clip_layout_args(width: u32, height: u32) -> Vec<String> {
+    vec![
+        "set-width".to_string(),
+        width.to_string(),
+        "set-height".to_string(),
+        height.to_string(),
+        "set-posx".to_string(),
+        "0".to_string(),
+        "set-posy".to_string(),
+        "0".to_string(),
+    ]
+}
+
+fn build_audio_track_restrictions(channels: Option<u32>, sample_rate: Option<u32>) -> String {
+    let channel_count = channels.unwrap_or(2).max(1);
+    let sample_rate = sample_rate.unwrap_or(44_100).max(1);
+
+    format!(
+        "restrictions=audio/x-raw,channels={channel_count},rate={sample_rate},layout=interleaved"
+    )
+}
+
+fn timed_asset_has_audio_stream(media_type: &str, metadata: &MediaMetadataResult) -> bool {
+    if media_type != "video" {
+        return false;
+    }
+
+    metadata.has_audio.unwrap_or_else(|| {
+        metadata.channels.filter(|value| *value > 0).is_some()
+            || metadata.sample_rate.filter(|value| *value > 0).is_some()
+    })
 }
 
 fn pad_to_aspect_ratio(
@@ -772,6 +877,194 @@ mod tests {
     }
 
     #[test]
+    fn build_timed_asset_render_args_applies_track_restrictions_for_cropped_video() {
+        let request = AssetProcessRequest {
+            backend: None,
+            input_path: "/tmp/input.mp4".to_string(),
+            output_dir: "/tmp/output".to_string(),
+            crop_x: Some(0.0),
+            crop_y: Some(0.0),
+            crop_w: Some(0.421875),
+            crop_h: Some(1.0),
+            trim_start_ms: Some(250.0),
+            trim_end_ms: Some(1250.0),
+            max_width: None,
+            max_height: None,
+            target_aspect_ratio: Some("3:4".to_string()),
+            output_format: Some("mp4".to_string()),
+        };
+        let output_path = Path::new("/tmp/output/processed.mp4");
+        let input_path = Path::new("/tmp/input.mp4");
+        let metadata = MediaMetadataResult {
+            duration_ms: Some(2_000.0),
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(30.0),
+            channels: Some(2),
+            sample_rate: Some(48_000),
+            codec: Some("video/quicktime".to_string()),
+            has_audio: Some(true),
+        };
+
+        let args =
+            build_timed_asset_render_args(&request, output_path, input_path, "video", &metadata);
+
+        assert!(args.iter().any(|arg| {
+            arg == "restrictions=video/x-raw,width=810,height=1080,pixel-aspect-ratio=1/1,framerate=30/1"
+        }));
+        assert!(args.iter().any(|arg| {
+            arg == "restrictions=audio/x-raw,channels=2,rate=48000,layout=interleaved"
+        }));
+        assert!(args.iter().any(|arg| arg == "videocrop"));
+        assert!(args.iter().any(|arg| arg == "set-width"));
+        assert!(args.iter().any(|arg| arg == "810"));
+        assert!(args.iter().any(|arg| arg == "set-height"));
+        assert!(args.iter().any(|arg| arg == "1080"));
+        assert!(args.iter().any(|arg| arg == "set-posx"));
+        assert!(args.iter().any(|arg| arg == "set-posy"));
+        assert!(args.iter().any(|arg| arg == "inpoint=0.250000"));
+        assert!(args.iter().any(|arg| arg == "duration=1.000000"));
+    }
+
+    #[test]
+    fn build_timed_asset_render_args_applies_track_restrictions_for_scaled_video() {
+        let request = AssetProcessRequest {
+            backend: None,
+            input_path: "/tmp/input.mp4".to_string(),
+            output_dir: "/tmp/output".to_string(),
+            crop_x: None,
+            crop_y: None,
+            crop_w: None,
+            crop_h: None,
+            trim_start_ms: None,
+            trim_end_ms: None,
+            max_width: Some(720),
+            max_height: Some(1280),
+            target_aspect_ratio: None,
+            output_format: Some("mp4".to_string()),
+        };
+        let output_path = Path::new("/tmp/output/processed.mp4");
+        let input_path = Path::new("/tmp/input.mp4");
+        let metadata = MediaMetadataResult {
+            duration_ms: Some(2_000.0),
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(25.0),
+            channels: Some(2),
+            sample_rate: Some(44_100),
+            codec: Some("video/quicktime".to_string()),
+            has_audio: Some(true),
+        };
+
+        let args =
+            build_timed_asset_render_args(&request, output_path, input_path, "video", &metadata);
+
+        assert!(args.iter().any(|arg| {
+            arg == "restrictions=video/x-raw,width=720,height=1280,pixel-aspect-ratio=1/1,framerate=25/1"
+        }));
+        assert!(args.iter().any(|arg| arg == "set-width"));
+        assert!(args.iter().any(|arg| arg == "720"));
+        assert!(args.iter().any(|arg| arg == "set-height"));
+        assert!(args.iter().any(|arg| arg == "1280"));
+    }
+
+    #[test]
+    fn build_timed_asset_render_args_keeps_audio_track_when_probe_omits_audio_details() {
+        let request = AssetProcessRequest {
+            backend: None,
+            input_path: "/tmp/input.mp4".to_string(),
+            output_dir: "/tmp/output".to_string(),
+            crop_x: Some(0.0),
+            crop_y: Some(0.0),
+            crop_w: Some(0.5),
+            crop_h: Some(1.0),
+            trim_start_ms: None,
+            trim_end_ms: None,
+            max_width: None,
+            max_height: None,
+            target_aspect_ratio: Some("1:1".to_string()),
+            output_format: Some("mp4".to_string()),
+        };
+        let output_path = Path::new("/tmp/output/processed.mp4");
+        let input_path = Path::new("/tmp/input.mp4");
+        let metadata = MediaMetadataResult {
+            duration_ms: Some(2_000.0),
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(30.0),
+            channels: None,
+            sample_rate: None,
+            codec: Some("video/quicktime".to_string()),
+            has_audio: Some(true),
+        };
+
+        let args =
+            build_timed_asset_render_args(&request, output_path, input_path, "video", &metadata);
+
+        assert!(args.iter().any(|arg| arg == "audio"));
+        assert!(args.iter().any(|arg| {
+            arg == "restrictions=audio/x-raw,channels=2,rate=44100,layout=interleaved"
+        }));
+    }
+
+    #[test]
+    #[ignore = "requires a local GStreamer runtime"]
+    fn process_cropped_video_smoke_outputs_requested_canvas() {
+        let case_dir = temp_case_dir("process-cropped-video");
+        let input_path = case_dir.join("input.mp4");
+        let processed_dir = case_dir.join("processed");
+        let request = AssetProcessRequest {
+            backend: None,
+            input_path: input_path.to_string_lossy().to_string(),
+            output_dir: processed_dir.to_string_lossy().to_string(),
+            crop_x: Some(0.2890625),
+            crop_y: Some(0.0),
+            crop_w: Some(0.421875),
+            crop_h: Some(1.0),
+            trim_start_ms: None,
+            trim_end_ms: None,
+            max_width: None,
+            max_height: None,
+            target_aspect_ratio: Some("3:4".to_string()),
+            output_format: Some("mp4".to_string()),
+        };
+
+        render_test_clip(&input_path, "snow", 2.0);
+        let input_metadata = crate::media::gstreamer::discoverer::probe_media(&MediaProbeRequest {
+            path: request.input_path.clone(),
+        })
+        .expect("input clip should be probe-able");
+        let crop_bounds =
+            resolve_timed_asset_crop_bounds(&request, &input_metadata).expect("crop should resolve");
+        let expected_dimensions = resolve_timed_asset_output_dimensions(
+            "video",
+            &request,
+            Some((crop_bounds.crop_width, crop_bounds.crop_height)),
+        )
+        .expect("output dimensions should resolve");
+
+        let processed = process_asset(&request).expect("cropped video process_asset should succeed");
+
+        assert!(
+            Path::new(&processed.output_path).exists(),
+            "processed output should exist"
+        );
+        assert!(
+            processed.file_size > 0,
+            "processed output should not be empty"
+        );
+
+        let metadata = crate::media::gstreamer::discoverer::probe_media(&MediaProbeRequest {
+            path: processed.output_path,
+        })
+        .expect("processed output should be probe-able");
+
+        assert_eq!(metadata.width, Some(expected_dimensions.0));
+        assert_eq!(metadata.height, Some(expected_dimensions.1));
+        assert!(metadata.frame_rate.unwrap_or_default() > 0.0);
+    }
+
+    #[test]
     fn output_format_caps_uses_audio_stream_profile_for_wav() {
         let metadata = MediaMetadataResult {
             duration_ms: Some(2_000.0),
@@ -781,6 +1074,7 @@ mod tests {
             channels: Some(1),
             sample_rate: Some(44_100),
             codec: Some("audio/x-wav".to_string()),
+            has_audio: Some(true),
         };
 
         let caps = output_format_caps("audio", None, &metadata);

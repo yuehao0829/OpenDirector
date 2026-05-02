@@ -42,7 +42,18 @@ fn parse_discoverer_output(text: &str) -> MediaMetadataResult {
         channels: find_key(text, "Channels").and_then(|value| parse_u32_token(&value)),
         sample_rate: find_key(text, "Sample rate").and_then(parse_sample_rate),
         codec: find_key(text, "Codec"),
+        has_audio: Some(discoverer_output_has_audio_stream(text)),
     }
+}
+
+fn discoverer_output_has_audio_stream(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        let normalized = trimmed.to_ascii_lowercase();
+        normalized.starts_with("audio #")
+            || normalized.starts_with("channels:")
+            || normalized.starts_with("sample rate:")
+    })
 }
 
 fn find_key(text: &str, key: &str) -> Option<String> {
@@ -132,10 +143,54 @@ Properties:
         assert_eq!(metadata.frame_rate, Some(30.0));
         assert_eq!(metadata.channels, Some(2));
         assert_eq!(metadata.sample_rate, Some(44100));
+        assert_eq!(metadata.has_audio, Some(true));
         let duration = metadata.duration_ms.expect("duration should be parsed");
         assert!(
             (duration - 2033.333333).abs() < 0.001,
             "duration={duration}"
         );
+    }
+
+    #[test]
+    fn parse_discoverer_detects_audio_stream_without_audio_details() {
+        let text = r#"
+Properties:
+  Duration: 0:00:02.000000000
+  Seekable: yes
+  Live: no
+  container #0: Quicktime
+    video #1: H.264 (High Profile)
+      Width: 1920
+      Height: 1080
+      Frame rate: 30/1
+    audio #2: MPEG-4 AAC
+"#;
+
+        let metadata = parse_discoverer_output(text);
+        assert_eq!(metadata.width, Some(1920));
+        assert_eq!(metadata.height, Some(1080));
+        assert_eq!(metadata.channels, None);
+        assert_eq!(metadata.sample_rate, None);
+        assert_eq!(metadata.has_audio, Some(true));
+    }
+
+    #[test]
+    fn parse_discoverer_marks_video_only_content_without_audio_streams() {
+        let text = r#"
+Properties:
+  Duration: 0:00:02.000000000
+  Seekable: yes
+  Live: no
+  container #0: Quicktime
+    video #1: H.264 (High Profile)
+      Width: 1280
+      Height: 720
+      Frame rate: 30/1
+"#;
+
+        let metadata = parse_discoverer_output(text);
+        assert_eq!(metadata.width, Some(1280));
+        assert_eq!(metadata.height, Some(720));
+        assert_eq!(metadata.has_audio, Some(false));
     }
 }

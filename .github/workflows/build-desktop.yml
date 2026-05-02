@@ -45,7 +45,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
-          cache-key: "v2-macos-fix"
+          key: "v2-macos-fix"
 
       - name: Install GStreamer (Homebrew)
         run: brew install gstreamer
@@ -61,7 +61,6 @@ jobs:
         env:
           PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
-          PKG_CONFIG_LIBDIR: ""
 
       - name: Add rpath to binary
         run: |
