@@ -176,6 +176,7 @@ async function setupMacRuntime(runtimeRoot, force) {
     return;
   }
 
+  ensureMacBuildDeps();
   const sourceRoot = await resolveMacRuntimeSource();
   if (!sourceRoot) {
     throw new Error(
@@ -189,6 +190,23 @@ async function setupMacRuntime(runtimeRoot, force) {
 
   await symlink(sourceRoot, runtimeRoot, 'dir');
   log(`Linked ${runtimeRoot} -> ${sourceRoot}`);
+}
+
+function ensureMacBuildDeps() {
+  const pkgConfigResult = spawnSync('pkg-config', ['--version'], { encoding: 'utf8' });
+  if (pkgConfigResult.status !== 0) {
+    const brew = spawnSync('brew', ['--prefix'], { encoding: 'utf8' });
+    if (brew.status !== 0) {
+      throw new Error(
+        'pkg-config is required but not found, and Homebrew is not installed. ' +
+        'Install Homebrew first: https://brew.sh',
+      );
+    }
+    log('Installing pkg-config via Homebrew ...');
+    runCommand('brew', ['install', 'pkgconf']);
+  } else {
+    log('pkg-config is available.');
+  }
 }
 
 async function resolveMacRuntimeSource() {
