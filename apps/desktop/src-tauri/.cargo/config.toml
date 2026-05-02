@@ -1,0 +1,5 @@
+[env]
+PKG_CONFIG = { value = "gstreamer-dev/bin/pkg-config.exe", relative = true }
+PKG_CONFIG_PATH = { value = "gstreamer-dev/lib/pkgconfig", relative = true }
+PKG_CONFIG_LIBDIR = { value = "gstreamer-dev/lib/pkgconfig", relative = true }
+GSTREAMER_1_0_ROOT_MSVC_X86_64 = { value = "gstreamer-dev", relative = true }

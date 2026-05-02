@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "rootDir": "..",
+    "outDir": "dist",
+    "paths": {
+      "@opendirector/core": ["../../packages/core/src"],
+      "@opendirector/core/*": ["../../packages/core/src/*"],
+      "@opendirector/ui": ["../../packages/ui/src"],
+      "@opendirector/ui/*": ["../../packages/ui/src/*"],
+      "@opendirector/generation": ["../../packages/generation/src"],
+      "@opendirector/generation/*": ["../../packages/generation/src/*"]
+    }
+  },
+  "include": ["src"]
+}

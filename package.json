@@ -1,0 +1,32 @@
+{
+  "name": "opendirector",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "AI-powered video/audio editing software",
+  "scripts": {
+    "dev": "node ./scripts/run-desktop-tauri-dev.mjs",
+    "dev:desktop": "node ./scripts/run-desktop-tauri-dev.mjs",
+    "setup:gstreamer": "pnpm node ./scripts/setup-gstreamer-dev.mjs",
+    "doctor:gstreamer": "pnpm node ./scripts/setup-gstreamer-dev.mjs --doctor",
+    "build": "turbo run build",
+    "build:desktop": "pnpm --filter @opendirector/desktop tauri:build",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "prettier": "^3.8.3",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.58.2"
+  },
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
