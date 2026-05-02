@@ -42,6 +42,8 @@ apps/desktop/src-tauri/gen/schemas/
 
 # Vendor directory exclusions (keep source, remove unnecessary parts)
 apps/desktop/src-tauri/vendor/tauri/mobile/
+!apps/desktop/src-tauri/vendor/tauri/mobile/
+!apps/desktop/src-tauri/vendor/tauri/mobile/proguard-tauri.pro
 apps/desktop/src-tauri/vendor/tauri/.cargo-ok
 apps/desktop/src-tauri/vendor/tauri/.cargo_vcs_info.json
 apps/desktop/src-tauri/vendor/tauri/Cargo.toml.orig
