@@ -155,7 +155,9 @@ jobs:
         run: pnpm build:desktop
         env:
           GSTREAMER_1_0_ROOT_MSVC_X86_64: C:\gstreamer\1.0\msvc\x86_64
+          PKG_CONFIG: C:\gstreamer\1.0\msvc\x86_64\bin\pkg-config.exe
           PKG_CONFIG_PATH: C:\gstreamer\1.0\msvc\x86_64\lib\pkgconfig
+          PKG_CONFIG_LIBDIR: C:\gstreamer\1.0\msvc\x86_64\lib\pkgconfig
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
