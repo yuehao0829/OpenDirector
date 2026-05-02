@@ -21,10 +21,12 @@ jobs:
           - runner: macos-latest
             arch: ARM
             pkg_config_path: /opt/homebrew/lib/pkgconfig
+            pkg_config_bin: /opt/homebrew/bin/pkg-config
             artifact_name: macos-dmg-arm
           - runner: macos-13
             arch: Intel
             pkg_config_path: /usr/local/lib/pkgconfig
+            pkg_config_bin: /usr/local/bin/pkg-config
             artifact_name: macos-dmg-intel
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +75,7 @@ jobs:
       - name: Build Tauri app
         run: pnpm build:desktop
         env:
+          PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
 
       - name: Add rpath to binary
@@ -118,18 +121,20 @@ jobs:
       - name: Download GStreamer MSVC installer
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/${{ env.GSTREAMER_MSVC_VERSION }}/msvc/gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
-          $out = "${{ runner.temp }}\gstreamer-installer.exe"
-          Write-Host "Downloading GStreamer from $url"
-          curl.exe -L --retry 3 --retry-delay 5 -A "Wget/1.21.4" -o $out $url
+          $assetName = "gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
+          $out = "${{ runner.temp }}\$assetName"
+          Write-Host "Downloading GStreamer $assetName from GitHub Release..."
+          gh release download gstreamer-runtime --repo ${{ github.repository }} --pattern $assetName --dir ${{ runner.temp }}
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Download failed with exit code $LASTEXITCODE"
+            Write-Error "Failed to download GStreamer from GitHub Release"
             exit 1
           }
           $size = (Get-Item $out).Length
           if ($size -lt 1MB) {
-            Write-Error "Downloaded file is only $size bytes, likely an error page"
+            Write-Error "Downloaded file is only $size bytes, likely corrupted"
             exit 1
           }
           Write-Host "Downloaded $size bytes"
@@ -138,7 +143,7 @@ jobs:
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $installer = "${{ runner.temp }}\gstreamer-installer.exe"
+          $installer = "${{ runner.temp }}\gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
           $installDir = "C:\gstreamer\1.0\msvc\x86_64"
           Start-Process -FilePath $installer -ArgumentList '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installDir" -Wait
 
