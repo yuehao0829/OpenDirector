@@ -45,6 +45,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
+          cache-key: "v2-macos-fix"
 
       - name: Install GStreamer (Homebrew)
         run: brew install gstreamer
