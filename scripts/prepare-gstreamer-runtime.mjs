@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,16 +88,18 @@ function prepareMacRuntime(stagedOutput) {
   }
 
   runCommand('bash', [path.join(__dirname, 'bundle-gstreamer-macos.sh')], env);
+
+  // macOS does not need root-level DLLs, but tauri.conf.json references
+  // gstreamer-runtime-root/ as a resource path. Create an empty directory
+  // so Tauri's build does not fail with "resource path doesn't exist".
+  mkdirSync(stagedOutput.rootDll, { recursive: true });
 }
 
 function createStagedOutputPaths(platform) {
   const stagedOutput = {
     runtime: `${bundledRuntimeDir}.next-${stagingToken}`,
+    rootDll: `${runtimeRootDir}.next-${stagingToken}`,
   };
-
-  if (platform === 'win32') {
-    stagedOutput.rootDll = `${runtimeRootDir}.next-${stagingToken}`;
-  }
 
   return stagedOutput;
 }
@@ -108,14 +110,11 @@ async function publishStagedOutputs(stagedOutput) {
       stagedPath: stagedOutput.runtime,
       targetPath: bundledRuntimeDir,
     },
-  ];
-
-  if (stagedOutput.rootDll) {
-    mappings.push({
+    {
       stagedPath: stagedOutput.rootDll,
       targetPath: runtimeRootDir,
-    });
-  }
+    },
+  ];
 
   const publishState = [];
 
