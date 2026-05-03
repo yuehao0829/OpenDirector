@@ -20,14 +20,10 @@ jobs:
         include:
           - runner: macos-latest
             arch: ARM
+            target: aarch64-apple-darwin
             pkg_config_path: /opt/homebrew/lib/pkgconfig
             pkg_config_bin: /opt/homebrew/bin/pkg-config
             artifact_name: macos-dmg-arm
-          - runner: macos-13
-            arch: Intel
-            pkg_config_path: /usr/local/lib/pkgconfig
-            pkg_config_bin: /usr/local/bin/pkg-config
-            artifact_name: macos-dmg-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -169,12 +165,6 @@ jobs:
           name: macos-dmg-arm
           path: artifacts/macos-arm
 
-      - name: Download macOS Intel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-intel
-          path: artifacts/macos-intel
-
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
@@ -187,5 +177,4 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/macos-arm/*.dmg
-            artifacts/macos-intel/*.dmg
             artifacts/windows/*.exe
