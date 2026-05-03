@@ -140,7 +140,7 @@ jobs:
           # Recreate final DMG with stapled app
           echo "Recreating DMG with stapled app..."
           rm -f "$DMG_NAME"
-          hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector_0.1.0_aarch64.dmg"
+          hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector_0.1.1_aarch64.dmg"
 
       - name: Clean up keychain
         if: always()
