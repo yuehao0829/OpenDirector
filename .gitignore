@@ -38,6 +38,7 @@ src-tauri/target/
 src-tauri/Cargo.lock
 apps/desktop/src-tauri/gstreamer-dev/
 apps/desktop/src-tauri/gstreamer-runtime/
+apps/desktop/src-tauri/gstreamer-runtime-root/
 apps/desktop/src-tauri/gen/schemas/
 
 # Vendor directory exclusions (keep source, remove unnecessary parts)

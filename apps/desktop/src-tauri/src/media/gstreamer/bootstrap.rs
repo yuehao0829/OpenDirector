@@ -69,6 +69,28 @@ pub fn bootstrap(candidates: Vec<PathBuf>) -> BootstrapReport {
     }
 }
 
+pub fn runtime_environment_path_entries(runtime_root: &std::path::Path) -> Vec<PathBuf> {
+    let mut entries = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        push_existing_path_entry(
+            &mut entries,
+            runtime_root
+                .parent()
+                .map(|parent| parent.join("gstreamer-runtime-root"))
+                .filter(|path| candidate_contains_runtime_dlls(path.as_path())),
+        );
+        push_existing_path_entry(
+            &mut entries,
+            exe_parent_dir().filter(|path| candidate_contains_runtime_dlls(path.as_path())),
+        );
+    }
+
+    push_existing_path_entry(&mut entries, Some(runtime_root.join("bin")));
+    entries
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeCandidate {
     runtime_root: PathBuf,
@@ -156,6 +178,32 @@ fn resolve_plugin_search_paths(runtime_root: &PathBuf) -> Vec<PathBuf> {
         .into_iter()
         .filter(|candidate| candidate.exists())
         .collect()
+}
+
+fn push_existing_path_entry(entries: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    if candidate.exists() && !entries.iter().any(|existing| existing == &candidate) {
+        entries.push(candidate);
+    }
+}
+
+pub(crate) fn exe_parent_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+}
+
+#[cfg(target_os = "windows")]
+const RUNTIME_DLL_NAMES: &[&str] = &["gstreamer-1.0-0.dll", "gstbase-1.0-0.dll", "glib-2.0-0.dll"];
+
+#[cfg(target_os = "windows")]
+fn candidate_contains_runtime_dlls(candidate: &std::path::Path) -> bool {
+    RUNTIME_DLL_NAMES
+        .iter()
+        .all(|dll| candidate.join(dll).exists())
 }
 
 fn resolve_tool_path(runtime_root: &PathBuf, base_name: &str) -> Option<PathBuf> {
@@ -270,5 +318,26 @@ mod tests {
         assert!(report.gst_discoverer_path.is_some());
         assert!(report.gst_inspect_path.is_some());
         assert!(report.ges_launch_path.is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_environment_path_entries_include_staged_root_before_bin() {
+        let runtime_root = unique_temp_dir("runtime-env-root");
+        let root_dll_dir = runtime_root
+            .parent()
+            .expect("runtime root parent")
+            .join("gstreamer-runtime-root");
+        let bin_dir = runtime_root.join("bin");
+        fs::create_dir_all(&root_dll_dir).expect("root dll dir");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+
+        for dll_name in RUNTIME_DLL_NAMES {
+            fs::write(root_dll_dir.join(dll_name), []).expect("dll");
+        }
+
+        let entries = runtime_environment_path_entries(runtime_root.as_path());
+
+        assert_eq!(entries, vec![root_dll_dir, bin_dir]);
     }
 }

@@ -46,9 +46,6 @@ jobs:
       - name: Install GStreamer (Homebrew)
         run: brew install gstreamer
 
-      - name: Bundle GStreamer runtime
-        run: bash scripts/bundle-gstreamer-macos.sh
-
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -127,12 +124,6 @@ jobs:
           $installDir = "C:\gstreamer\1.0\msvc\x86_64"
           Start-Process -FilePath $installer -ArgumentList '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$installDir" -Wait
 
-      - name: Bundle GStreamer runtime
-        shell: pwsh
-        run: pwsh scripts/bundle-gstreamer-windows.ps1
-        env:
-          GSTREAMER_1_0_ROOT_MSVC_X86_64: C:\gstreamer\1.0\msvc\x86_64
-
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -142,7 +133,6 @@ jobs:
           GSTREAMER_1_0_ROOT_MSVC_X86_64: C:\gstreamer\1.0\msvc\x86_64
           PKG_CONFIG: C:\gstreamer\1.0\msvc\x86_64\bin\pkg-config.exe
           PKG_CONFIG_PATH: C:\gstreamer\1.0\msvc\x86_64\lib\pkgconfig
-          PKG_CONFIG_LIBDIR: C:\gstreamer\1.0\msvc\x86_64\lib\pkgconfig
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

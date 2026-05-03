@@ -139,7 +139,6 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
     );
 
     if cfg!(feature = "custom-protocol") {
-        // 生产构建：相对于可执行文件路径
         if let Some(exe_dir) = exe_parent_dir() {
             #[cfg(target_os = "macos")]
             {
@@ -156,7 +155,6 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
             }
         }
     } else {
-        // 开发模式：用 CARGO_MANIFEST_DIR
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         push_existing_candidate(&mut candidates, Some(manifest_dir.join("gstreamer-dev")));
         push_existing_candidate(&mut candidates, Some(manifest_dir.join("gstreamer-runtime")));
@@ -182,9 +180,7 @@ fn detect_gstreamer_candidates() -> Vec<PathBuf> {
 }
 
 fn exe_parent_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    bootstrap::exe_parent_dir()
 }
 
 fn push_existing_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
@@ -274,16 +270,15 @@ fn configure_gstreamer_process_environment(
     }
 
     if let Some(runtime_root) = &bootstrap.runtime_root {
-        let bin_dir = runtime_root.join("bin");
-        if bin_dir.exists() {
+        let path_entries = bootstrap::runtime_environment_path_entries(runtime_root.as_path());
+        if !path_entries.is_empty() {
             let existing_path_entries = match std::env::var_os("PATH") {
                 Some(value) if !value.is_empty() => std::env::split_paths(&value).collect(),
                 _ => Vec::new(),
             };
-            let path_entries = std::iter::once(bin_dir)
-                .chain(existing_path_entries)
-                .collect::<Vec<_>>();
-            let joined = std::env::join_paths(path_entries)
+            let joined = std::env::join_paths(
+                path_entries.into_iter().chain(existing_path_entries),
+            )
                 .map_err(|error| format!("failed to configure GStreamer runtime PATH: {error}"))?;
             std::env::set_var("PATH", joined);
         }
@@ -313,6 +308,7 @@ fn configure_gstreamer_process_environment(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn prepend_env_path(key: &str, new_path: &Path) -> Result<(), String> {
     let existing_entries: Vec<PathBuf> = match std::env::var_os(key) {
         Some(value) if !value.is_empty() => std::env::split_paths(&value).collect(),
