@@ -83,15 +83,58 @@ jobs:
         env:
           PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
-          APPLE_SIGNING_IDENTITY: "Developer ID Application: Hao Yue (X7HJ7KSU55)"
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
 
       - name: Add rpath to binary
         run: |
           BINARY="apps/desktop/src-tauri/target/release/OpenDirector"
           install_name_tool -add_rpath "@executable_path/../Resources/gstreamer-runtime/lib" "$BINARY"
+
+      - name: Sign and notarize app
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "APPLE_CERTIFICATE not set, skipping signing & notarization"
+            exit 0
+          fi
+
+          IDENTITY="Developer ID Application: Hao Yue (X7HJ7KSU55)"
+          APP_PATH="apps/desktop/src-tauri/target/release/bundle/macos/OpenDirector.app"
+          ENTITLEMENTS="apps/desktop/src-tauri/entitlements.plist"
+
+          # Deep-sign all binaries (main executable + GStreamer dylibs)
+          echo "Signing all binaries in app bundle..."
+          find "$APP_PATH/Contents" -type f \( -name '*.dylib' -o -name '*.so' \) -exec codesign --force --sign "$IDENTITY" --timestamp {} \;
+          codesign --force --deep --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$APP_PATH"
+
+          echo "Verifying signature..."
+          codesign --verify --deep --strict "$APP_PATH"
+
+          # Notarize
+          echo "Creating DMG for notarization..."
+          DMG_DIR="apps/desktop/src-tauri/target/release/bundle/dmg"
+          DMG_NAME=$(ls "$DMG_DIR"/*.dmg | head -1)
+          if [ -z "$DMG_NAME" ]; then
+            hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector.dmg"
+            DMG_NAME="$DMG_DIR/OpenDirector.dmg"
+          fi
+
+          echo "Submitting for notarization..."
+          xcrun notarytool submit "$DMG_NAME" \
+            --key "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$APP_PATH"
+
+          # Recreate DMG with stapled app
+          echo "Recreating DMG with stapled app..."
+          rm -f "$DMG_NAME"
+          hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector_0.1.0_aarch64.dmg"
 
       - name: Clean up keychain
         if: always()
