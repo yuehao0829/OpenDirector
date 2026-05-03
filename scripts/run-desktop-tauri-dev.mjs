@@ -66,11 +66,7 @@ if (!isTauriInfoCommand) {
   }
 }
 
-const tauriConfigOverride = JSON.stringify({
-  build: {
-    beforeDevCommand: null,
-  },
-});
+const tauriConfigOverride = JSON.stringify(buildTauriDevConfigOverride());
 const tauriArgs = [
   'dev',
   ...(!isTauriInfoCommand ? ['--no-dev-server-wait'] : []),
@@ -1350,6 +1346,81 @@ function prepareProcessLogFile(filePath) {
 
 function toPowerShellString(value) {
   return `'${String(value).replaceAll('\'', '\'\'')}'`;
+}
+
+function buildTauriDevConfigOverride() {
+  const override = {
+    build: {
+      beforeDevCommand: null,
+    },
+  };
+  const missingResourcePatch = resolveMissingTauriBundleResourcePatch();
+  if (missingResourcePatch) {
+    override.bundle = {
+      resources: missingResourcePatch,
+    };
+  }
+  return override;
+}
+
+function resolveMissingTauriBundleResourcePatch() {
+  try {
+    const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, 'utf8'));
+    const resources = tauriConfig?.bundle?.resources;
+    if (!resources) {
+      return null;
+    }
+
+    if (Array.isArray(resources)) {
+      const existingResources = resources.filter((resource) =>
+        typeof resource === 'string' &&
+        (tauriResourceSourceLooksLikeGlob(resource) || tauriResourceSourceExists(resource)),
+      );
+
+      if (existingResources.length === resources.length) {
+        return null;
+      }
+
+      return existingResources;
+    }
+
+    if (typeof resources !== 'object') {
+      return null;
+    }
+
+    const missingEntries = Object.keys(resources).filter(
+      (resource) =>
+        typeof resource === 'string' &&
+        !tauriResourceSourceLooksLikeGlob(resource) &&
+        !tauriResourceSourceExists(resource),
+    );
+
+    if (missingEntries.length === 0) {
+      return null;
+    }
+
+    console.log(
+      `[Tauri Dev] Skipping missing bundle resources: ${missingEntries.join(', ')}`,
+    );
+
+    return Object.fromEntries(
+      missingEntries.map((resource) => [resource, null]),
+    );
+  } catch (error) {
+    console.warn(
+      `[Tauri Dev] Failed to inspect bundle resources from tauri.conf.json: ${error.message}`,
+    );
+    return null;
+  }
+}
+
+function tauriResourceSourceExists(resourceSource) {
+  const resolvedSourcePath = path.resolve(tauriDir, resourceSource);
+  return existsSync(resolvedSourcePath);
+}
+
+function tauriResourceSourceLooksLikeGlob(resourceSource) {
+  return /[*?[\]{}]/.test(resourceSource);
 }
 
 function resolveRuntimeRoot() {

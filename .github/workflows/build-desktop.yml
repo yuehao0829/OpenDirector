@@ -49,16 +49,45 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Import Apple certificate
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
       - name: Build Tauri app
         run: pnpm build:desktop
         env:
           PKG_CONFIG: ${{ matrix.pkg_config_bin }}
           PKG_CONFIG_PATH: ${{ matrix.pkg_config_path }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Hao Yue (X7HJ7KSU55)"
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE_KEY: ${{ secrets.APPLE_API_KEY_PRIVATE_KEY }}
 
       - name: Add rpath to binary
         run: |
           BINARY="apps/desktop/src-tauri/target/release/OpenDirector"
           install_name_tool -add_rpath "@executable_path/../Resources/gstreamer-runtime/lib" "$BINARY"
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
