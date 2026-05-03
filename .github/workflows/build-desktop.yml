@@ -53,6 +53,8 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PRIVATE_KEY: ${{ secrets.APPLE_API_KEY_PRIVATE_KEY }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "APPLE_CERTIFICATE not set, skipping signing"
@@ -72,6 +74,10 @@ jobs:
 
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
+          # Write App Store Connect API key to file for notarytool
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          echo -n "$APPLE_API_KEY_PRIVATE_KEY" > "$API_KEY_PATH"
+
       - name: Build Tauri app
         run: pnpm build:desktop
         env:
@@ -80,7 +86,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Hao Yue (X7HJ7KSU55)"
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PRIVATE_KEY: ${{ secrets.APPLE_API_KEY_PRIVATE_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
 
       - name: Add rpath to binary
         run: |
@@ -91,7 +97,7 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP"/AuthKey_*.p8
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
