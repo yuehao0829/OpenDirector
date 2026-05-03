@@ -101,8 +101,18 @@ jobs:
           fi
 
           IDENTITY="Developer ID Application: Hao Yue (X7HJ7KSU55)"
-          APP_PATH="apps/desktop/src-tauri/target/release/bundle/macos/OpenDirector.app"
           ENTITLEMENTS="apps/desktop/src-tauri/entitlements.plist"
+          DMG_DIR="apps/desktop/src-tauri/target/release/bundle/dmg"
+          DMG_NAME=$(ls "$DMG_DIR"/*.dmg | head -1)
+
+          # Extract .app from DMG (Tauri cleans up the .app after bundling)
+          echo "Extracting app from DMG..."
+          MOUNT_POINT="$RUNNER_TEMP/dmg_mount"
+          hdiutil attach "$DMG_NAME" -quiet -nobrowse -mountpoint "$MOUNT_POINT"
+          APP_SRC="$MOUNT_POINT/OpenDirector.app"
+          APP_PATH="$RUNNER_TEMP/OpenDirector.app"
+          cp -a "$APP_SRC" "$APP_PATH"
+          hdiutil detach "$MOUNT_POINT" -quiet
 
           # Deep-sign all binaries (main executable + GStreamer dylibs)
           echo "Signing all binaries in app bundle..."
@@ -112,17 +122,13 @@ jobs:
           echo "Verifying signature..."
           codesign --verify --deep --strict "$APP_PATH"
 
-          # Notarize
+          # Create DMG for notarization
           echo "Creating DMG for notarization..."
-          DMG_DIR="apps/desktop/src-tauri/target/release/bundle/dmg"
-          DMG_NAME=$(ls "$DMG_DIR"/*.dmg | head -1)
-          if [ -z "$DMG_NAME" ]; then
-            hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector.dmg"
-            DMG_NAME="$DMG_DIR/OpenDirector.dmg"
-          fi
+          NOTARIZE_DMG="$RUNNER_TEMP/OpenDirector_notarize.dmg"
+          hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$NOTARIZE_DMG"
 
           echo "Submitting for notarization..."
-          xcrun notarytool submit "$DMG_NAME" \
+          xcrun notarytool submit "$NOTARIZE_DMG" \
             --key "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" \
             --key-id "$APPLE_API_KEY" \
             --issuer "$APPLE_API_ISSUER" \
@@ -131,7 +137,7 @@ jobs:
           echo "Stapling notarization ticket..."
           xcrun stapler staple "$APP_PATH"
 
-          # Recreate DMG with stapled app
+          # Recreate final DMG with stapled app
           echo "Recreating DMG with stapled app..."
           rm -f "$DMG_NAME"
           hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/OpenDirector_0.1.0_aarch64.dmg"
