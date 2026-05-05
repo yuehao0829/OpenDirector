@@ -114,10 +114,18 @@ jobs:
           cp -a "$APP_SRC" "$APP_PATH"
           hdiutil detach "$MOUNT_POINT" -quiet
 
-          # Deep-sign all binaries (main executable + GStreamer dylibs)
-          echo "Signing all binaries in app bundle..."
+          # Sign all shared libraries first (no hardened runtime)
+          echo "Signing shared libraries..."
           find "$APP_PATH/Contents" -type f \( -name '*.dylib' -o -name '*.so' \) -exec codesign --force --sign "$IDENTITY" --timestamp {} \;
-          codesign --force --deep --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$APP_PATH"
+
+          # Sign the main executable with hardened runtime + entitlements
+          echo "Signing main executable..."
+          MAIN_BIN="$APP_PATH/Contents/MacOS/OpenDirector"
+          codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$MAIN_BIN"
+
+          # Sign the app bundle
+          echo "Signing app bundle..."
+          codesign --force --sign "$IDENTITY" --timestamp "$APP_PATH"
 
           echo "Verifying signature..."
           codesign --verify --deep --strict "$APP_PATH"
@@ -128,11 +136,28 @@ jobs:
           hdiutil create -volname "OpenDirector" -srcfolder "$APP_PATH" -ov -format UDZO "$NOTARIZE_DMG"
 
           echo "Submitting for notarization..."
-          xcrun notarytool submit "$NOTARIZE_DMG" \
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "$NOTARIZE_DMG" \
             --key "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" \
             --key-id "$APPLE_API_KEY" \
             --issuer "$APPLE_API_ISSUER" \
-            --wait
+            --wait 2>&1) || true
+
+          echo "$SUBMIT_OUTPUT"
+
+          if echo "$SUBMIT_OUTPUT" | grep -q "status: Accepted"; then
+            echo "Notarization accepted!"
+          else
+            echo "Notarization failed, fetching log..."
+            SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep 'id:' | head -1 | awk '{print $2}')
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8" \
+                --key-id "$APPLE_API_KEY" \
+                --issuer "$APPLE_API_ISSUER"
+            fi
+            echo "::error::Notarization failed"
+            exit 1
+          fi
 
           echo "Stapling notarization ticket (with retry)..."
           STAPLE_SUCCESS=false
