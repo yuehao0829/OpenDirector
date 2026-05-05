@@ -134,8 +134,15 @@ jobs:
             --issuer "$APPLE_API_ISSUER" \
             --wait
 
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple "$APP_PATH"
+          echo "Stapling notarization ticket (with retry)..."
+          for i in 1 2 3 4 5; do
+            if xcrun stapler staple "$APP_PATH"; then
+              echo "Staple succeeded on attempt $i"
+              break
+            fi
+            echo "Staple failed (attempt $i), waiting 30s for CloudKit propagation..."
+            sleep 30
+          done
 
           # Recreate final DMG with stapled app
           echo "Recreating DMG with stapled app..."
