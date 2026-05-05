@@ -129,10 +129,13 @@ jobs:
           # Sign any nested .app bundles (e.g. terminal-notifier)
           find "$APP_PATH/Contents" -name '*.app' -exec codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp {} \;
 
-          # Sign the main executable with hardened runtime + entitlements
-          echo "Signing main executable..."
-          MAIN_BIN="$APP_PATH/Contents/MacOS/OpenDirector"
-          codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$MAIN_BIN"
+          # Sign all executables in Contents/MacOS with hardened runtime + entitlements
+          echo "Signing executables..."
+          for exe in "$APP_PATH/Contents/MacOS/"*; do
+            if file "$exe" | grep -q "Mach-O"; then
+              codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$exe"
+            fi
+          done
 
           # Sign the app bundle
           echo "Signing app bundle..."
