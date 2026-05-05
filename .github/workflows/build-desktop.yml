@@ -133,9 +133,9 @@ jobs:
           echo "Signing executables..."
           find "$APP_PATH/Contents/MacOS" -type f -exec codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp {} \;
 
-          # Sign the app bundle
+          # Sign the app bundle (include --options runtime so nested binaries aren't re-signed without it)
           echo "Signing app bundle..."
-          codesign --force --sign "$IDENTITY" --timestamp "$APP_PATH"
+          codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$APP_PATH"
 
           echo "Verifying signature..."
           codesign --verify --deep --strict "$APP_PATH"
