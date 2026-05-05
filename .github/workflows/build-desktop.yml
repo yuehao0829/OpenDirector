@@ -114,9 +114,20 @@ jobs:
           cp -a "$APP_SRC" "$APP_PATH"
           hdiutil detach "$MOUNT_POINT" -quiet
 
+          # Remove non-GStreamer content that cannot be signed
+          # (Ruby gems with nested .bundle/.app inside archives, extra binaries)
+          echo "Removing non-GStreamer content from runtime..."
+          rm -rf "$APP_PATH/Contents/Resources/gstreamer-runtime/lib/ruby"
+          rm -rf "$APP_PATH/Contents/Resources/gstreamer-runtime/libexec"
+          rm -f "$APP_PATH/Contents/Resources/gstreamer-runtime/bin/session-manager-plugin"
+          rm -f "$APP_PATH/Contents/Resources/gstreamer-runtime/bin/openssl"
+
           # Sign all shared libraries first (no hardened runtime)
           echo "Signing shared libraries..."
-          find "$APP_PATH/Contents" -type f \( -name '*.dylib' -o -name '*.so' \) -exec codesign --force --sign "$IDENTITY" --timestamp {} \;
+          find "$APP_PATH/Contents" -type f \( -name '*.dylib' -o -name '*.so' -o -name '*.bundle' \) -exec codesign --force --sign "$IDENTITY" --timestamp {} \;
+
+          # Sign any nested .app bundles (e.g. terminal-notifier)
+          find "$APP_PATH/Contents" -name '*.app' -exec codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp {} \;
 
           # Sign the main executable with hardened runtime + entitlements
           echo "Signing main executable..."
