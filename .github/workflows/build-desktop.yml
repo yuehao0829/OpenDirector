@@ -131,11 +131,7 @@ jobs:
 
           # Sign all executables in Contents/MacOS with hardened runtime + entitlements
           echo "Signing executables..."
-          for exe in "$APP_PATH/Contents/MacOS/"*; do
-            if file "$exe" | grep -q "Mach-O"; then
-              codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp "$exe"
-            fi
-          done
+          find "$APP_PATH/Contents/MacOS" -type f -exec codesign --force --sign "$IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --timestamp {} \;
 
           # Sign the app bundle
           echo "Signing app bundle..."
