@@ -6,6 +6,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_DIR="${OPENDIRECTOR_GSTREAMER_BUNDLE_RUNTIME_DIR:-$REPO_ROOT/apps/desktop/src-tauri/gstreamer-runtime}"
 GST_PREFIX="${OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT:-}"
 
+# When the prefix points to the generic Homebrew root rather than the GStreamer
+# formula directory, resolve to the formula so we only bundle GStreamer's own
+# files — not the entire Homebrew cellar.
+if [ -n "$GST_PREFIX" ] && command -v brew >/dev/null 2>&1; then
+    BREW_PREFIX="$(brew --prefix 2>/dev/null)" || true
+    if [ "$GST_PREFIX" = "$BREW_PREFIX" ]; then
+        if GST_FORMULA="$(brew --prefix gstreamer 2>/dev/null)"; then
+            GST_PREFIX="$GST_FORMULA"
+        fi
+    fi
+fi
+
 if [ -z "$GST_PREFIX" ]; then
     if ! command -v brew >/dev/null 2>&1; then
         echo "Error: OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT is not set and Homebrew is unavailable." >&2
