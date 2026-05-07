@@ -68,8 +68,8 @@ export const resources = {
         close: '关闭',
       },
       settings: {
-        nav: { general: '通用', provider: 'Provider', generation: '生成参数' },
-        general: { title: '通用', language: '语言', chinese: '中文', english: 'English' },
+        nav: { technical: '技术设置', provider: 'Provider', generation: '生成参数' },
+        technical: { title: '技术设置', language: '语言', chinese: '中文', english: 'English' },
         generationDefaults: {
           title: '默认生成参数',
           resolution: '分辨率',
@@ -318,8 +318,8 @@ export const resources = {
         close: 'Close',
       },
       settings: {
-        nav: { general: 'General', provider: 'Provider', generation: 'Generation' },
-        general: { title: 'General', language: 'Language', chinese: '中文', english: 'English' },
+        nav: { technical: 'Technical', provider: 'Provider', generation: 'Generation' },
+        technical: { title: 'Technical', language: 'Language', chinese: '中文', english: 'English' },
         generationDefaults: {
           title: 'Default Generation Parameters',
           resolution: 'Resolution',

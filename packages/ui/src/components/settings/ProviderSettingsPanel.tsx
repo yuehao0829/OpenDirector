@@ -1,31 +1,30 @@
 import { useState } from 'react';
 import { ProviderList } from './ProviderList';
 import { GenerationDefaultsPanel } from './GenerationDefaultsPanel';
-import { GeneralSettingsPanel } from './GeneralSettingsPanel';
+import { TechnicalSettingsPanel } from './TechnicalSettingsPanel';
 import { EditProviderDialog } from './EditProviderDialog';
 import { ExportProviderDialog } from './ExportProviderDialog';
 import { ImportProviderConfigDialog } from './ImportProviderConfigDialog';
 import type { ProviderInstance } from '@opendirector/core/types/provider-system';
 import { useTranslation } from 'react-i18next';
 
-type SettingsNavItem = 'general' | 'provider' | 'generation';
+type SettingsNavItem = 'technical' | 'provider' | 'generation';
 
 export function ProviderSettingsPanel() {
   const { t } = useTranslation();
-  const [activeNav, setActiveNav] = useState<SettingsNavItem>('general');
+  const [activeNav, setActiveNav] = useState<SettingsNavItem>('technical');
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   const navItems: { key: SettingsNavItem; label: string }[] = [
-    { key: 'general', label: t('settings.nav.general') },
+    { key: 'technical', label: t('settings.nav.technical') },
     { key: 'provider', label: t('settings.nav.provider') },
     { key: 'generation', label: t('settings.nav.generation') },
   ];
 
   return (
     <div className="h-full flex">
-      {/* Left navigation */}
       <div className="w-40 shrink-0 bg-zinc-800/30 border-r border-zinc-700 py-4">
         <nav className="space-y-0.5 px-2">
           {navItems.map((item) => (
@@ -44,10 +43,9 @@ export function ProviderSettingsPanel() {
         </nav>
       </div>
 
-      {/* Right content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {activeNav === 'general' && (
-          <GeneralSettingsPanel />
+        {activeNav === 'technical' && (
+          <TechnicalSettingsPanel />
         )}
         {activeNav === 'provider' && (
           <ProviderList

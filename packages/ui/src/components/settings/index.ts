@@ -7,4 +7,4 @@ export { ExportProviderDialog } from './ExportProviderDialog';
 export { ImportProviderConfigDialog } from './ImportProviderConfigDialog';
 export { CredentialFormField } from './CredentialFormField';
 export { GenerationDefaultsPanel } from './GenerationDefaultsPanel';
-export { GeneralSettingsPanel } from './GeneralSettingsPanel';
+export { TechnicalSettingsPanel } from './TechnicalSettingsPanel';

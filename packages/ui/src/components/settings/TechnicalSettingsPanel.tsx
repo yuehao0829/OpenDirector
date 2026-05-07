@@ -4,28 +4,27 @@ import { useSettingsStore } from '@opendirector/core/stores/settingsStore';
 import { useTranslation } from 'react-i18next';
 
 const LANGUAGE_OPTIONS: Array<{ value: AppLanguage; labelKey: string }> = [
-  { value: 'zh-CN', labelKey: 'settings.general.chinese' },
-  { value: 'en-US', labelKey: 'settings.general.english' },
+  { value: 'zh-CN', labelKey: 'settings.technical.chinese' },
+  { value: 'en-US', labelKey: 'settings.technical.english' },
 ];
 
-export function GeneralSettingsPanel() {
+export function TechnicalSettingsPanel() {
   const { t } = useTranslation();
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
 
   const handleLanguageChange = (nextLanguage: AppLanguage) => {
+    if (nextLanguage === language) return;
     setLanguage(nextLanguage);
     void changeI18nLanguage(nextLanguage);
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-medium text-zinc-200 mb-1">{t('settings.general.title')}</h2>
-      </div>
+      <h2 className="text-lg font-medium text-zinc-200 mb-1">{t('settings.technical.title')}</h2>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium text-zinc-300">{t('settings.general.language')}</label>
+        <label className="text-sm font-medium text-zinc-300">{t('settings.technical.language')}</label>
         <div className="inline-flex rounded-lg bg-zinc-800 p-0.5">
           {LANGUAGE_OPTIONS.map((option) => (
             <button
