@@ -9,6 +9,8 @@ import type { AssetType, AssetSource } from '../types/persistence';
 import type { MediaMetadata } from '../types/persistence';
 import type { FileSystemAdapter } from '../adapters/types';
 import { toWebViewUrl } from '../utils/platform';
+import { getFileExtension } from '../utils/common';
+import { generateId } from '../utils/id';
 
 const IMPORT_METADATA_RETRY_DELAYS_MS = [0, 120, 300, 700] as const;
 const IMPORT_THUMBNAIL_RETRY_DELAYS_MS = [0, 150, 400] as const;
@@ -77,10 +79,10 @@ export async function importAsset(
 
     // Get file info
     const fileName = sourcePath.split(/[/\\]/).pop() ?? 'unknown';
-    const fileExt = fileName.split('.').pop() ?? '';
+    const fileExt = getFileExtension(fileName);
 
     // Generate asset ID
-    const assetId = crypto.randomUUID();
+    const assetId = generateId();
 
     // Copy file to project folder (if enabled)
     let relativePath: string;
@@ -189,7 +191,7 @@ export async function generateThumbnailForAsset(
       waveformDataPath: undefined,
     };
   } catch (error) {
-    console.warn('Failed to generate thumbnail:', error);
+    // thumbnails are optional — the asset is still usable without one
   }
   return { thumbnailUrl: undefined, waveformDataPath: undefined };
 }
@@ -258,7 +260,6 @@ export async function refreshImportedAssetMetadata(
     resolvedAbsolutePath,
     fs,
     asset.type,
-    asset.id,
   );
   return metadata ? mapMediaMetadataToAssetFields(metadata) : {};
 }
@@ -317,12 +318,11 @@ export async function importMultipleAssets(
       if (onAssetImported) {
         try {
           await onAssetImported(result);
-        } catch (error) {
-          console.warn(`Failed to process imported asset ${result.asset.id}:`, error);
+        } catch (_error) {
+          // callback failure must not block the batch import
         }
       }
-    } catch (error) {
-      console.error(`Failed to import ${sourcePath}:`, error);
+    } catch (_error) {
       // Continue with other files
     }
   }
@@ -345,7 +345,7 @@ export async function importMultipleAssets(
  * Detect asset type from file path
  */
 export function detectAssetType(path: string): AssetType | null {
-  const ext = path.split('.').pop()?.toLowerCase();
+  const ext = getFileExtension(path);
 
   const videoExts = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'wmv'];
   const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
@@ -384,7 +384,7 @@ async function getAssetMetadata(
   }
 
   // Get MIME type from extension
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const ext = getFileExtension(path);
   const mimeType = getMimeType(ext);
 
   // Get media-specific metadata
@@ -405,10 +405,9 @@ async function getAssetMetadata(
     audioChannels = metadata.audioChannels;
     sampleRate = metadata.sampleRate;
     mediaMetadataHydrated = hasMeaningfulMediaMetadata(metadata);
-  } catch (error) {
-    console.warn('Failed to get media metadata:', error);
+  } catch (_error) {
+    // metadata is optional — we fall back to whatever partial data we have
   }
-
   return {
     fileSize,
     mimeType,
@@ -499,10 +498,8 @@ async function readImportedAssetMetadataWithRetry(
   absolutePath: string,
   fs: Pick<FileSystemAdapter, 'getMediaMetadata'>,
   type: AssetType,
-  assetId: string,
 ): Promise<MediaMetadata | undefined> {
   let bestMetadata: MediaMetadata | undefined;
-  let lastError: unknown;
 
   for (const delayMs of IMPORT_METADATA_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
@@ -515,17 +512,13 @@ async function readImportedAssetMetadataWithRetry(
       if (hasRequiredImportedMetadata(type, bestMetadata)) {
         return bestMetadata;
       }
-    } catch (error) {
-      lastError = error;
+    } catch {
+      // transient I/O errors are expected during import — retry loop handles them
     }
   }
 
   if (bestMetadata && hasMeaningfulMediaMetadata(bestMetadata)) {
     return bestMetadata;
-  }
-
-  if (lastError) {
-    console.warn(`Failed to refresh imported asset metadata ${assetId}:`, lastError);
   }
 
   return undefined;
@@ -601,7 +594,6 @@ export async function generateAssetThumbnail(
 
   if (type === 'video') {
     const outputPath = `${thumbnailDir}/${assetId}.jpg`;
-    let lastError: unknown;
 
     for (const timeSec of buildVideoThumbnailTimeCandidates(durationMs)) {
       for (const delayMs of IMPORT_THUMBNAIL_RETRY_DELAYS_MS) {
@@ -611,15 +603,13 @@ export async function generateAssetThumbnail(
 
         try {
           return await fs.generateThumbnail(path, outputPath, timeSec);
-        } catch (error) {
-          lastError = error;
+        } catch {
+          // thumbnail generation can fail transiently — the retry loop continues
         }
       }
     }
 
-    if (lastError) {
-      console.warn('Failed to generate thumbnail:', lastError);
-    }
+    // all attempts exhausted
     return undefined;
   }
 
@@ -630,7 +620,7 @@ export async function generateAssetThumbnail(
       return thumbnailPath;
     }
   } catch (error) {
-    console.warn('Failed to generate thumbnail:', error);
+    // image thumbnails are optional — fall back to no thumbnail
   }
 
   return undefined;
@@ -697,8 +687,8 @@ export async function generateAssetPeakData(
   try {
     const outputPath = `${thumbnailDir}/${assetId}.peak`;
     return await fs.generateAudioPeakData(path, outputPath);
-  } catch (error) {
-    console.warn('Failed to generate peak data:', error);
+  } catch (_error) {
+    // waveform peak data is optional — audio playback works without it
   }
 
   return undefined;

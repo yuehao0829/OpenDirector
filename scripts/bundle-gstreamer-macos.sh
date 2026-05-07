@@ -58,7 +58,6 @@ REWRITE_PREFIX="@rpath"
 source "$SCRIPT_DIR/mach-o-common.sh"
 
 # Extend should_rewrite_reference to recognize the GStreamer prefix used at build time.
-_should_rewrite_reference_base() { should_rewrite_reference "$1"; }
 should_rewrite_reference() {
     local ref="$1"
     case "$ref" in
@@ -69,7 +68,7 @@ should_rewrite_reference() {
             return 1
             ;;
     esac
-    _should_rewrite_reference_base "$ref"
+    should_rewrite_reference_base "$ref"
 }
 
 copy_external_dylib_dependencies() {

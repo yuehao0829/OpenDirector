@@ -16,6 +16,7 @@ import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import type { ProviderInstance } from '@opendirector/core/types/provider-system';
 import { getErrorMessage } from '@opendirector/core/utils/common';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
+import { generateId } from '@opendirector/core/utils/id';
 import type {
   GenerationRecord,
   GenerationsFile,
@@ -35,6 +36,7 @@ import { handleTaskComplete, markRecordTerminal, triggerNextSegmentIfNeeded } fr
 import { resetFragmentIfGenerating } from './fragment-utils';
 import { failGeneration, cancelGeneration, expireGeneration, updateGenerationProgress } from './store-sync';
 import { taskLog } from './task-log';
+import { safeSaveAsset } from './task-db-helpers';
 
 /**
  * Restore project generations when opening a project.
@@ -82,7 +84,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
         await tauriBridge.seedanceApi.resumeGeneration(record.id, password);
         taskLog.info(folderPath, 'resume_task', 'Resuming Rust-tracked task', { taskId: record.id });
       } catch (err) {
-        console.warn(`[TaskBridge] Failed to resume Rust-tracked task ${record.id}:`, err);
+        taskLog.warn(folderPath, 'resume_error', 'Failed to resume Rust-tracked task', { taskId: record.id, error: String(err) });
       }
     }
   }
@@ -131,7 +133,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
             try {
               await tauriBridge.seedanceApi.resumeGeneration(record.id, seedancePassword);
             } catch (err) {
-              console.warn(`[TaskBridge] Failed to re-register server-tracked task ${record.id} with Rust:`, err);
+              taskLog.warn(folderPath, 'reregister_error', 'Failed to re-register server-tracked task with Rust', { taskId: record.id, error: String(err) });
             }
           }
         } else if (serverStatus === 'succeeded') {
@@ -139,7 +141,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
             const updatedRecord = await restoreSucceededTask(record, folderPath, fs, serverResult!);
             generationsFile.generations[idx] = updatedRecord;
           } catch (error) {
-            console.error(`[TaskBridge] Failed to restore succeeded task ${record.id}:`, error);
+            taskLog.error(folderPath, 'restore_error', 'Failed to restore succeeded task', { taskId: record.id, error: getErrorMessage(error) });
             markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', `恢复已完成任务失败: ${getErrorMessage(error)}`);
           }
         } else if (serverStatus === 'cancelled') {
@@ -193,7 +195,6 @@ async function batchQueryServerStatuses(
       });
     }
   } catch (err) {
-    console.warn('[TaskBridge] Batch query failed, falling back to individual queries:', err);
     if (folderPath) {
       taskLog.warn(folderPath, 'batch_query_fallback', 'Batch query failed, falling back to individual queries', {
         count: providerTaskIds.length,
@@ -234,7 +235,7 @@ async function restoreSucceededTask(
   const localPath = downloadResult.file_path;
   const fileSize = downloadResult.file_size;
 
-  const assetId = crypto.randomUUID();
+  const assetId = generateId();
 
   const [metadataResult, thumbnailSettled] = await Promise.allSettled([
     fs.getMediaMetadata(localPath).catch(() => null),
@@ -264,9 +265,7 @@ async function restoreSucceededTask(
   });
 
   useAssetStore.getState().addAsset(asset);
-  if (db) {
-    db.saveAsset(asset).catch((e: unknown) => console.warn('[TaskBridge] Failed to save restored asset to DB:', e));
-  }
+  safeSaveAsset(db, folderPath, asset, 'db_save_asset');
 
   const fragment = useTimelineStore.getState().fragments.find((f) => f.id === record.fragmentId);
 
@@ -303,8 +302,6 @@ async function restoreSucceededTask(
       status: 'completed',
     });
   }
-
-  console.log(`[TaskBridge] Restored succeeded task ${record.id} with video download`);
 
   taskLog.info(folderPath, 'restore_succeeded', 'Restored succeeded task with video download', {
     taskId: record.id,
@@ -364,13 +361,13 @@ export async function refreshActiveGenerations(): Promise<void> {
   const instance = getAnySeedanceInstance();
 
   if (!instance) {
-    console.error('[Generation Refresh] No Seedance provider configured');
+    taskLog.warn(undefined, 'refresh_no_provider', 'No Seedance provider configured');
     return;
   }
 
   const gensWithApiId = activeGenerations.filter((g) => g.providerTaskId);
   if (gensWithApiId.length === 0) {
-    console.warn('[Generation Refresh] No active generations with providerTaskId to query');
+    taskLog.info(undefined, 'refresh_no_tasks', 'No active generations with providerTaskId to query');
     return;
   }
 
@@ -379,7 +376,7 @@ export async function refreshActiveGenerations(): Promise<void> {
 
   const apiTaskIds = gensWithApiId.map((g) => g.providerTaskId!);
   const serverResults = await batchQueryServerStatuses(apiTaskIds, instance, folderPath);
-  console.log('[Generation Refresh] Query results:', Object.fromEntries(serverResults));
+  taskLog.info(folderPath, 'refresh_results', 'Query results', { results: Object.fromEntries(serverResults) });
 
   const password = getProviderPassword(instance);
 
@@ -397,7 +394,7 @@ export async function refreshActiveGenerations(): Promise<void> {
       try {
         await tauriBridge.seedanceApi.resumeGeneration(gen.id, password);
       } catch (err) {
-        console.warn(`[Generation Refresh] resumeGeneration failed for ${gen.id}:`, err);
+        taskLog.warn(folderPath, 'refresh_resume_error', 'resumeGeneration failed', { taskId: gen.id, error: String(err) });
       }
       await refreshSucceededTaskFromServer(gen, serverResult, folderPath);
     } else if (serverStatus === 'failed') {
@@ -449,7 +446,7 @@ async function refreshSucceededTaskFromServer(
       projectPath: folderPath,
     });
   } catch (err) {
-    console.error(`[Refresh] Failed to download/complete task ${gen.id}:`, err);
+    taskLog.error(folderPath, 'refresh_download_error', 'Failed to download/complete task', { taskId: gen.id, error: getErrorMessage(err) });
     const errorMsg = `恢复已完成任务失败: ${getErrorMessage(err)}`;
     await failGeneration(gen.id, errorMsg, folderPath);
   }
@@ -503,7 +500,7 @@ async function reconcileCompletedGenerations(
     const metadataResult = await fs.getMediaMetadata(videoAbsPath).catch(() => null);
 
     if (metadataResult !== null) {
-      const assetId = crypto.randomUUID();
+      const assetId = generateId();
       const [thumbnailSettled] = await Promise.allSettled([
         generateThumbnailForAsset(videoAbsPath, fs, 'video', folderPath, assetId),
       ]);
@@ -532,9 +529,7 @@ async function reconcileCompletedGenerations(
       const newAssetId = asset.id;
 
       assetStore.addAsset(asset);
-      if (db) {
-        db.saveAsset(asset).catch((e: unknown) => console.warn('[TaskBridge] Failed to save reconciled asset to DB:', e));
-      }
+      safeSaveAsset(db, folderPath, asset, 'db_save_reconciled');
 
       if (fragment && needsFragmentFix) {
         timelineStore.updateFragment(fragment.id, {
@@ -560,7 +555,7 @@ async function reconcileCompletedGenerations(
         isSelected: true,
       });
 
-      console.log(`[TaskBridge] Reconciled completed generation ${record.id}: asset rebuilt, fragment fixed`);
+      taskLog.info(folderPath, 'reconciled', 'Reconciled completed generation: asset rebuilt, fragment fixed', { recordId: record.id });
 
       if (record.continuousMode) {
         const plan = record.continuousPlan ?? [];
@@ -607,7 +602,7 @@ export async function cleanupOrphanedGeneratingFragments(): Promise<void> {
   );
 
   for (const f of orphanFragments) {
-    console.log(`[TaskBridge] Resetting orphan generating fragment ${f.id} to draft`);
+    taskLog.info(undefined, 'orphan_reset', 'Resetting orphan generating fragment to draft', { fragmentId: f.id });
     timelineStore.updateFragment(f.id, { status: 'draft' });
   }
 }

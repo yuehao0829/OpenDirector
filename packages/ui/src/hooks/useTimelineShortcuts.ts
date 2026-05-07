@@ -109,7 +109,6 @@ export function useTimelineShortcuts() {
           break;
 
         case 'g':
-          // TODO: Merge mode - for now just use select mode
           setToolMode('select');
           break;
 

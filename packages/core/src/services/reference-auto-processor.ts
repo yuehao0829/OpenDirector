@@ -194,7 +194,7 @@ export async function autoProcessReferences(options: AutoProcessOptions): Promis
       assetIdMap.set(result.value.plan.asset.id, result.value.newAsset.id);
       newAssets.push(result.value.newAsset);
     } else {
-      console.error('[AutoProcess] Failed to process:', result.reason);
+      // individual reference processing failures are non-blocking — the batch continues
     }
   }
 

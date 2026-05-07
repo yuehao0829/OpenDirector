@@ -34,7 +34,7 @@ export async function cleanupOrphanFiles(
           try {
             await fs.deleteFile(file.path);
           } catch (error) {
-            console.error(`Failed to delete orphan file ${file.path}:`, error);
+            // file may have been deleted by a concurrent operation
           }
         }
       }

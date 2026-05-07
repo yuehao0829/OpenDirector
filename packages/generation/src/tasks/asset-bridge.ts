@@ -12,6 +12,7 @@ import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import { useProviderInstanceStore } from '@opendirector/core/stores/providerInstanceStore';
 import { getProviderPassword } from '@opendirector/core/types/provider-system';
 import { updateAssetsXml, readAssetsFile } from './asset-xml-repository';
+import { taskLog } from './task-log';
 import { providerRuntimeRegistry } from '../providers/runtime-registry';
 
 let assetBridgeInitialized = false;
@@ -48,7 +49,7 @@ export async function initAssetTaskBridge(): Promise<void> {
           remoteAssetStatus: 'Processing',
           providerInstanceId: payload.provider_instance_id,
           groupId: payload.group_id,
-        }).catch(console.warn);
+        }).catch((err) => taskLog.warn(folderPath, 'asset_xml_update', 'Failed to update Assets.xml for created event', { assetId: payload.asset_id, error: String(err) }));
         break;
 
       case 'active':
@@ -64,7 +65,7 @@ export async function initAssetTaskBridge(): Promise<void> {
           .then(() => {
             if (isCurrentProject) useProjectStore.getState().saveProject?.();
           })
-          .catch(console.warn);
+          .catch((err) => taskLog.warn(folderPath, 'asset_xml_update', 'Failed to update Assets.xml for active event', { assetId: payload.asset_id, error: String(err) }));
         break;
 
       case 'failed':
@@ -80,7 +81,7 @@ export async function initAssetTaskBridge(): Promise<void> {
           .then(() => {
             if (isCurrentProject) useProjectStore.getState().saveProject?.();
           })
-          .catch(console.warn);
+          .catch((err) => taskLog.warn(folderPath, 'asset_xml_update', 'Failed to update Assets.xml for failed event', { assetId: payload.asset_id, error: String(err) }));
         break;
     }
   });

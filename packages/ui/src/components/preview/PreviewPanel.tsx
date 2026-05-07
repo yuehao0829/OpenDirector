@@ -15,6 +15,7 @@ import {
   computeCropDrawParams,
   computeContainLayout,
   computeInitialCropRect,
+  isSameCropRect,
   parseAspectRatio,
 } from '../../utils/crop';
 import { useImageCanvas } from '../../hooks/useImageCanvas';
@@ -32,17 +33,6 @@ interface PendingReferenceUpdate {
   refId: string;
   cropRect?: CropRect;
   trimRange?: TrimRange;
-}
-
-function isSameCropRect(left?: CropRect | null, right?: CropRect | null): boolean {
-  if (!left && !right) return true;
-  if (!left || !right) return false;
-  return (
-    Math.abs(left.x - right.x) < 0.001 &&
-    Math.abs(left.y - right.y) < 0.001 &&
-    Math.abs(left.width - right.width) < 0.001 &&
-    Math.abs(left.height - right.height) < 0.001
-  );
 }
 
 function isSameTrimRange(left?: TrimRange | null, right?: TrimRange | null): boolean {
@@ -374,13 +364,7 @@ export function PreviewPanel() {
 
   const handleDefaultCropChange = useCallback((_isDefault: boolean, defCr: CropRect) => {
     setDefaultCropRect((prev) => {
-      if (
-        prev &&
-        Math.abs(prev.x - defCr.x) < 0.001 &&
-        Math.abs(prev.y - defCr.y) < 0.001 &&
-        Math.abs(prev.width - defCr.width) < 0.001 &&
-        Math.abs(prev.height - defCr.height) < 0.001
-      ) {
+      if (isSameCropRect(prev, defCr)) {
         return prev;
       }
       return defCr;
@@ -542,34 +526,27 @@ export function PreviewPanel() {
 
   // Render preview content based on type
   const renderPreview = () => {
-    if (nativeTimelinePlaybackActive) {
-      return null;
+    if (nativeTimelinePlaybackActive) return null;
+
+    // Timeline mode: audio handled by mixer, video at playhead shown by native host
+    if (source.mode === 'timeline') {
+      return <div className="w-full h-full bg-black" />;
     }
 
     if (!source.previewUrl) {
-      // Timeline mode: black screen when no video content at playhead
-      // Asset/Reference mode: show "No preview available"
-      if (source.mode === 'timeline') {
-        return <div className="w-full h-full bg-black" />;
-      }
       return (
-        <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
-          <p className="text-zinc-500 text-sm">No preview available</p>
-        </div>
+        <p className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-500 text-sm">
+          No preview available
+        </p>
       );
     }
 
-    // ── Reference mode rendering ──
     if (source.mode === 'reference') {
       return renderReferencePreview();
     }
 
     switch (source.previewType) {
       case 'video':
-        if (source.mode === 'timeline') {
-          return <div className="w-full h-full bg-black" />;
-        }
-
         return (
           <VideoPreview
             src={source.previewUrl}
@@ -584,12 +561,6 @@ export function PreviewPanel() {
         );
 
       case 'audio':
-        // In timeline mode, audio is handled by the mixer — show nothing
-        // (video from topmost track takes priority; audio tracks are mixed separately)
-        // In asset mode, show waveform as before
-        if (source.mode === 'timeline') {
-          return <div className="w-full h-full bg-black" />;
-        }
         return (
           <WaveformPreview
             src={source.previewUrl}

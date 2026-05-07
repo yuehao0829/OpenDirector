@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from '../constants';
+import { generateId } from '../utils/id';
 import type { FileSystemAdapter } from '../adapters/types';
 import type {
   ImportedTimelineAsset,
@@ -26,7 +27,7 @@ export function buildImportedProjectFromTimelineData(
   const assetTypeById = new Map(data.assets.map((asset) => [asset.id, asset.type]));
 
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name: data.projectName || fallbackProjectName,
     tracks: data.tracks.map((track) => ({
       id: track.id,
@@ -38,7 +39,7 @@ export function buildImportedProjectFromTimelineData(
     })),
     fragments: data.tracks.flatMap((track) =>
       track.fragments.map((fragment) => ({
-        id: fragment.id || crypto.randomUUID(),
+        id: fragment.id || generateId(),
         trackId: track.id,
         start: fragment.start,
         duration: fragment.duration,
@@ -117,11 +118,8 @@ export async function hydrateImportedProjectAssetMetadata(
       }
 
       return hydratedAsset;
-    } catch (error) {
-      console.warn(
-        `[media-exchange-project] Failed to read media metadata for imported asset ${asset.id}:`,
-        error,
-      );
+    } catch (_error) {
+      // metadata is optional for imported assets — the asset is usable without it
       return asset;
     }
   }));
@@ -138,7 +136,7 @@ function buildImportedFragmentReferences(
   }
 
   return [{
-    id: crypto.randomUUID(),
+    id: generateId(),
     assetId: fragment.sourceAssetId,
     type: assetTypeById.get(fragment.sourceAssetId) ?? 'video',
     cropRect: fragment.crop,

@@ -8,6 +8,7 @@
 
 import type { Project } from '../types/project';
 import type { GenerationRecord } from '../utils/xml';
+import { generateId } from '../utils/id';
 import { DEFAULT_PROJECT_SETTINGS, DEFAULT_FPS, DEFAULT_PROVIDER, DEFAULT_ASPECT_RATIO } from '../constants';
 import { useTimelineStore } from '../stores/timelineStore';
 import { useAssetStore } from '../stores/assetStore';
@@ -35,7 +36,7 @@ export function hydrateNewProject(opts: {
   isTemp?: boolean;
 }): Project {
   const project: Project = {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name: opts.name,
     folderPath: opts.folderPath,
     fileName: opts.fileName,

@@ -3,6 +3,7 @@ import type { AssetProcessRequest } from '../types/media-backend';
 import type { FileSystemAdapter } from '../adapters/types';
 import { tauriBridge } from './tauri-bridge';
 import { toWebViewUrl } from '../utils/platform';
+import { generateId } from '../utils/id';
 import { generateThumbnailForAsset } from './asset-import';
 
 export interface MediaPipelineParams {
@@ -44,7 +45,7 @@ export async function runMediaPipeline(
   const mimeType = resolveMimeType(assetType, outputFormat);
   const folderName = resolveFolderName(assetType);
 
-  const newAssetId = crypto.randomUUID();
+  const newAssetId = generateId();
   const destRelativePath = `Assets/${folderName}/${newAssetId}.${ext}`;
   const destAbsolutePath = `${projectPath}/${destRelativePath}`;
 

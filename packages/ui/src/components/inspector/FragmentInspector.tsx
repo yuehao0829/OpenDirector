@@ -6,12 +6,12 @@ import { useProviderInstanceStore } from '@opendirector/core/stores/providerInst
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useSettingsStore } from '@opendirector/core/stores/settingsStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
-import type { Asset, ImageRole } from '@opendirector/core/types/asset';
+import type { Asset, ImageRole, Reference } from '@opendirector/core/types/asset';
 import { getEffectiveImageRole } from '@opendirector/core/types/asset';
 import type { GenerationParamDefaults } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import type { SubmitGenerationOptions } from '@opendirector/core/types/service-interfaces';
-import type { Scene } from '@opendirector/core/types/timeline';
+import type { Fragment, Scene } from '@opendirector/core/types/timeline';
 import type {
   CapabilityParams,
   ConstraintIndicator,
@@ -32,7 +32,7 @@ import { GenerationParamsSection, type GenerationParamsValue } from './Generatio
 import { Panel } from '../layout/Panel';
 import { Button } from '../common/Button';
 import { X } from 'lucide-react';
-import { ReferenceSelector, groupReferences, ASSET_TYPE_LABELS, AssetThumbnail, IMAGE_ROLE_LABELS } from './ReferenceSelector';
+import { ReferenceSelector, groupReferences, ASSET_TYPE_LABELS, AssetThumbnail, IMAGE_ROLE_LABELS, type GroupedReference } from './ReferenceSelector';
 import { getReferenceLabels, parsePromptLabels } from './prompt-editor';
 import { PlaybackSourceSelector } from './PlaybackSourceSelector';
 import { makeCompositeKey } from './compositeKey';
@@ -480,7 +480,7 @@ export function FragmentInspector() {
           <PreviewModeContent
             fragment={selectedFragment}
             genParams={genParams}
-            sourceAsset={sourceAsset}
+            sourceAsset={sourceAsset ?? undefined}
             grouped={groupedReferences}
             getAssetById={getAssetById}
             scene={scene}
@@ -509,14 +509,14 @@ function EditModeContent({
   assets,
   trackType,
 }: {
-  fragment: any;
+  fragment: Fragment;
   genParams: GenerationParamsValue;
   onGenParamsChange: (v: GenerationParamsValue) => void;
-  capabilityParams?: any;
+  capabilityParams?: CapabilityParams;
   continuousMode: boolean;
   continuousPlan?: number[];
   totalDuration: number;
-  updateFragment: (id: string, updates: any) => void;
+  updateFragment: (id: string, updates: Partial<Fragment>) => void;
   validation?: { valid: boolean; errors: string[]; promptWarnings: string[]; warnings: string[] };
   indicators?: Map<string, ConstraintIndicator[]>;
   assets: Asset[];
@@ -596,23 +596,26 @@ function PreviewModeContent({
   trackType,
   firstFrameAsReference,
 }: {
-  fragment: any;
+  fragment: Fragment;
   genParams: GenerationParamsValue;
-  sourceAsset: any;
-  grouped: { type: 'image' | 'video' | 'audio'; refs: any[] }[];
-  getAssetById: (id: string) => any;
+  sourceAsset: Asset | undefined;
+  grouped: GroupedReference[];
+  getAssetById: (id: string) => Asset | null;
   scene: Scene | null;
   trackType: 'video' | 'audio';
   firstFrameAsReference?: boolean;
 }) {
   const labelToRef = useMemo(() => {
     const refs = fragment.references ?? [];
-    if (refs.length === 0) return new Map<string, { ref: any; asset: any }>();
+    if (refs.length === 0) return new Map<string, { ref: Reference; asset: Asset }>();
     const idLabels = getReferenceLabels(refs);
-    const map = new Map<string, { ref: any; asset: any }>();
+    const map = new Map<string, { ref: Reference; asset: Asset }>();
     for (const ref of refs) {
       const label = idLabels.get(ref.id);
-      if (label) map.set(label, { ref, asset: getAssetById(ref.assetId) });
+      if (label) {
+        const asset = getAssetById(ref.assetId);
+        if (asset) map.set(label, { ref, asset });
+      }
     }
     return map;
   }, [fragment.references, getAssetById]);
@@ -642,11 +645,11 @@ function PreviewModeContent({
   const isAudio = trackType === 'audio';
 
   // Scene references provide shared context across fragments in the same scene
-  const sceneRefAssets = useMemo(() => {
+  const sceneRefAssets = useMemo((): Asset[] => {
     if (!scene?.referenceIds?.length) return [];
     return scene.referenceIds
       .map((id: string) => getAssetById(id))
-      .filter(Boolean);
+      .filter((a): a is Asset => a !== null);
   }, [scene, getAssetById]);
 
   return (
@@ -682,7 +685,7 @@ function PreviewModeContent({
       {sceneRefAssets.length > 0 && (
         <Panel title={`场景参考 (${sceneRefAssets.length})`}>
           <div className="space-y-1">
-            {sceneRefAssets.map((asset: any) => (
+            {sceneRefAssets.map((asset) => (
               <div key={asset.id} className="flex items-center gap-2 p-1.5 bg-zinc-800/50 rounded">
                 <AssetThumbnail type={asset.type} thumbnailUrl={asset.thumbnailUrl} />
                 <span className="text-sm text-zinc-300 truncate">{asset.name}</span>

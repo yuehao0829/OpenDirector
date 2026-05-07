@@ -50,7 +50,7 @@ export function updateGenerationProgress(taskId: string, progress: number, folde
   useGenerationStore.getState().updateGeneration(taskId, { status: 'processing', progress });
   if (folderPath) {
     updateGenerationsXml(folderPath, taskId, { status: 'processing' }).catch((err) =>
-      console.warn('[TaskBridge] Failed to write progress status to XML:', err)
+      taskLog.warn(folderPath, 'progress_xml_write', 'Failed to write progress status to XML', { error: String(err) })
     );
   }
 }

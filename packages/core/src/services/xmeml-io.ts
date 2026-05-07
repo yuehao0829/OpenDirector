@@ -6,6 +6,7 @@
  */
 
 import type { FileSystemAdapter } from '../adapters/types';
+import { textToArrayBuffer, arrayBufferToText } from '../utils/encoding';
 import {
   serializeToXmeml,
   parseXmeml,
@@ -102,7 +103,7 @@ function buildExportOptions(
 
 function serializeToBuffer(options: XmemlExportOptions): ArrayBuffer {
   const xmlString = serializeToXmeml(options);
-  return new TextEncoder().encode(xmlString).buffer as ArrayBuffer;
+  return textToArrayBuffer(xmlString);
 }
 
 /**
@@ -143,7 +144,7 @@ export async function importXmeml(
   const { filePath, fsAdapter } = params;
 
   const buffer = await fsAdapter.readFile(filePath);
-  const xmlString = new TextDecoder('utf-8').decode(buffer);
+  const xmlString = arrayBufferToText(buffer);
 
   const result = parseXmeml(xmlString);
 

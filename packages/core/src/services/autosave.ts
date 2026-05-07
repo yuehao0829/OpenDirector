@@ -7,6 +7,7 @@
 import type { Project } from '../types/project';
 import type { AutosaveTrigger } from '../types/persistence';
 import type { FileSystemAdapter } from '../adapters/types';
+import { useProjectStore } from '../stores/projectStore';
 import { saveAutosaveSnapshot, cleanupAutosaves } from './project-io';
 
 // ============================================================================
@@ -89,7 +90,8 @@ export class AutosaveManager {
     if (this.timerId !== null) return;
 
     this.timerId = setInterval(() => {
-      this.trigger('timer').catch(console.error);
+      if (!useProjectStore.getState().isDirty) return;
+      this.trigger('timer').catch(() => { /* autosave is best-effort */ });
     }, this.config.intervalMs);
   }
 
@@ -130,7 +132,6 @@ export class AutosaveManager {
     }
 
     if (this.isSaving) {
-      console.log('Autosave already in progress, skipping');
       return null;
     }
 
@@ -223,6 +224,7 @@ export function shutdownAutosave(): void {
 interface EventHandler {
   event: string;
   handler: () => void;
+  target: EventTarget;
 }
 
 /**
@@ -250,7 +252,7 @@ export function setupAutosaveEventHandlers(
   };
 
   window.addEventListener('beforeunload', beforeUnloadHandler as EventListener);
-  handlers.push({ event: 'beforeunload', handler: beforeUnloadHandler as () => void });
+  handlers.push({ event: 'beforeunload', handler: beforeUnloadHandler as () => void, target: window });
 
   // Visibility change (tab switch)
   const visibilityHandler = (): void => {
@@ -262,12 +264,12 @@ export function setupAutosaveEventHandlers(
   };
 
   document.addEventListener('visibilitychange', visibilityHandler);
-  handlers.push({ event: 'visibilitychange', handler: visibilityHandler });
+  handlers.push({ event: 'visibilitychange', handler: visibilityHandler, target: document });
 
   // Return cleanup function
   return () => {
-    for (const { event, handler } of handlers) {
-      window.removeEventListener(event, handler);
+    for (const { event, handler, target } of handlers) {
+      target.removeEventListener(event, handler);
     }
   };
 }

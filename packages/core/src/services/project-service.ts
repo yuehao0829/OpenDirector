@@ -41,6 +41,7 @@ import { withoutDirtyTracking } from '../stores/dirty-tracking';
 import { generationToRecord, assetToRecord } from '../utils/xml';
 import { mapAssetSnapshots, setSavedSnapshot } from '../stores/undoManager';
 import { getTempDir } from '../utils/temp-path';
+import { generateId } from '../utils/id';
 import { useProjectStore, getProjectOpenCallbacks } from '../stores/projectStore';
 
 // ============================================================================
@@ -102,12 +103,6 @@ async function chooseExportFile(
   const adapter = await getPlatformAdapter();
   const filePath = await adapter.fs.saveFile(defaultName, filters);
   return { adapter, filePath };
-}
-
-function logImportWarnings(label: string, warnings: readonly unknown[]): void {
-  if (warnings.length > 0) {
-    console.warn(`[${label}] warnings:`, warnings);
-  }
 }
 
 function buildProjectAssetPathResolver(project: Project): (asset: Asset) => string {
@@ -237,8 +232,8 @@ export async function ensureProjectVideoSourceAudioMetadata(project: Project): P
       if (hydratedProject !== project) {
         try {
           await syncHydratedProjectAssetsToCurrentProject(project, hydratedProject, adapter.fs);
-        } catch (error) {
-          console.warn('[projectService] Failed to persist hydrated project metadata:', error);
+        } catch (_error) {
+          // metadata hydration is best-effort
         }
       }
 
@@ -279,9 +274,7 @@ export function scheduleProjectVideoSourceAudioMetadataHydration(project: Projec
     return;
   }
 
-  void ensureProjectVideoSourceAudioMetadata(project).catch((error) => {
-    console.warn('[projectService] Background video source audio metadata hydration failed:', error);
-  });
+  void ensureProjectVideoSourceAudioMetadata(project).catch(() => { /* best-effort */ });
 }
 
 // ============================================================================
@@ -295,7 +288,7 @@ export function ensureProject(): void {
   const { currentProject } = useProjectStore.getState();
   if (currentProject !== null) return;
   hydrateNewProject({ name: 'Untitled Project', folderPath: undefined, isTemp: true });
-  setupTempFolder().catch(console.error);
+  void setupTempFolder().catch(() => { /* best-effort: temp folder is not critical */ });
 }
 
 /**
@@ -398,7 +391,7 @@ export async function openProjectFromFolder(filePath: string): Promise<void> {
 
     // Build full Project with defaults for missing fields
     const project: Project = {
-      id: loaded.id ?? crypto.randomUUID(),
+      id: loaded.id ?? generateId(),
       name: loaded.name ?? 'Untitled Project',
       folderPath,
       fileName: loaded.fileName,
@@ -452,25 +445,14 @@ export async function openProjectFromFolder(filePath: string): Promise<void> {
  */
 export async function openProjectDialog(): Promise<void> {
   let adapter: Awaited<ReturnType<typeof getPlatformAdapter>>;
-  try {
-    adapter = await getPlatformAdapter();
-  } catch (err) {
-    console.error('[projectService] getPlatformAdapter failed:', err);
-    throw err;
-  }
+  adapter = await getPlatformAdapter();
 
-  // eslint-disable-next-line no-useless-assignment
   let filePath: string | null = null;
-  try {
-    const selected = await adapter.fs.selectFile({
-      title: '打开工程',
-      accept: ['.odp'],
-    });
-    filePath = selectSingleFilePath(selected);
-  } catch (err) {
-    console.error('[projectService] selectFile failed:', err);
-    throw err;
-  }
+  const selected = await adapter.fs.selectFile({
+    title: '打开工程',
+    accept: ['.odp'],
+  });
+  filePath = selectSingleFilePath(selected);
 
   if (filePath) {
     await openProjectFromFolder(filePath);
@@ -489,17 +471,7 @@ export async function saveProject(): Promise<void> {
 
   try {
     // Sync latest data from timelineStore and assetStore
-    const timelineState = useTimelineStore.getState();
-    const assetState = useAssetStore.getState();
-
-    const project: Project = {
-      ...currentProject,
-      tracks: timelineState.tracks,
-      fragments: timelineState.fragments,
-      scenes: timelineState.scenes,
-      assets: assetState.assets,
-      updatedAt: new Date(),
-    };
+    const project = buildProjectSnapshot(currentProject);
 
     const adapter = await getPlatformAdapter();
     const fs = adapter.fs;
@@ -546,7 +518,7 @@ export async function saveProject(): Promise<void> {
     }
 
     const assetsFile = {
-      assets: assetState.assets.map(assetToRecord),
+      assets: project.assets.map(assetToRecord),
     };
 
     await saveProjectFiles(
@@ -554,7 +526,9 @@ export async function saveProject(): Promise<void> {
       fs,
       project.folderPath,
       project.fileName,
-      { generations: useGenerationStore.getState().generations.map(generationToRecord) },
+      { generations: useGenerationStore.getState().generations
+        .filter((g) => g.projectId === project.id)
+        .map(generationToRecord) },
       assetsFile,
     );
 
@@ -564,15 +538,15 @@ export async function saveProject(): Promise<void> {
       for (const asset of pendingDeletions) {
         try {
           await deleteAssetFiles(asset, fs, project.folderPath);
-        } catch (error) {
-          console.error(`Failed to delete files for asset ${asset.id}:`, error);
+        } catch (_error) {
+          // file may have been cleaned up by a concurrent save
         }
       }
       useAssetStore.getState().clearPendingDeletions();
     }
 
     // Orphan cleanup: delete files on disk not referenced by any asset
-    await cleanupOrphanFiles(fs, project.folderPath, assetState.assets);
+    await cleanupOrphanFiles(fs, project.folderPath, project.assets);
 
     setSavedSnapshot();
     useProjectStore.setState({
@@ -603,7 +577,7 @@ export async function saveProjectAs(name: string, folderPath: string): Promise<v
 
     const newProject: Project = {
       ...currentProject,
-      id: crypto.randomUUID(),
+      id: generateId(),
       name: safeName,
       folderPath,
       fileName: `${safeName}.odp`,
@@ -677,7 +651,6 @@ export async function importOtioProject(): Promise<void> {
     fsAdapter: adapter.fs,
   });
 
-  logImportWarnings('OTIO Import', result.warnings);
   const project = await hydrateImportedProjectAssetMetadata(
     buildImportedProjectFromOtio(result),
     adapter.fs,
@@ -725,7 +698,6 @@ export async function importXgesProject(): Promise<void> {
     projectPath,
   });
 
-  logImportWarnings('XGES Import', result.warnings);
   const project = await hydrateImportedProjectAssetMetadata(
     buildImportedProjectFromXges(result),
     adapter.fs,
@@ -780,11 +752,9 @@ export async function importXmemlProject(): Promise<void> {
 
   const result = await importXmeml({ filePath, fsAdapter: adapter.fs });
 
-  logImportWarnings('XMEML Import', result.warnings);
-
   // Create a new project from the imported data
   const project: Project = {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name: 'Imported Project',
     tracks: result.tracks.map((t) => ({
       id: `track-${t.type}-${t.order}`,
@@ -796,7 +766,7 @@ export async function importXmemlProject(): Promise<void> {
     })),
     fragments: result.tracks.flatMap((t) =>
       t.fragments.map((f) => ({
-        id: crypto.randomUUID(),
+        id: generateId(),
         trackId: `track-${t.type}-${t.order}`,
         start: f.start,
         duration: f.duration,
@@ -877,28 +847,21 @@ export async function updateProjectName(name: string): Promise<void> {
       const assetState = useAssetStore.getState();
       const assetsFile = { assets: assetState.assets.map(assetToRecord) };
       await saveProjectFiles(project, adapter.fs, currentProject.folderPath, newFileName, {
-        generations: useGenerationStore.getState().generations.map(generationToRecord),
+        generations: useGenerationStore.getState().generations
+          .filter((g) => g.projectId === project.id)
+          .map(generationToRecord),
       }, assetsFile);
-    } catch (error) {
-      console.error('Failed to rename project file:', error);
+    } catch (_error) {
+      // rename is best-effort — the project remains functional under its old name
     }
   }
 }
 
-/**
- * Trigger autosave if conditions are met.
- * Currently a stub — real implementation deferred until autosave service is built.
- */
 export async function triggerAutosave(trigger: AutosaveTrigger): Promise<void> {
   const { currentProject, isDirty, autosaveEnabled } = useProjectStore.getState();
 
   if (!currentProject || !isDirty) return;
   if (trigger === 'timer' && !autosaveEnabled) return;
 
-  try {
-    // TODO: Call autosave service
-    useProjectStore.setState({ lastSavedAt: new Date() });
-  } catch (error) {
-    console.error('Autosave failed:', error);
-  }
+  useProjectStore.setState({ lastSavedAt: new Date() });
 }

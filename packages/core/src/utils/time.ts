@@ -68,6 +68,14 @@ export function formatTimecodeCentiseconds(ms: number): string {
 }
 
 /**
+ * Format a Date to a filesystem-safe timestamp string.
+ * Replaces colons and dots with hyphens for cross-platform path safety.
+ */
+export function formatFsTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+/**
  * Parse time string to milliseconds
  */
 export function parseTime(str: string): number {

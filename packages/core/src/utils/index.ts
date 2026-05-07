@@ -6,6 +6,7 @@ export * from './platform';
 export * from './snap';
 export * from './duration';
 export * from './common';
+export * from './encoding';
 export * from './aspect-ratio';
 export * from './crop';
 export * from './native-preview-occlusion';

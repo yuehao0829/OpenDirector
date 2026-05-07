@@ -10,7 +10,9 @@ import {
   type AssetRecord,
   type AssetsFile,
 } from '@opendirector/core/utils/xml';
+import { arrayBufferToText, textToArrayBuffer } from '@opendirector/core/utils/encoding';
 import { withProjectWriteLock, getFs } from './generation-xml-repository';
+import { taskLog } from './task-log';
 
 // ============================================================================
 // Assets.xml read / write
@@ -24,7 +26,7 @@ export async function readAssetsFile(
     const fs = await getFs();
     if (!fs) return undefined;
     const data = await fs.readFile(`${folderPath}/${ASSETS_XML_FILENAME}`);
-    return parseAssetsFile(new TextDecoder().decode(data));
+    return parseAssetsFile(arrayBufferToText(data));
   } catch {
     return undefined;
   }
@@ -38,7 +40,7 @@ export async function writeAssetsFile(
   const fs = await getFs();
   if (!fs) return;
   const xml = serializeAssetsFile(file);
-  await fs.writeFile(`${folderPath}/${ASSETS_XML_FILENAME}`, new TextEncoder().encode(xml).buffer as ArrayBuffer);
+  await fs.writeFile(`${folderPath}/${ASSETS_XML_FILENAME}`, textToArrayBuffer(xml));
 }
 
 /** Read-modify-write a single asset record in Assets.xml, under the write lock. */
@@ -64,7 +66,7 @@ export async function updateAssetsXml(
       return true;
     });
   } catch (error) {
-    console.warn('[AssetXmlRepo] Failed to update Assets.xml:', error);
+    taskLog.warn(folderPath, 'asset_xml_write', 'Failed to update Assets.xml', { error: String(error) });
     return false;
   }
 }

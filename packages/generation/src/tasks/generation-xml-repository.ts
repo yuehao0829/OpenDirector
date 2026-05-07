@@ -15,6 +15,9 @@ import {
   type GenerationsFile,
   type GenerationProviderParams,
 } from '@opendirector/core/utils/xml';
+import { arrayBufferToText, textToArrayBuffer } from '@opendirector/core/utils/encoding';
+import { generateId } from '@opendirector/core/utils/id';
+import { taskLog } from './task-log';
 
 // ── Constants ──
 
@@ -187,7 +190,7 @@ export function recordToParams(record: GenerationRecord): GenerationParams {
   return {
     prompt: record.prompt,
     references: record.references.map((r) => ({
-      id: crypto.randomUUID(),
+      id: generateId(),
       assetId: r.assetId,
       type: r.type,
       weight: r.weight,
@@ -214,7 +217,7 @@ export async function readGenerationsFile(
 ): Promise<GenerationsFile | undefined> {
   try {
     const data = await fs.readFile(`${folderPath}/${GENERATIONS_XML}`);
-    return parseGenerationsFile(new TextDecoder().decode(data));
+    return parseGenerationsFile(arrayBufferToText(data));
   } catch {
     return undefined;
   }
@@ -227,7 +230,7 @@ export async function writeGenerationsFile(
   fs: NonNullable<Awaited<ReturnType<typeof getPlatformAdapter>>['fs']>,
 ): Promise<void> {
   const xml = serializeGenerationsFile(file);
-  await fs.writeFile(`${folderPath}/${GENERATIONS_XML}`, new TextEncoder().encode(xml).buffer as ArrayBuffer);
+  await fs.writeFile(`${folderPath}/${GENERATIONS_XML}`, textToArrayBuffer(xml));
 }
 
 // ── Per-folder write lock ──
@@ -285,7 +288,7 @@ export async function updateGenerationsXml(
           };
           file.generations.unshift(newRecord);
         } else {
-          console.warn(`[TaskBridge] updateGenerationsXml: generation ${generationId} not found in XML and updates insufficient to create record — skipping write`);
+          taskLog.warn(folderPath, 'gen_xml_not_found', 'Generation not found in XML and updates insufficient to create record', { generationId });
           return false;
         }
       }
@@ -294,7 +297,7 @@ export async function updateGenerationsXml(
       return true;
     });
   } catch (error) {
-    console.warn('[TaskBridge] Failed to update Generations.xml:', error);
+    taskLog.warn(folderPath, 'gen_xml_write', 'Failed to update Generations.xml', { error: String(error) });
     return false;
   }
 }

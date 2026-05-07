@@ -2,6 +2,7 @@ import type { FileSystemAdapter } from '../adapters/types';
 import type { Asset } from '../types/asset';
 import type { Project } from '../types/project';
 import { assetToRecord, serializeAssetsFile } from '../utils/xml';
+import { textToArrayBuffer } from '../utils/encoding';
 import { resolveProjectAssetPath } from './otio-io';
 import { ASSETS_XML_FILENAME } from './project-io';
 
@@ -106,11 +107,11 @@ export async function persistProjectAssetsFile(
 
   await fs.writeFile(
     `${project.folderPath}/${ASSETS_XML_FILENAME}`,
-    new TextEncoder().encode(
+    textToArrayBuffer(
       serializeAssetsFile({
         assets: project.assets.map(assetToRecord),
       }),
-    ).buffer as ArrayBuffer,
+    ),
   );
 }
 

@@ -1,17 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CropRect, Reference } from '@opendirector/core/types/asset';
-import { computeInitialCropRect } from '../utils/crop';
-
-function isSameCropRect(left: CropRect | null, right: CropRect | null): boolean {
-  if (!left && !right) return true;
-  if (!left || !right) return false;
-  return (
-    Math.abs(left.x - right.x) < 0.001 &&
-    Math.abs(left.y - right.y) < 0.001 &&
-    Math.abs(left.width - right.width) < 0.001 &&
-    Math.abs(left.height - right.height) < 0.001
-  );
-}
+import { computeInitialCropRect, isSameCropRect } from '../utils/crop';
 
 interface UseReferenceCropOptions {
   reference: Reference;
@@ -43,6 +32,8 @@ export function useReferenceCrop({
   const [defaultCropRect, setDefaultCropRect] = useState<CropRect | null>(null);
   const syncedFromStoreRef = useRef(false);
   const hasInitializedRef = useRef(false);
+  const cropRectRef = useRef<CropRect | null>(null);
+  cropRectRef.current = cropRect;
   const identity = referenceIdentity ?? `${reference.id}:${reference.assetId}`;
 
   // When a crop session opens or its identity changes, rebuild the session from the
@@ -85,13 +76,14 @@ export function useReferenceCrop({
     if (!enabled || !defaultCropRect) return;
 
     const nextCropRect = reference.cropRect ?? defaultCropRect;
-    if (isSameCropRect(cropRect, nextCropRect)) {
+    if (isSameCropRect(cropRectRef.current, nextCropRect)) {
       return;
     }
 
     syncedFromStoreRef.current = true;
     setCropRect(nextCropRect);
-  }, [enabled, reference.cropRect, defaultCropRect, cropRect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cropRect is compared via ref to avoid reacting to own state changes
+  }, [enabled, reference.cropRect, defaultCropRect]);
 
   const resetCrop = useCallback(() => {
     if (imageInfo.naturalWidth === 0 || imageInfo.naturalHeight === 0) return;
@@ -128,12 +120,7 @@ export function useReferenceCrop({
     }
   }, [enabled]);
 
-  const isDefaultCrop = !cropRect || !defaultCropRect || (
-    Math.abs(cropRect.x - defaultCropRect.x) < 0.001 &&
-    Math.abs(cropRect.y - defaultCropRect.y) < 0.001 &&
-    Math.abs(cropRect.width - defaultCropRect.width) < 0.001 &&
-    Math.abs(cropRect.height - defaultCropRect.height) < 0.001
-  );
+  const isDefaultCrop = !cropRect || !defaultCropRect || isSameCropRect(cropRect, defaultCropRect);
 
   return enabled
     ? { cropRect, defaultCropRect, isDefaultCrop, resetCrop }

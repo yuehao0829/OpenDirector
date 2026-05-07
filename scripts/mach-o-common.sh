@@ -6,7 +6,9 @@
 #   REWRITE_PREFIX - prefix for rewritten references (typically "@rpath")
 #
 # Optional overrides (define AFTER sourcing to customize):
-#   should_rewrite_reference() - override to add custom prefix patterns
+#   should_rewrite_reference() - override to add custom prefix patterns while
+#                                delegating unmatched paths to
+#                                should_rewrite_reference_base()
 
 is_mach_o() {
     local binary_path="$1"
@@ -29,7 +31,7 @@ find_runtime_mach_o_files() {
     done < <(find "$MACH_O_ROOT" -type f -print0)
 }
 
-should_rewrite_reference() {
+should_rewrite_reference_base() {
     local ref="$1"
     case "$ref" in
         @*|/System/*|/usr/lib/*)
@@ -42,6 +44,10 @@ should_rewrite_reference() {
             return 1
             ;;
     esac
+}
+
+should_rewrite_reference() {
+    should_rewrite_reference_base "$1"
 }
 
 # Parse otool -l output into a compact format for batch processing.

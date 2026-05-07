@@ -17,6 +17,7 @@ import type {
 } from './types';
 import type { OtioAssetPathResolver } from './path-resolver';
 import { calculateTimelineDuration } from '../timeline';
+import { generateId } from '../id';
 import { fromOtioTargetUrl, toOtioTargetUrl } from './path-resolver';
 
 export interface ProjectToOtioParams {
@@ -393,7 +394,7 @@ function buildImportedTrack(
     const sourceAssetId = registerImportedAsset(child, track, assetRecords, warnings);
 
     fragments.push({
-      id: extractStringMetadata(child.metadata, 'id') ?? crypto.randomUUID(),
+      id: extractStringMetadata(child.metadata, 'id') ?? generateId(),
       name: child.name || 'Imported Clip',
       start: cursorMs,
       duration,
@@ -442,7 +443,7 @@ function registerImportedAsset(
 
   const assetId = typeof metadata.assetId === 'string' && metadata.assetId.trim()
     ? metadata.assetId
-    : crypto.randomUUID();
+    : generateId();
 
   assetRecords.set(recordKey, {
     id: assetId,

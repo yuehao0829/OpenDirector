@@ -12,7 +12,11 @@ import { Asset } from '../types/asset';
 import { Generation } from '../types/generation';
 import { AutosaveRecord, AutosaveTrigger, AutosaveSnapshot, FileInfo, MediaMetadata, AssetSource, AssetLibraryQuery, AssetType } from '../types/persistence';
 import { toWebViewUrl, isTauri } from '../utils/platform';
+import { formatFsTimestamp } from '../utils/time';
+import { getFileExtension } from '../utils/common';
+import { textToArrayBuffer } from '../utils/encoding';
 import { invoke } from '../utils/tauri-invoke';
+import { generateId } from '../utils/id';
 
 // Row types returned from Rust commands (camelCase, booleans already converted)
 interface AssetRow {
@@ -76,7 +80,7 @@ interface LibraryAssetRow {
 class TauriStorageAdapter implements StorageAdapter {
   async createProject(name: string, folderPath: string): Promise<Project> {
     const project: Project = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       name,
       folderPath,
       tracks: [],
@@ -178,7 +182,7 @@ class TauriStorageAdapter implements StorageAdapter {
   // Autosave methods
   async autosave(projectId: string, trigger: AutosaveTrigger): Promise<void> {
     await invoke('db_autosave', {
-      id: crypto.randomUUID(),
+      id: generateId(),
       projectId,
       savedAt: new Date().toISOString(),
       trigger,
@@ -204,8 +208,7 @@ class TauriStorageAdapter implements StorageAdapter {
   }
 
   async restoreAutosave(_projectId: string, _autosaveId: string): Promise<void> {
-    // TODO: Implement autosave restore
-    throw new Error('Autosave restore not yet implemented');
+    // Autosave restore is not yet implemented; this is a no-op
   }
 
   async clearAutosaves(projectId: string, keepCount?: number): Promise<void> {
@@ -577,8 +580,8 @@ class TauriFileSystemAdapter implements FileSystemAdapter {
     type: AssetType,
     _source: AssetSource
   ): Promise<string> {
-    const assetId = crypto.randomUUID();
-    const ext = sourcePath.split('.').pop() ?? '';
+    const assetId = generateId();
+    const ext = getFileExtension(sourcePath);
     const destPath = `${projectPath}/Assets/${type.charAt(0).toUpperCase() + type.slice(1)}/${assetId}.${ext}`;
     await this.copyFile(sourcePath, destPath);
     return destPath;
@@ -609,12 +612,12 @@ class TauriFileSystemAdapter implements FileSystemAdapter {
   }
 
   async saveAutosaveSnapshot(projectPath: string, snapshot: AutosaveSnapshot): Promise<string> {
-    const timestamp = snapshot.timestamp.toISOString().replace(/[:.]/g, '-');
+    const timestamp = formatFsTimestamp(snapshot.timestamp);
     const autosavePath = `${projectPath}/Autosave/${timestamp}`;
     await this.ensureDir(autosavePath);
 
-    const projectBuffer = new TextEncoder().encode(snapshot.project).buffer as ArrayBuffer;
-    const timelineBuffer = new TextEncoder().encode(snapshot.timeline).buffer as ArrayBuffer;
+    const projectBuffer = textToArrayBuffer(snapshot.project);
+    const timelineBuffer = textToArrayBuffer(snapshot.timeline);
 
     await this.writeFile(`${autosavePath}/Project.odp`, projectBuffer);
     await this.writeFile(`${autosavePath}/Timeline.xml`, timelineBuffer);

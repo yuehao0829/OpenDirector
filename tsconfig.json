@@ -19,7 +19,16 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "@opendirector/core": ["packages/core/src"],
+      "@opendirector/core/*": ["packages/core/src/*"],
+      "@opendirector/ui": ["packages/ui/src"],
+      "@opendirector/ui/*": ["packages/ui/src/*"],
+      "@opendirector/generation": ["packages/generation/src"],
+      "@opendirector/generation/*": ["packages/generation/src/*"]
+    }
   },
   "exclude": ["node_modules", "dist", "build"]
 }

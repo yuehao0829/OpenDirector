@@ -65,7 +65,7 @@ export async function initTaskBridge(): Promise<void> {
           if (project?.folderPath) {
             updateGenerationsXml(project.folderPath, payload.task_id, {
               providerTaskId: payload.api_task_id,
-            }).catch((err) => console.warn('[TaskBridge] Failed to write providerTaskId to XML:', err));
+            }).catch((err) => taskLog.warn(projectPath, 'write_provider_task_id', 'Failed to write providerTaskId to XML', { error: String(err) }));
           }
         }
         break;
@@ -97,11 +97,10 @@ export async function initTaskBridge(): Promise<void> {
           projectPath: payload.project_path,
         })
           .then((ack) => { if (ack) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
-          .catch((err) => console.warn('[TaskBridge] Completed handler failed:', err));
+          .catch((err) => taskLog.warn(projectPath, 'completed_handler_error', 'Completed handler failed', { error: String(err) }));
         break;
 
       case 'failed':
-        console.error('[TaskBridge] generation failed:', { taskId: payload.task_id, error: payload.error });
         taskLog.error(projectPath, 'event_failed', 'Task failed', {
           taskId: payload.task_id,
           error: payload.error,
@@ -113,7 +112,7 @@ export async function initTaskBridge(): Promise<void> {
         }
         failGeneration(payload.task_id, payload.error, payload.project_path)
           .then((written) => { if (written) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
-          .catch((err) => console.warn('[TaskBridge] Failed handler failed:', err));
+          .catch((err) => taskLog.warn(projectPath, 'failed_handler_error', 'Failed handler failed', { error: String(err) }));
         break;
 
       case 'cancelled':
@@ -127,7 +126,7 @@ export async function initTaskBridge(): Promise<void> {
         }
         cancelGeneration(payload.task_id, payload.project_path)
           .then((written) => { if (written) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
-          .catch((err) => console.warn('[TaskBridge] Cancelled handler failed:', err));
+          .catch((err) => taskLog.warn(projectPath, 'cancelled_handler_error', 'Cancelled handler failed', { error: String(err) }));
         break;
     }
   });

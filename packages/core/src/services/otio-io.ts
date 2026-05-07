@@ -15,6 +15,7 @@ import {
   type OtioImportResult,
   type OtioAssetPathResolver,
 } from '../utils/otio';
+import { arrayBufferToText } from '../utils/encoding';
 import { guardedInvoke } from '../utils/tauri-invoke';
 
 function requirePath(value: string, fieldName: string): string {
@@ -86,7 +87,7 @@ export async function importOtioFromFile(
   params: ImportOtioFromFileParams,
 ): Promise<OtioImportResult> {
   const buffer = await params.fsAdapter.readFile(params.filePath);
-  const otioString = new TextDecoder('utf-8').decode(buffer);
+  const otioString = arrayBufferToText(buffer);
   const timeline = parseOtioTimeline(otioString);
   const result = mapOtioTimelineToProjectData(timeline);
 

@@ -14,6 +14,7 @@ import type { Generation } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
+import { generateId } from '@opendirector/core/utils/id';
 import {
   generationToRecord,
   type GenerationRecord,
@@ -35,6 +36,7 @@ import { submitGenerationTask } from './task-submitter';
 import { resetFragmentIfGenerating } from './fragment-utils';
 import { failGeneration, cancelGeneration, getGenerationById } from './store-sync';
 import { taskLog } from './task-log';
+import { safeSaveAsset, safeCreateGeneration } from './task-db-helpers';
 
 export interface TaskCompleteParams {
   taskId: string;
@@ -67,15 +69,12 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
       completedAt: new Date().toISOString(),
     });
     if (written) {
-      console.log(`[TaskBridge] Task ${taskId} not in generations store, updated generation and Generations.xml at ${taskProjectPath}`);
       return true;
     }
-    console.warn(`[TaskBridge] Task ${taskId} not in generations store, could not update Generations.xml — keeping pending_task for recovery`);
     return false;
   }
 
   if (gen.status === 'completed') {
-    console.log(`[TaskBridge] Task ${taskId} already completed (idempotent)`);
     taskLog.info(taskProjectPath, 'complete_idempotent', 'Task already completed (idempotent)', { taskId });
     return true;
   }
@@ -93,7 +92,7 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
     try {
       const existingGen = await readGenerationFromXml(effectiveFolderPath, taskId, fs);
       if (existingGen && existingGen.status === 'completed') {
-        console.log(`[TaskBridge] Task ${taskId} already completed in Generations.xml (idempotent)`);
+        taskLog.info(effectiveFolderPath, 'complete_idempotent_xml', 'Task already completed in Generations.xml (idempotent)', { taskId });
         if (isCurrentProject) {
           useGenerationStore.getState().updateGeneration(taskId, {
             status: 'completed',
@@ -123,7 +122,7 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
     }
 
     // Pre-generate asset ID so thumbnail generation uses the same filename
-    const assetId = crypto.randomUUID();
+    const assetId = generateId();
 
     const [metadataResult, thumbnailResult] = await Promise.allSettled([
       fs.getMediaMetadata(localPath).catch(() => null),
@@ -166,9 +165,9 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
 
     if (isCurrentProject) {
       useAssetStore.getState().addAsset(asset);
-      db.saveAsset(asset).catch((e) => console.warn('[TaskBridge] Failed to save asset to DB:', e));
+      safeSaveAsset(db, effectiveFolderPath, asset, 'db_save_asset');
     } else if (projectId) {
-      db.saveAsset(asset).catch((e) => console.warn('[TaskBridge] Failed to save asset to DB (background):', e));
+      safeSaveAsset(db, effectiveFolderPath, asset, 'db_save_asset_bg');
     }
 
     taskLog.info(effectiveFolderPath, 'complete_asset_saved', 'Asset saved for completed task', {
@@ -193,7 +192,6 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
             return id;
           })
           .catch((err) => {
-            console.warn('[TaskBridge] Failed to persist last frame:', err);
             taskLog.warn(effectiveFolderPath, 'last_frame_persist_error', 'Failed to persist last frame', { taskId, error: String(err) });
             return undefined;
           })
@@ -202,7 +200,6 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
       const compositePromise = isCurrentProject && fragment
         ? buildAndUpdateCompositeAsset(gen, effectiveFolderPath, fs, db, projectId, assetId, webviewUrl, thumbnailUrl)
           .catch((err) => {
-            console.warn('[TaskBridge] Failed to build composite video:', err);
             taskLog.warn(effectiveFolderPath, 'composite_error', 'Failed to build composite video', { taskId: gen.id, error: String(err) });
             // Fallback for last segment
             if (gen.continuousMode && (gen.currentSegmentIndex ?? 0) + 1 >= (gen.continuousPlan ?? []).length) {
@@ -239,7 +236,7 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
     if (projectId) {
       const generation = getGenerationById(taskId);
       if (generation) {
-        db.createGeneration(generation).catch((e) => console.warn('[TaskBridge] Failed to save generation to DB:', e));
+        safeCreateGeneration(db, effectiveFolderPath, generation, 'db_create_gen');
       }
     }
 
@@ -284,7 +281,6 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
 
     return true;
   } catch (error) {
-    console.error('[TaskBridge] Error in completion handler:', error);
     const errorMsg = getErrorMessage(error);
     taskLog.error(effectiveFolderPath, 'complete_error', 'Error in completion handler', {
       taskId,
@@ -317,12 +313,12 @@ export async function triggerNextSegmentIfNeeded(
   }
 
   if (nextIndex >= plan.length) {
-    console.log(`[TaskBridge] Continuous generation complete: ${plan.length} segments for task ${taskId}`);
+    taskLog.info(project?.folderPath, 'continuous_complete', `Continuous generation complete: ${plan.length} segments`, { taskId });
     return;
   }
 
   if (!lastFrameUrl) {
-    console.warn(`[TaskBridge] No last_frame_url for segment ${nextIndex}, cannot continue chain`);
+    taskLog.warn(project?.folderPath, 'continuous_missing_frame', 'No last_frame_url for segment chaining', { taskId, segmentIndex: nextIndex });
     await failGeneration(taskId, 'Missing last_frame_url for segment chaining', project?.folderPath);
     return;
   }
@@ -338,7 +334,6 @@ export async function triggerNextSegmentIfNeeded(
   }
 
   const nextDuration = plan[nextIndex];
-  console.log(`[TaskBridge] Starting continuous segment ${nextIndex + 1}/${plan.length} (${nextDuration}s) for task ${taskId}`);
 
   taskLog.info(project?.folderPath, 'continuous_segment_start', `Starting continuous segment ${nextIndex + 1}/${plan.length}`, {
     taskId,
@@ -364,7 +359,7 @@ export async function triggerNextSegmentIfNeeded(
       },
     );
   } catch (error) {
-    console.error(`[TaskBridge] Failed to start segment ${nextIndex + 1}:`, error);
+    taskLog.error(project?.folderPath, 'segment_start_error', 'Failed to start segment', { taskId, segmentIndex: nextIndex, error: getErrorMessage(error) });
     await failGeneration(taskId, getErrorMessage(error), project?.folderPath);
   }
 }
@@ -432,7 +427,7 @@ async function buildAndUpdateCompositeAsset(
     const compositeLocalPath = result.outputPath;
     const compositeFileSize = result.fileSize;
 
-    const compositeAssetId = currentGen.compositeAssetId ?? crypto.randomUUID();
+    const compositeAssetId = currentGen.compositeAssetId ?? generateId();
     const thumbnailResult = await generateThumbnailForAsset(
       compositeLocalPath,
       fs,
@@ -463,7 +458,7 @@ async function buildAndUpdateCompositeAsset(
     });
 
     useAssetStore.getState().addAsset(asset);
-    db.saveAsset(asset).catch((e) => console.warn('[TaskBridge] Failed to save composite asset to DB:', e));
+    safeSaveAsset(db, projectPath, asset, 'db_save_composite');
 
     // Clean up previous composite versions (v2, v3, ... v{N-1}) now that the new composite is ready
     for (let v = 2; v < segmentPaths.length; v++) {
@@ -489,7 +484,6 @@ async function buildAndUpdateCompositeAsset(
       isLastSegment,
     });
   } catch (err) {
-    console.warn('[TaskBridge] Failed to build composite video:', err);
     taskLog.warn(projectPath, 'composite_error', 'Failed to build composite video', {
       taskId: currentGen.id,
       error: String(err),
@@ -532,7 +526,7 @@ async function persistLastFrame(
     );
 
     const localPath = result.file_path;
-    const assetId = crypto.randomUUID();
+    const assetId = generateId();
 
     const thumbnailResult = await generateThumbnailForAsset(localPath, fs, 'image', projectPath, assetId)
       .catch(() => undefined);
@@ -556,7 +550,7 @@ async function persistLastFrame(
     });
 
     useAssetStore.getState().addAsset(asset);
-    db.saveAsset(asset).catch((e) => console.warn('[TaskBridge] Failed to save last-frame asset to DB:', e));
+    safeSaveAsset(db, projectPath, asset, 'db_save_lastframe');
 
     // Create an independent image generation record for the last-frame card
     const segmentLabel = parentGen.continuousMode && parentGen.currentSegmentIndex != null
@@ -587,11 +581,10 @@ async function persistLastFrame(
       result: undefined,
     };
     useGenerationStore.getState().addGeneration(lastFrameGen);
-    db.createGeneration(lastFrameGen).catch((e) => console.warn('[TaskBridge] Failed to save last-frame generation to DB:', e));
+    safeCreateGeneration(db, projectPath, lastFrameGen, 'db_create_lastframe_gen');
 
     return assetId;
   } catch (err) {
-    console.warn('[TaskBridge] persistLastFrame failed:', err);
     return undefined;
   }
 }
@@ -605,7 +598,7 @@ export async function cancelGenerationTask(taskId: string): Promise<void> {
   try {
     await tauriBridge.seedanceApi.cancelGeneration(taskId);
   } catch (err) {
-    console.warn(`[TaskBridge] Failed to send cancel signal for task ${taskId}:`, err);
+    taskLog.warn(undefined, 'cancel_signal_error', 'Failed to send cancel signal', { taskId, error: String(err) });
   }
 
   const currentGen = getGenerationById(taskId);
@@ -653,6 +646,6 @@ function scheduleSaveAfterCompletion(): void {
   }
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    saveProject().catch((e) => console.warn('[TaskBridge] Debounced save after completion failed:', e));
+    saveProject().catch((e) => taskLog.warn(undefined, 'debounced_save', 'Debounced save after completion failed', { error: String(e) }));
   }, 2000);
 }

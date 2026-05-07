@@ -26,3 +26,11 @@ export function isAssetUrl(url: string): boolean {
 export function toArkAssetType(type: 'video' | 'image' | 'audio'): string {
   return type === 'video' ? 'Video' : type === 'audio' ? 'Audio' : 'Image';
 }
+
+/**
+ * Extract the file extension from a path.
+ * Returns lowercase extension without the leading dot, or empty string if none.
+ */
+export function getFileExtension(path: string): string {
+  return path.split('.').pop()?.toLowerCase() ?? '';
+}

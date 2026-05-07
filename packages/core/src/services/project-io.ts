@@ -13,6 +13,9 @@ import type { GenerationRecord } from '../utils/xml';
 import { toPersistableStatus } from '../utils/xml';
 import { PROJECT_SUBDIRS } from '../constants';
 import { toWebViewUrl } from '../utils/platform';
+import { formatFsTimestamp } from '../utils/time';
+import { textToArrayBuffer, arrayBufferToText } from '../utils/encoding';
+import { generateId } from '../utils/id';
 import { generateAssetThumbnail, generateAssetPeakData } from './asset-import';
 import {
   serializeProjectFile,
@@ -75,7 +78,7 @@ export async function saveProjectFiles(
 
   await fs.writeFile(
     `${folderPath}/${fileName}`,
-    new TextEncoder().encode(serializeProjectFile(projectFile)).buffer as ArrayBuffer
+    textToArrayBuffer(serializeProjectFile(projectFile))
   );
 
   // Build and save Timeline.xml
@@ -83,7 +86,7 @@ export async function saveProjectFiles(
 
   await fs.writeFile(
     `${folderPath}/${TIMELINE_FILE}`,
-    new TextEncoder().encode(serializeTimelineFile(timelineFile)).buffer as ArrayBuffer
+    textToArrayBuffer(serializeTimelineFile(timelineFile))
   );
 
   // Save ProjectSettings.xml
@@ -102,14 +105,14 @@ export async function saveProjectFiles(
 
   await fs.writeFile(
     `${folderPath}/${PROJECT_SETTINGS_FILE}`,
-    new TextEncoder().encode(serializeProjectSettings(settingsFile)).buffer as ArrayBuffer
+    textToArrayBuffer(serializeProjectSettings(settingsFile))
   );
 
   // Save Generations.xml if provided
   if (generations) {
     await fs.writeFile(
       `${folderPath}/${GENERATIONS_FILE}`,
-      new TextEncoder().encode(serializeGenerationsFile(generations)).buffer as ArrayBuffer
+      textToArrayBuffer(serializeGenerationsFile(generations))
     );
   }
 
@@ -117,7 +120,7 @@ export async function saveProjectFiles(
   if (assetsFile) {
     await fs.writeFile(
       `${folderPath}/${ASSETS_XML_FILENAME}`,
-      new TextEncoder().encode(serializeAssetsFile(assetsFile)).buffer as ArrayBuffer
+      textToArrayBuffer(serializeAssetsFile(assetsFile))
     );
   }
 }
@@ -147,7 +150,7 @@ export async function loadProjectFiles(
   let legacyResources: import('../utils/xml').ProjectResource[] | undefined;
   if (await fs.exists(projectPath)) {
     const projectData = await fs.readFile(projectPath);
-    const projectFile = parseProjectFile(new TextDecoder().decode(projectData));
+    const projectFile = parseProjectFile(arrayBufferToText(projectData));
 
     result.id = projectFile.id;
     result.name = projectFile.name;
@@ -166,11 +169,11 @@ export async function loadProjectFiles(
   if (await fs.exists(assetsPath)) {
     try {
       const assetsData = await fs.readFile(assetsPath);
-      const assetsFile = parseAssetsFile(new TextDecoder().decode(assetsData));
+      const assetsFile = parseAssetsFile(arrayBufferToText(assetsData));
       assetRecords = assetsFile.assets;
       result.assetRecords = assetRecords;
-    } catch (err) {
-      console.error('[project-io] Failed to parse Assets.xml:', err);
+    } catch (_err) {
+      // Assets.xml is not required — older projects may store assets in Project.odp
     }
   }
 
@@ -208,7 +211,7 @@ export async function loadProjectFiles(
   const timelinePath = `${folderPath}/${TIMELINE_FILE}`;
   if (await fs.exists(timelinePath)) {
     const timelineData = await fs.readFile(timelinePath);
-    const timelineFile = parseTimelineFile(new TextDecoder().decode(timelineData));
+    const timelineFile = parseTimelineFile(arrayBufferToText(timelineData));
 
     result.tracks = timelineFile.tracks.map((t) => ({
       id: t.id,
@@ -238,7 +241,7 @@ export async function loadProjectFiles(
       prompt: f.prompt,
       status: f.status,
       references: f.references.map((r) => ({
-        id: crypto.randomUUID(),
+        id: generateId(),
         assetId: r.assetRef,
         type: r.type,
         weight: r.weight,
@@ -263,7 +266,7 @@ export async function loadProjectFiles(
   if (await fs.exists(settingsPath)) {
     try {
       const settingsData = await fs.readFile(settingsPath);
-      const settingsFile = parseProjectSettings(new TextDecoder().decode(settingsData));
+      const settingsFile = parseProjectSettings(arrayBufferToText(settingsData));
 
       result.settings = {
         fps: settingsFile.video.fps,
@@ -272,8 +275,8 @@ export async function loadProjectFiles(
         defaultAspectRatio: settingsFile.video.aspectRatio,
         providerConfig: {},
       };
-    } catch (err) {
-      console.error('[project-io] Failed to parse ProjectSettings.xml:', err);
+    } catch (_err) {
+      // settings file is optional — defaults are used when absent
     }
   }
 
@@ -281,10 +284,10 @@ export async function loadProjectFiles(
   if (await fs.exists(generationsPath)) {
     try {
       const generationsData = await fs.readFile(generationsPath);
-      const generationsFile = parseGenerationsFile(new TextDecoder().decode(generationsData));
+      const generationsFile = parseGenerationsFile(arrayBufferToText(generationsData));
       result.generations = generationsFile.generations;
-    } catch (err) {
-      console.error('[project-io] Failed to parse Generations.xml:', err);
+    } catch (_err) {
+      // generations file is optional — empty is a valid initial state
     }
   }
 
@@ -315,7 +318,7 @@ export async function saveAutosaveSnapshot(
   folderPath: string
 ): Promise<string> {
   const timestamp = new Date();
-  const timestampStr = timestamp.toISOString().replace(/[:.]/g, '-');
+  const timestampStr = formatFsTimestamp(timestamp);
   const autosavePath = `${folderPath}/${AUTOSAVE_DIR}/${timestampStr}`;
 
   await fs.ensureDir(autosavePath);
@@ -329,12 +332,12 @@ export async function saveAutosaveSnapshot(
 
   await fs.writeFile(
     `${autosavePath}/${PROJECT_FILE}`,
-    new TextEncoder().encode(snapshot.project).buffer as ArrayBuffer
+    textToArrayBuffer(snapshot.project)
   );
 
   await fs.writeFile(
     `${autosavePath}/${TIMELINE_FILE}`,
-    new TextEncoder().encode(snapshot.timeline).buffer as ArrayBuffer
+    textToArrayBuffer(snapshot.timeline)
   );
 
   return autosavePath;
@@ -405,7 +408,7 @@ export async function loadLocalSettings(
   if (!(await fs.exists(settingsPath))) return null;
 
   const data = await fs.readFile(settingsPath);
-  return parseLocalSettings(new TextDecoder().decode(data));
+  return parseLocalSettings(arrayBufferToText(data));
 }
 
 /**
@@ -418,7 +421,7 @@ export async function saveLocalSettings(
 ): Promise<void> {
   await fs.writeFile(
     `${folderPath}/${LOCAL_SETTINGS_FILE}`,
-    new TextEncoder().encode(serializeLocalSettings(settings)).buffer as ArrayBuffer
+    textToArrayBuffer(serializeLocalSettings(settings))
   );
 }
 
@@ -561,8 +564,7 @@ async function ensureThumbnail(
   try {
     const regeneratedPath = await generateAssetThumbnail(assetPath, fs, type, folderPath, assetId);
     return regeneratedPath ? toWebViewUrl(regeneratedPath) : undefined;
-  } catch (error) {
-    console.warn(`[project-io] Failed to regenerate thumbnail for ${assetId}:`, error);
+  } catch (_error) {
     return undefined;
   }
 }
@@ -590,8 +592,7 @@ async function ensureWaveformPeakData(
   try {
     const regeneratedPath = await generateAssetPeakData(assetPath, fs, folderPath, assetId);
     return regeneratedPath ?? undefined;
-  } catch (error) {
-    console.warn(`[project-io] Failed to regenerate peak data for ${assetId}:`, error);
+  } catch (_error) {
     return undefined;
   }
 }

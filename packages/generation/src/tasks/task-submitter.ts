@@ -15,6 +15,7 @@ import type { SeedanceContentItem } from '@opendirector/core/types/ai-video';
 import type { Generation, GenerationParams } from '@opendirector/core/types/generation';
 import type { SubmitGenerationOptions } from '@opendirector/core/types/service-interfaces';
 import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
+import { generateId } from '@opendirector/core/utils/id';
 import { seedanceTypeDefinition } from '../providers/builtin-types/seedance-type';
 import { refTypeToRole } from '../providers/seedance';
 import { providerRuntimeRegistry, resolveDefaultAssetProvider } from '../providers/runtime-registry';
@@ -46,7 +47,7 @@ export async function submitGenerationTask(
     continuousGroupId: options.continuousGroupId,
   } : undefined;
 
-  const taskId = crypto.randomUUID();
+  const taskId = generateId();
 
   useTimelineStore.getState().updateFragment(fragmentId, { status: 'generating' });
 
@@ -160,7 +161,6 @@ export async function submitGenerationTask(
         assets = useAssetStore.getState().assets;
       }
     } catch (err) {
-      console.error('[TaskBridge] Auto-process references failed:', err);
       taskLog.warn(folderPath, 'auto_process_error', 'Auto-process references failed', {
         taskId,
         error: String(err),
@@ -238,7 +238,6 @@ export async function submitGenerationTask(
             durationMs: uploadMs,
           });
         } catch (err) {
-          console.error(`[TaskBridge] TOS upload failed for index ${i}:`, err);
           taskLog.error(folderPath, 'tos_upload_error', `TOS upload failed for index ${i}`, {
             taskId,
             index: i,
@@ -315,7 +314,6 @@ export async function submitGenerationTask(
       durationMs: submitMs,
     });
   } catch (error) {
-    console.error('[TaskBridge] Failed to start generation:', error);
     const errorMsg = getErrorMessage(error);
     taskLog.error(folderPath, 'submit_error', 'Failed to start generation', {
       taskId,

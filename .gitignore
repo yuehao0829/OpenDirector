@@ -35,7 +35,6 @@ coverage/
 
 # Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
 apps/desktop/src-tauri/gstreamer-dev/
 apps/desktop/src-tauri/gstreamer-runtime/
 apps/desktop/src-tauri/gstreamer-runtime-root/

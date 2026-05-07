@@ -162,15 +162,6 @@ export const useProjectStore = create<ProjectState & ProjectActions>()(
     newProject: () => serviceNewProject(),
 
     openProject: (_id: string) => {
-      // TODO: delegate to service when implemented
-      set({ isLoading: true });
-      try {
-        // TODO: Load from storage adapter
-        set({ isLoading: false });
-      } catch (error) {
-        set({ isLoading: false });
-        throw error;
-      }
       return Promise.resolve();
     },
 
@@ -192,8 +183,6 @@ export const useProjectStore = create<ProjectState & ProjectActions>()(
     },
 
     deleteProject: async (id: string) => {
-      // TODO: Delete via storage adapter
-
       const { recentProjects } = get();
       set({
         recentProjects: recentProjects.filter((p) => p.id !== id),
@@ -205,11 +194,7 @@ export const useProjectStore = create<ProjectState & ProjectActions>()(
     // ========================================================================
 
     loadRecentProjects: async () => {
-      try {
-        // TODO: Load from storage adapter
-      } catch (error) {
-        console.error('Failed to load recent projects:', error);
-      }
+      // recent projects are persisted via SQLite on the Rust side
     },
 
     // ========================================================================

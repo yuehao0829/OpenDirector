@@ -136,3 +136,14 @@ export function computeCropDrawParams(
   return { drawX, drawY, drawW, drawH, frame };
 }
 
+export function isSameCropRect(left?: CropRect | null, right?: CropRect | null): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.x - right.x) < 0.001 &&
+    Math.abs(left.y - right.y) < 0.001 &&
+    Math.abs(left.width - right.width) < 0.001 &&
+    Math.abs(left.height - right.height) < 0.001
+  );
+}
+
