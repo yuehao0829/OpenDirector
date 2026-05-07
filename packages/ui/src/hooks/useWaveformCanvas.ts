@@ -120,6 +120,29 @@ export function useWaveformCanvas({
   options,
 }: UseWaveformCanvasParams) {
   const dataRef = useRef<WaveformData | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const requestRedraw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    ctx.scale(dpr, dpr);
+
+    if (dataRef.current) {
+      drawWaveform(ctx, rect.width, rect.height, dataRef.current, optionsRef.current);
+    }
+  }, [canvasRef, containerRef]);
 
   // Load peak data file
   useEffect(() => {
@@ -144,28 +167,7 @@ export function useWaveformCanvas({
     return () => {
       cancelled = true;
     };
-  }, [dataPath]);
-
-  const requestRedraw = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const rect = container.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    ctx.scale(dpr, dpr);
-
-    if (dataRef.current) {
-      drawWaveform(ctx, rect.width, rect.height, dataRef.current, options);
-    }
-  }, [canvasRef, containerRef, options]);
+  }, [dataPath, requestRedraw]);
 
   // ResizeObserver
   useEffect(() => {
@@ -182,7 +184,7 @@ export function useWaveformCanvas({
     };
   }, [containerRef, requestRedraw]);
 
-  // Redraw when data changes
+  // Redraw when data changes (requestRedraw reads options via ref, so options is not a dep)
   useEffect(() => {
     requestRedraw();
   }, [dataPath, requestRedraw]);

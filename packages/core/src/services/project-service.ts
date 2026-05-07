@@ -444,15 +444,13 @@ export async function openProjectFromFolder(filePath: string): Promise<void> {
  * Show an open-file dialog and open the selected project.
  */
 export async function openProjectDialog(): Promise<void> {
-  let adapter: Awaited<ReturnType<typeof getPlatformAdapter>>;
-  adapter = await getPlatformAdapter();
+  const adapter = await getPlatformAdapter();
 
-  let filePath: string | null = null;
   const selected = await adapter.fs.selectFile({
     title: '打开工程',
     accept: ['.odp'],
   });
-  filePath = selectSingleFilePath(selected);
+  const filePath = selectSingleFilePath(selected);
 
   if (filePath) {
     await openProjectFromFolder(filePath);

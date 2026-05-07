@@ -33,7 +33,7 @@ export async function cleanupOrphanFiles(
         if (uuid && !knownIds.has(uuid)) {
           try {
             await fs.deleteFile(file.path);
-          } catch (error) {
+          } catch {
             // file may have been deleted by a concurrent operation
           }
         }

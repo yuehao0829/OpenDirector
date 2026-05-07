@@ -1,14 +1,3 @@
-import { Volume2, Music, Subtitles, Stamp } from 'lucide-react';
-
-export type ToggleKey = 'enableAudio' | 'enableMusic' | 'enableSubtitle' | 'enableWatermark';
-
-export const TOGGLE_DEFS: { key: ToggleKey; icon: React.ReactNode; label: string }[] = [
-  { key: 'enableAudio', icon: <Volume2 size={14} />, label: '音频' },
-  { key: 'enableMusic', icon: <Music size={14} />, label: '音乐' },
-  { key: 'enableSubtitle', icon: <Subtitles size={14} />, label: '字幕' },
-  { key: 'enableWatermark', icon: <Stamp size={14} />, label: '水印' },
-];
-
 export function TogglePill({
   icon,
   label,

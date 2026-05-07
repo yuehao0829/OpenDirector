@@ -4,37 +4,11 @@ import type { Asset, ImageRole, Reference } from '@opendirector/core/types/asset
 import { getEffectiveImageRole } from '@opendirector/core/types/asset';
 import type { ConstraintIndicator } from '@opendirector/core/types/provider-system';
 import { X, Video, ImageIcon, Music, Crop, Scissors } from 'lucide-react';
+import { ASSET_TYPE_LABELS, IMAGE_ROLE_LABELS, groupReferences } from './ReferenceSelector.shared';
 
-// ── Shared helpers (exported for reuse) ──
-
-export const ASSET_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频' } as const;
 const ASSET_TYPE_ICONS = { video: Video, image: ImageIcon, audio: Music } as const;
 
-export const IMAGE_ROLE_LABELS: Record<ImageRole, string> = {
-  reference_image: '参考图',
-  first_frame: '首帧',
-  last_frame: '尾帧',
-} as const;
-
 const IMAGE_ROLES: ImageRole[] = ['reference_image', 'first_frame', 'last_frame'];
-
-export interface GroupedReference {
-  type: 'image' | 'video' | 'audio';
-  refs: Reference[];
-}
-
-export function groupReferences(references: Reference[]): GroupedReference[] {
-  const groups: GroupedReference[] = [
-    { type: 'image', refs: [] },
-    { type: 'video', refs: [] },
-    { type: 'audio', refs: [] },
-  ];
-  for (const ref of references) {
-    const group = groups.find((g) => g.type === ref.type);
-    if (group) group.refs.push(ref);
-  }
-  return groups.filter((g) => g.refs.length > 0);
-}
 
 export function AssetThumbnail({ type, thumbnailUrl }: { type: string; thumbnailUrl?: string }) {
   if (thumbnailUrl) {

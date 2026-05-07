@@ -190,7 +190,7 @@ export async function generateThumbnailForAsset(
       thumbnailUrl: thumbnailPath ? toWebViewUrl(thumbnailPath) : undefined,
       waveformDataPath: undefined,
     };
-  } catch (error) {
+  } catch {
     // thumbnails are optional — the asset is still usable without one
   }
   return { thumbnailUrl: undefined, waveformDataPath: undefined };
@@ -619,7 +619,7 @@ export async function generateAssetThumbnail(
       const thumbnailPath = await fs.generateImageThumbnail(path, 512, outputPath);
       return thumbnailPath;
     }
-  } catch (error) {
+  } catch {
     // image thumbnails are optional — fall back to no thumbnail
   }
 

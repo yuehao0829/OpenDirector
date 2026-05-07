@@ -584,7 +584,7 @@ async function persistLastFrame(
     safeCreateGeneration(db, projectPath, lastFrameGen, 'db_create_lastframe_gen');
 
     return assetId;
-  } catch (err) {
+  } catch {
     return undefined;
   }
 }

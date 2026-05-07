@@ -194,7 +194,7 @@ async function batchQueryServerStatuses(
         count: results.length,
       });
     }
-  } catch (err) {
+  } catch {
     if (folderPath) {
       taskLog.warn(folderPath, 'batch_query_fallback', 'Batch query failed, falling back to individual queries', {
         count: providerTaskIds.length,

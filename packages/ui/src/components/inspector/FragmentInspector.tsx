@@ -32,7 +32,8 @@ import { GenerationParamsSection, type GenerationParamsValue } from './Generatio
 import { Panel } from '../layout/Panel';
 import { Button } from '../common/Button';
 import { X } from 'lucide-react';
-import { ReferenceSelector, groupReferences, ASSET_TYPE_LABELS, AssetThumbnail, IMAGE_ROLE_LABELS, type GroupedReference } from './ReferenceSelector';
+import { ReferenceSelector, AssetThumbnail } from './ReferenceSelector';
+import { groupReferences, ASSET_TYPE_LABELS, IMAGE_ROLE_LABELS, type GroupedReference } from './ReferenceSelector.shared';
 import { getReferenceLabels, parsePromptLabels } from './prompt-editor';
 import { PlaybackSourceSelector } from './PlaybackSourceSelector';
 import { makeCompositeKey } from './compositeKey';
@@ -41,11 +42,30 @@ import { makeCompositeKey } from './compositeKey';
 const isMusicSuppressed = (p: Pick<GenerationParamsValue, 'enableAudio' | 'enableMusic'>) =>
   p.enableAudio && !p.enableMusic;
 
-function buildEffectivePrompt(basePrompt: string, genParams: GenerationParamsValue): string {
+function buildEffectivePrompt(
+  basePrompt: string,
+  genParams: Pick<GenerationParamsValue, 'enableAudio' | 'enableMusic' | 'enableSubtitle'>,
+): string {
   const hints: string[] = [];
   if (isMusicSuppressed(genParams)) hints.push('不要音乐');
   if (!genParams.enableSubtitle) hints.push('不要字幕');
   return hints.length > 0 ? basePrompt + '\n' + hints.join('，') : basePrompt;
+}
+
+function hasSameGenerationParamsValue(
+  left: GenerationParamsValue,
+  right: GenerationParamsValue,
+): boolean {
+  return (
+    left.duration === right.duration &&
+    left.resolution === right.resolution &&
+    left.aspectRatio === right.aspectRatio &&
+    left.enableAudio === right.enableAudio &&
+    left.enableMusic === right.enableMusic &&
+    left.enableSubtitle === right.enableSubtitle &&
+    left.enableWatermark === right.enableWatermark &&
+    left.enableWebSearch === right.enableWebSearch
+  );
 }
 
 function getFragmentGenParams(fragment: { genParams?: GenerationParamDefaults; duration?: number } | null | undefined): GenerationParamsValue {
@@ -82,6 +102,9 @@ export function FragmentInspector() {
   const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
   const [genParams, setGenParams] = useState<GenerationParamsValue>(getFragmentGenParams(null));
   const genParamsRef = useRef(genParams);
+  const currentGenParamDefaults = useMemo(() => toParamDefaults(genParams), [genParams]);
+  const selectedFragmentIdRef = useRef<string | null>(null);
+  const skipGenParamsWritebackFragmentIdRef = useRef<string | null>(null);
   genParamsRef.current = genParams;
 
   // Reset draft prompt when draft fragment changes
@@ -98,31 +121,54 @@ export function FragmentInspector() {
   const scene = selectedFragment?.sceneId
     ? scenes.find(s => s.id === selectedFragment.sceneId) ?? null
     : null;
+  const selectedFragmentId = selectedFragment?.id ?? null;
+  const selectedFragmentDuration = selectedFragment?.duration;
+  const selectedFragmentProviderSelection = selectedFragment?.providerSelection;
+  const selectedFragmentProviderInstanceId = selectedFragmentProviderSelection?.instanceId ?? null;
+  const selectedFragmentProviderModelId = selectedFragmentProviderSelection?.modelId ?? null;
+  const selectedFragmentStoredGenParams = selectedFragment?.genParams;
 
   // Reset genParams when fragment selection changes
   useEffect(() => {
-    setGenParams(getFragmentGenParams(selectedFragment));
-  }, [selectedFragment?.id]);
+    const nextSelectedFragmentId = selectedFragmentId;
+    const nextGenParams = getFragmentGenParams(selectedFragment);
+    const selectionChanged = selectedFragmentIdRef.current !== nextSelectedFragmentId;
+    const localGenParamsOutOfSync = !hasSameGenerationParamsValue(genParamsRef.current, nextGenParams);
+    const shouldResetLocalGenParams = selectionChanged || localGenParamsOutOfSync;
+    selectedFragmentIdRef.current = nextSelectedFragmentId;
+
+    if (shouldResetLocalGenParams) {
+      skipGenParamsWritebackFragmentIdRef.current = nextSelectedFragmentId;
+    }
+
+    setGenParams((current) => {
+      if (!shouldResetLocalGenParams && hasSameGenerationParamsValue(current, nextGenParams)) {
+        return current;
+      }
+      return nextGenParams;
+    });
+  }, [selectedFragment, selectedFragmentId]);
 
   // Derive continuous mode state from fragment duration
   const { continuousMode, continuousPlan } = useMemo(() => {
-    if (!selectedFragment) return { continuousMode: false, continuousPlan: undefined };
-    const dur = selectedFragment.duration;
+    if (selectedFragmentDuration == null) {
+      return { continuousMode: false, continuousPlan: undefined };
+    }
     return {
-      continuousMode: isContinuousMode(dur),
-      continuousPlan: buildContinuousPlan(dur),
+      continuousMode: isContinuousMode(selectedFragmentDuration),
+      continuousPlan: buildContinuousPlan(selectedFragmentDuration),
     };
-  }, [selectedFragment?.duration]);
+  }, [selectedFragmentDuration]);
 
   // Fragment → slider sync: when fragment duration changes at runtime, update genParams
   useEffect(() => {
-    if (!selectedFragment || continuousMode) return;
-    const genSec = fragmentMsToGenSeconds(selectedFragment.duration);
+    if (selectedFragmentDuration == null || continuousMode) return;
+    const genSec = fragmentMsToGenSeconds(selectedFragmentDuration);
     setGenParams((prev) => {
       if (prev.duration === genSec && !prev.autoDuration) return prev;
       return { ...prev, duration: genSec, autoDuration: false };
     });
-  }, [selectedFragment?.duration, continuousMode]);
+  }, [selectedFragmentDuration, continuousMode]);
 
   // ── Flattened model list from all generation provider instances ──
   const instances = useProviderInstanceStore((s) => s.instances);
@@ -171,7 +217,7 @@ export function FragmentInspector() {
   }, [activeGeneration?.continuousMode, activeGeneration?.continuousPlan, activeGeneration?.currentSegmentIndex, activeGeneration?.progress]);
 
   const resolvedModelSelection = useMemo(() => {
-    const ps = selectedFragment?.providerSelection;
+    const ps = selectedFragmentProviderSelection;
     const directKey = ps ? makeCompositeKey(ps.instanceId, ps.modelId) : '';
 
     if (directKey && modelByKey.has(directKey)) {
@@ -188,8 +234,7 @@ export function FragmentInspector() {
     }
     return undefined;
   }, [
-    selectedFragment?.providerSelection?.instanceId,
-    selectedFragment?.providerSelection?.modelId,
+    selectedFragmentProviderSelection,
     allModels,
     modelByKey,
   ]);
@@ -200,15 +245,14 @@ export function FragmentInspector() {
 
   // Sync model selection from fragment when selection changes
   useEffect(() => {
-    if (!selectedFragment || !resolvedModelSelection || isGenerating) return;
+    if (!selectedFragmentId || !resolvedModelSelection || isGenerating) return;
 
-    const ps = selectedFragment.providerSelection;
-    const needsUpdate = !ps
-      || ps.instanceId !== resolvedModelSelection.instanceId
-      || ps.modelId !== resolvedModelSelection.modelId;
+    const needsUpdate =
+      selectedFragmentProviderInstanceId !== resolvedModelSelection.instanceId
+      || selectedFragmentProviderModelId !== resolvedModelSelection.modelId;
 
     if (needsUpdate) {
-      updateFragment(selectedFragment.id, {
+      updateFragment(selectedFragmentId, {
         providerSelection: {
           instanceId: resolvedModelSelection.instanceId,
           modelId: resolvedModelSelection.modelId,
@@ -216,9 +260,9 @@ export function FragmentInspector() {
       });
     }
   }, [
-    selectedFragment?.id,
-    selectedFragment?.providerSelection?.instanceId,
-    selectedFragment?.providerSelection?.modelId,
+    selectedFragmentId,
+    selectedFragmentProviderInstanceId,
+    selectedFragmentProviderModelId,
     resolvedModelSelection,
     isGenerating,
     updateFragment,
@@ -250,7 +294,7 @@ export function FragmentInspector() {
 
   // Degrade global defaults when provider doesn't support them (e.g. 1080p → 720p for Seedance)
   useEffect(() => {
-    if (!capabilityParams || !selectedFragment) return;
+    if (!capabilityParams || !selectedFragmentId) return;
     setGenParams((prev) => {
       const updates: Partial<GenerationParamsValue> = {};
       if (capabilityParams.resolution && !capabilityParams.resolution.includes(prev.resolution)) {
@@ -262,17 +306,25 @@ export function FragmentInspector() {
       if (Object.keys(updates).length === 0) return prev;
       return { ...prev, ...updates };
     });
-  }, [capabilityParams, selectedFragment?.id]);
+  }, [capabilityParams, selectedFragmentId]);
 
   // Sync degraded genParams to fragment after local state settles
   useEffect(() => {
-    if (!selectedFragment) return;
-    const current = toParamDefaults(genParams);
-    const stored = selectedFragment.genParams;
-    if (JSON.stringify(current) !== JSON.stringify(stored)) {
-      updateFragment(selectedFragment.id, { genParams: current });
+    if (!selectedFragmentId) return;
+    if (skipGenParamsWritebackFragmentIdRef.current === selectedFragmentId) {
+      skipGenParamsWritebackFragmentIdRef.current = null;
+      return;
     }
-  }, [genParams.resolution, genParams.aspectRatio, genParams.enableAudio, genParams.enableMusic, genParams.enableSubtitle, genParams.enableWatermark, genParams.enableWebSearch]);
+    const stored = selectedFragmentStoredGenParams;
+    if (JSON.stringify(currentGenParamDefaults) !== JSON.stringify(stored)) {
+      updateFragment(selectedFragmentId, { genParams: currentGenParamDefaults });
+    }
+  }, [
+    currentGenParamDefaults,
+    selectedFragmentId,
+    selectedFragmentStoredGenParams,
+    updateFragment,
+  ]);
 
   // ── Input validation based on model (must be before conditional returns) ──
   const inputValidation = useMemo(() => {
@@ -622,7 +674,11 @@ function PreviewModeContent({
 
   const promptElements = useMemo(() => {
     if (!fragment.prompt) return null;
-    const effectivePrompt = buildEffectivePrompt(fragment.prompt, genParams);
+    const effectivePrompt = buildEffectivePrompt(fragment.prompt, {
+      enableAudio: genParams.enableAudio,
+      enableMusic: genParams.enableMusic,
+      enableSubtitle: genParams.enableSubtitle,
+    });
 
     return parsePromptLabels(
       effectivePrompt,
@@ -640,7 +696,13 @@ function PreviewModeContent({
       ),
       (text, _key) => text,
     );
-  }, [fragment.prompt, labelToRef, genParams.enableMusic, genParams.enableSubtitle]);
+  }, [
+    fragment.prompt,
+    labelToRef,
+    genParams.enableAudio,
+    genParams.enableMusic,
+    genParams.enableSubtitle,
+  ]);
 
   const isAudio = trackType === 'audio';
 

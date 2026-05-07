@@ -1,2 +1,3 @@
-export { MentionPopup, getReferenceLabel, getReferenceLabels, buildMentionItems, REFERENCE_LABEL_REGEX, escapeRegex, parsePromptLabels } from './MentionPopup';
-export type { MentionItem } from './MentionPopup';
+export { MentionPopup } from './MentionPopup';
+export { buildMentionItems, escapeRegex, getReferenceLabel, getReferenceLabels, parsePromptLabels, REFERENCE_LABEL_REGEX } from './mentionUtils';
+export type { MentionItem } from './mentionUtils';

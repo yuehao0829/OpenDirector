@@ -48,7 +48,11 @@ export default tseslint.config(
       // Allow unused vars with underscore prefix
       '@typescript-eslint/no-unused-vars': [
         'warn',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+        {
+          argsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+        },
       ],
       // Non-null assertions are common in this codebase
       '@typescript-eslint/no-non-null-assertion': 'off',

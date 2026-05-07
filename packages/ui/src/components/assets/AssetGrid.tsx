@@ -21,6 +21,13 @@ import { buildAssetDragData } from '../timeline/drag-types';
 
 export type FileCategory = 'all' | 'video' | 'image' | 'audio';
 
+const MINI_WAVEFORM_OPTIONS = {
+  barWidth: 1,
+  gap: 0,
+  color: '#3b82f6',
+  bgColor: '#1e293b',
+};
+
 interface AssetGridProps {
   assets: Asset[];
   onAssetClick?: (asset: Asset, e: React.MouseEvent) => void;
@@ -37,7 +44,7 @@ function MiniWaveformCanvas({ dataPath }: { dataPath: string }) {
     dataPath,
     canvasRef,
     containerRef,
-    options: { barWidth: 1, gap: 0, color: '#3b82f6', bgColor: '#1e293b' },
+    options: MINI_WAVEFORM_OPTIONS,
   });
 
   return (
@@ -55,7 +62,10 @@ export function AssetGrid({
 }: AssetGridProps) {
   // Use unified selection store to determine selected state
   const secondaryFocus = useSelectionStore((s) => s.secondaryFocus);
-  const selectedAssetIds = secondaryFocus?.type === 'asset' ? secondaryFocus.assetIds : [];
+  const selectedAssetIds = useMemo(
+    () => (secondaryFocus?.type === 'asset' ? secondaryFocus.assetIds : []),
+    [secondaryFocus],
+  );
   const selectedAssetIdSet = useMemo(() => new Set(selectedAssetIds), [selectedAssetIds]);
   const folderPath = useProjectStore((s) => s.currentProject?.folderPath);
 

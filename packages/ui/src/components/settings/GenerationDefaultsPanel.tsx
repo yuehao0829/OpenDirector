@@ -1,7 +1,8 @@
 import { useSettingsStore } from '@opendirector/core/stores/settingsStore';
 import { GLOBAL_GENERATION_OPTIONS } from '@opendirector/core/types/generation';
 import { Monitor, RectangleHorizontal } from 'lucide-react';
-import { TOGGLE_DEFS, TogglePill, SettingCard } from '../shared/GenerationControls';
+import { TOGGLE_DEFS } from '../shared/GenerationControls.shared';
+import { TogglePill, SettingCard } from '../shared/GenerationControls';
 
 export function GenerationDefaultsPanel() {
   const params = useSettingsStore((s) => s.defaultGenerationParams);

@@ -4,8 +4,8 @@ import type { CapabilityParams } from '@opendirector/core/types/provider-system'
 import { useMemo } from 'react';
 import { Monitor, RectangleHorizontal, Clock, Volume2, VolumeX, Music, Music4, Subtitles, Stamp } from 'lucide-react';
 import { Panel } from '../layout/Panel';
-import { TOGGLE_DEFS, TogglePill, SettingCard } from '../shared/GenerationControls';
-import type { ToggleKey } from '../shared/GenerationControls';
+import { TOGGLE_DEFS, type ToggleKey } from '../shared/GenerationControls.shared';
+import { TogglePill, SettingCard } from '../shared/GenerationControls';
 
 export interface GenerationParamsValue extends GenerationParamDefaults {
   duration: number;

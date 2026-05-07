@@ -146,8 +146,6 @@ export function PreviewPanel() {
     source.mode,
     source.asset,
     source.previewType,
-    source.asset?.width,
-    source.asset?.height,
     referenceTargetAspectRatio,
   ]);
 

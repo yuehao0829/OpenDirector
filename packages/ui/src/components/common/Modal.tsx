@@ -4,13 +4,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { X } from 'lucide-react';
 import { acquireNativePreviewOcclusion } from '@opendirector/core/utils/native-preview-occlusion';
-
-let openModalCount = 0;
-
-/** Returns true when any Modal is currently open. */
-export function isAnyModalOpen(): boolean {
-  return openModalCount > 0;
-}
+import { decrementOpenModalCount, incrementOpenModalCount } from './modal-state';
 
 interface ModalProps {
   isOpen: boolean;
@@ -37,15 +31,13 @@ export function Modal({ isOpen, onClose, title, children, className, size = 'md'
       if (e.key === 'Escape') onCloseRef.current();
     };
 
-    openModalCount++;
-    if (openModalCount === 1) {
+    if (incrementOpenModalCount() === 1) {
       document.body.style.overflow = 'hidden';
     }
     document.addEventListener('keydown', handleEscape);
 
     return () => {
-      openModalCount = Math.max(0, openModalCount - 1);
-      if (openModalCount === 0) {
+      if (decrementOpenModalCount() === 0) {
         document.body.style.overflow = '';
       }
       document.removeEventListener('keydown', handleEscape);

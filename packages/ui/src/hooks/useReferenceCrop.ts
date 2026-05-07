@@ -33,7 +33,11 @@ export function useReferenceCrop({
   const syncedFromStoreRef = useRef(false);
   const hasInitializedRef = useRef(false);
   const cropRectRef = useRef<CropRect | null>(null);
+  const referenceCropRectRef = useRef(reference.cropRect);
+  const onCropChangeRef = useRef(onCropChange);
   cropRectRef.current = cropRect;
+  referenceCropRectRef.current = reference.cropRect;
+  onCropChangeRef.current = onCropChange;
   const identity = referenceIdentity ?? `${reference.id}:${reference.assetId}`;
 
   // When a crop session opens or its identity changes, rebuild the session from the
@@ -56,7 +60,7 @@ export function useReferenceCrop({
       imageInfo.naturalHeight,
       targetAspectRatio,
     );
-    const nextCropRect = reference.cropRect ?? defaultCr;
+    const nextCropRect = referenceCropRectRef.current ?? defaultCr;
 
     setDefaultCropRect((prev) => (isSameCropRect(prev, defaultCr) ? prev : defaultCr));
     setCropRect((prev) => (isSameCropRect(prev, nextCropRect) ? prev : nextCropRect));
@@ -82,7 +86,6 @@ export function useReferenceCrop({
 
     syncedFromStoreRef.current = true;
     setCropRect(nextCropRect);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- cropRect is compared via ref to avoid reacting to own state changes
   }, [enabled, reference.cropRect, defaultCropRect]);
 
   const resetCrop = useCallback(() => {
@@ -110,8 +113,8 @@ export function useReferenceCrop({
       hasInitializedRef.current = true;
       return; // skip first call (initial default)
     }
-    onCropChange(cropRect);
-  }, [cropRect, enabled]); // intentionally exclude onCropChange to avoid loops
+    onCropChangeRef.current(cropRect);
+  }, [cropRect, enabled]);
 
   // Reset initialization flag when disabled
   useEffect(() => {

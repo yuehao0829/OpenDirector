@@ -259,17 +259,7 @@ export function usePreviewSource(): PreviewSource {
         setTimelinePreview();
       }
     }
-  }, [
-    source.mode,
-    source.asset,
-    source.reference,
-    source.previewType,
-    source.duration,
-    setAssetPreview,
-    setReferencePreview,
-    setTimelinePreview,
-    setPreviewDuration,
-  ]);
+  }, [source, setAssetPreview, setReferencePreview, setTimelinePreview, setPreviewDuration]);
 
   return source;
 }

@@ -4,7 +4,7 @@ import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { requestNativePreviewStepFrame, useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { redo, undo } from '@opendirector/core/stores/undoManager';
-import { isAnyModalOpen } from '../components/common/Modal';
+import { isAnyModalOpen } from '../components/common/modal-state';
 
 export function useTimelineShortcuts() {
   const setToolMode = useTimelineStore((s) => s.setToolMode);
@@ -18,7 +18,6 @@ export function useTimelineShortcuts() {
   const copySelection = useTimelineStore((s) => s.copySelection);
   const cutSelection = useTimelineStore((s) => s.cutSelection);
   const pasteFromClipboard = useTimelineStore((s) => s.pasteFromClipboard);
-  const clipboard = useTimelineStore((s) => s.clipboard);
   const pasteIndicator = useTimelineStore((s) => s.pasteIndicator);
   const toggleSnap = useTimelineStore((s) => s.toggleSnap);
 
@@ -227,7 +226,6 @@ export function useTimelineShortcuts() {
       copySelection,
       cutSelection,
       pasteFromClipboard,
-      clipboard,
       pasteIndicator,
       previewMode,
       assetType,

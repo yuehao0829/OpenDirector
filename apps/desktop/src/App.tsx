@@ -10,6 +10,12 @@ import { Button } from '@opendirector/ui/components/common/Button';
 import { useWindowCloseHandler } from '@opendirector/ui/hooks/useWindowCloseHandler';
 import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 
+declare global {
+  interface Window {
+    __refreshGenerations?: () => Promise<void>;
+  }
+}
+
 const { MIN_ASSETS_WIDTH, MAX_ASSETS_WIDTH, MIN_INSPECTOR_WIDTH, MAX_INSPECTOR_WIDTH, MIN_PREVIEW_WIDTH, RESIZER_WIDTH } = LAYOUT_CONSTRAINTS;
 const LazyTimelineCanvas = lazy(async () => ({
   default: (await import('@opendirector/ui/components/timeline/TimelineCanvas')).TimelineCanvas,
@@ -154,7 +160,7 @@ function App() {
         bridgeModule.initTaskBridge();
         assetBridgeModule.initAssetTaskBridge();
 
-        (window as any).__refreshGenerations = recoveryModule.refreshActiveGenerations;
+        window.__refreshGenerations = recoveryModule.refreshActiveGenerations;
 
         const unregister = registerProjectOpenCallback(async (project) => {
           if (project.folderPath) {
@@ -167,7 +173,7 @@ function App() {
 
         cleanup = () => {
           unregister();
-          delete (window as any).__refreshGenerations;
+          delete window.__refreshGenerations;
         };
       })
       .catch((error) => {

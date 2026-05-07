@@ -242,6 +242,12 @@ export function useNativeTimelinePreview({
     return Math.max(0, timelineState.getPlayheadRef());
   }, [state]);
 
+  const isCurrentController = useCallback(
+    (controller: PreviewSessionController | null): boolean =>
+      controller !== null && controllerRef.current === controller,
+    [],
+  );
+
   const resetPreviewState = () => {
     setSessionId(null);
     setState('idle');
@@ -270,10 +276,10 @@ export function useNativeTimelinePreview({
     pendingTransportIntentRef.current = null;
   };
 
-  const resetTimelineSubmission = () => {
+  const resetTimelineSubmission = useCallback(() => {
     timelineSubmissionRef.current = createIdleTimelineSubmissionState();
     queuedTimelineSubmissionRef.current = null;
-  };
+  }, []);
 
   const applySessionState = (nextSession: {
     state: PreviewSessionState;
@@ -285,7 +291,7 @@ export function useNativeTimelinePreview({
     setTimelineAttached(nextSession.timelineAttached);
   };
 
-  const updateTimelineSubmission = (
+  const updateTimelineSubmission = useCallback((
     nextController: PreviewSessionController,
     nextSessionId: string,
     nextKey: string,
@@ -297,85 +303,98 @@ export function useNativeTimelinePreview({
       key: nextKey,
       status: nextStatus,
     };
-  };
+  }, []);
 
-  const submitTimelineSnapshot = (
+  const submitTimelineSnapshot = useCallback((
     controller: PreviewSessionController,
     controllerSessionId: string,
     snapshotKey: string,
     snapshot: ReturnType<typeof buildTimelinePreviewSnapshot>,
   ) => {
-    const currentSubmission = timelineSubmissionRef.current;
-    if (
-      currentSubmission.controller === controller &&
-      currentSubmission.sessionId === controllerSessionId &&
-      currentSubmission.status === 'in_flight'
-    ) {
-      queuedTimelineSubmissionRef.current = {
-        controller,
-        sessionId: controllerSessionId,
-        key: snapshotKey,
-        snapshot,
-      };
-      return;
-    }
+    const runSubmission = (
+      nextController: PreviewSessionController,
+      nextControllerSessionId: string,
+      nextSnapshotKey: string,
+      nextSnapshot: ReturnType<typeof buildTimelinePreviewSnapshot>,
+    ) => {
+      const currentSubmission = timelineSubmissionRef.current;
+      if (
+        currentSubmission.controller === nextController &&
+        currentSubmission.sessionId === nextControllerSessionId &&
+        currentSubmission.status === 'in_flight'
+      ) {
+        queuedTimelineSubmissionRef.current = {
+          controller: nextController,
+          sessionId: nextControllerSessionId,
+          key: nextSnapshotKey,
+          snapshot: nextSnapshot,
+        };
+        return;
+      }
 
-    updateTimelineSubmission(controller, controllerSessionId, snapshotKey, 'in_flight');
+      updateTimelineSubmission(
+        nextController,
+        nextControllerSessionId,
+        nextSnapshotKey,
+        'in_flight',
+      );
 
-    void controller
-      .setTimeline(snapshot)
-      .then(() => {
-        if (
-          timelineSubmissionRef.current.controller === controller &&
-          timelineSubmissionRef.current.sessionId === controllerSessionId &&
-          timelineSubmissionRef.current.key === snapshotKey
-        ) {
-          updateTimelineSubmission(controller, controllerSessionId, snapshotKey, 'applied');
-        }
-        if (isCurrentController(controller)) {
-          refreshDiagnosticsRef.current?.('immediate');
-        }
-      })
-      .catch((timelineError) => {
-        if (
-          timelineSubmissionRef.current.controller === controller &&
-          timelineSubmissionRef.current.sessionId === controllerSessionId &&
-          timelineSubmissionRef.current.key === snapshotKey
-        ) {
-          resetTimelineSubmission();
-        }
-        if (!isCurrentController(controller)) {
-          return;
-        }
-        const message = getErrorMessage(timelineError);
-        setError(message);
-        setState('error');
-        setTimelineAttached(false);
-      })
-      .finally(() => {
-        const queuedSubmission = queuedTimelineSubmissionRef.current;
-        if (
-          queuedSubmission &&
-          queuedSubmission.controller === controller &&
-          queuedSubmission.sessionId === controllerSessionId &&
-          isCurrentController(controller)
-        ) {
-          queuedTimelineSubmissionRef.current = null;
-          submitTimelineSnapshot(
-            queuedSubmission.controller,
-            queuedSubmission.sessionId,
-            queuedSubmission.key,
-            queuedSubmission.snapshot,
-          );
-        }
-      });
-  };
+      void nextController
+        .setTimeline(nextSnapshot)
+        .then(() => {
+          if (
+            timelineSubmissionRef.current.controller === nextController &&
+            timelineSubmissionRef.current.sessionId === nextControllerSessionId &&
+            timelineSubmissionRef.current.key === nextSnapshotKey
+          ) {
+            updateTimelineSubmission(
+              nextController,
+              nextControllerSessionId,
+              nextSnapshotKey,
+              'applied',
+            );
+          }
+          if (isCurrentController(nextController)) {
+            refreshDiagnosticsRef.current?.('immediate');
+          }
+        })
+        .catch((timelineError) => {
+          if (
+            timelineSubmissionRef.current.controller === nextController &&
+            timelineSubmissionRef.current.sessionId === nextControllerSessionId &&
+            timelineSubmissionRef.current.key === nextSnapshotKey
+          ) {
+            resetTimelineSubmission();
+          }
+          if (!isCurrentController(nextController)) {
+            return;
+          }
+          const message = getErrorMessage(timelineError);
+          setError(message);
+          setState('error');
+          setTimelineAttached(false);
+        })
+        .finally(() => {
+          const queuedSubmission = queuedTimelineSubmissionRef.current;
+          if (
+            queuedSubmission &&
+            queuedSubmission.controller === nextController &&
+            queuedSubmission.sessionId === nextControllerSessionId &&
+            isCurrentController(nextController)
+          ) {
+            queuedTimelineSubmissionRef.current = null;
+            runSubmission(
+              queuedSubmission.controller,
+              queuedSubmission.sessionId,
+              queuedSubmission.key,
+              queuedSubmission.snapshot,
+            );
+          }
+        });
+    };
 
-  const isCurrentController = useCallback(
-    (controller: PreviewSessionController | null): boolean =>
-      controller !== null && controllerRef.current === controller,
-    [],
-  );
+    runSubmission(controller, controllerSessionId, snapshotKey, snapshot);
+  }, [isCurrentController, resetTimelineSubmission, updateTimelineSubmission]);
 
   const enqueueNativeTransportCommand = useCallback(
     async (
@@ -769,7 +788,6 @@ export function useNativeTimelinePreview({
     }
   }, [
     clearPendingNativeTargetIfCurrent,
-    clearPendingNativeTargetIfSettled,
     isCurrentController,
     timelineAttached,
   ]);
@@ -876,6 +894,8 @@ export function useNativeTimelinePreview({
 
     let disposed = false;
     const controller = new PreviewSessionController();
+    const nativeSeekQueue = nativeSeekQueueRef.current;
+    const refreshState = diagnosticsRefreshStateRef.current;
     resetTimelineSubmission();
     resetPreviewState();
     const unsubscribe = controller.subscribe((event) => {
@@ -1116,12 +1136,12 @@ export function useNativeTimelinePreview({
       disposed = true;
       unsubscribe();
       nativeStepFrameInFlightRef.current = false;
-      nativeSeekQueueRef.current.inFlight = false;
-      nativeSeekQueueRef.current.activeTargetMs = null;
-      nativeSeekQueueRef.current.activeTargetGeneration = null;
-      nativeSeekQueueRef.current.queuedTargetMs = null;
-      nativeSeekQueueRef.current.queuedTargetGeneration = null;
-      nativeSeekQueueRef.current.generation += 1;
+      nativeSeekQueue.inFlight = false;
+      nativeSeekQueue.activeTargetMs = null;
+      nativeSeekQueue.activeTargetGeneration = null;
+      nativeSeekQueue.queuedTargetMs = null;
+      nativeSeekQueue.queuedTargetGeneration = null;
+      nativeSeekQueue.generation += 1;
       if (controllerRef.current === controller) {
         controllerRef.current = null;
         surfaceSyncRevisionRef.current += 1;
@@ -1133,7 +1153,6 @@ export function useNativeTimelinePreview({
       if (timelineSubmissionRef.current.controller === controller) {
         resetTimelineSubmission();
       }
-      const refreshState = diagnosticsRefreshStateRef.current;
       if (refreshState.timerId !== null) {
         window.clearTimeout(refreshState.timerId);
         refreshState.timerId = null;
@@ -1148,6 +1167,7 @@ export function useNativeTimelinePreview({
     clearPendingNativeTargetIfSettled,
     isCurrentController,
     projectId,
+    resetTimelineSubmission,
     settlePendingTransportIntent,
     shouldIgnoreConflictingTransportSample,
     shouldIgnorePlayingSample,
@@ -1248,6 +1268,7 @@ export function useNativeTimelinePreview({
     isCurrentController,
     sessionId,
     scenes,
+    submitTimelineSnapshot,
     surfaceAttached,
     timelineAttached,
     tracks,
@@ -1415,6 +1436,7 @@ export function useNativeTimelinePreview({
     clearPendingTransportIntentIfCurrent,
     enqueueNativeTransportCommand,
     pumpNativeSeekQueue,
+    state,
     timelineAttached,
   ]);
 
@@ -1799,7 +1821,7 @@ export function useNativeTimelinePreview({
         surfaceBootstrapTaskRef.current = 0;
       }
     };
-  }, [active, containerRef, isCurrentController, sessionId, shouldPresentSurface]);
+  }, [active, containerRef, isCurrentController, sessionId, shouldPresentSurface, surfaceAttached]);
 
   return {
     active,
