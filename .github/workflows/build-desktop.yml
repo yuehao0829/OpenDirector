@@ -152,7 +152,7 @@ jobs:
           }
 
           echo "Signing nested Mach-O files..."
-          sign_macho_tree "$APP_PATH/Contents" "$IDENTITY" --timestamp
+          sign_macho_tree "$APP_PATH/Contents" "$IDENTITY" --options runtime --timestamp
 
           # Sign any nested .app bundles (e.g. terminal-notifier)
           find "$APP_PATH/Contents" -name '*.app' -exec codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp {} \;
@@ -371,7 +371,7 @@ jobs:
           }
 
           echo "Signing nested Mach-O files..."
-          sign_macho_tree "$APP_PATH/Contents" "$IDENTITY" --timestamp
+          sign_macho_tree "$APP_PATH/Contents" "$IDENTITY" --options runtime --timestamp
 
           # Sign any nested .app bundles (e.g. terminal-notifier)
           find "$APP_PATH/Contents" -name '*.app' -exec codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp {} \;
