@@ -84,15 +84,16 @@ should_rewrite_reference() {
 }
 
 copy_external_dylib_dependencies() {
-    local work_queue=("__sentinel__")
-    work_queue=()
+    local max_depth="${1:-2}"
+    local work_queue=()
     while IFS= read -r -d '' f; do
         work_queue+=("$f")
     done < <(find_runtime_mach_o_files)
 
+    local depth=0
     while [ "${#work_queue[@]}" -gt 0 ]; do
-        local next_queue=("__sentinel__")
-        next_queue=()
+        [ "$depth" -lt "$max_depth" ] || break
+        local next_queue=()
         for binary_path in "${work_queue[@]}"; do
             while IFS= read -r ref; do
                 [ -n "$ref" ] || continue
@@ -112,6 +113,7 @@ copy_external_dylib_dependencies() {
                 fi
             done < <(collect_rewrite_references "$binary_path")
         done
+        depth=$((depth + 1))
         [ "${#next_queue[@]}" -gt 0 ] || break
         work_queue=("${next_queue[@]}")
     done

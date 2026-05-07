@@ -219,7 +219,6 @@ function resolveMacRuntimeRoot(env) {
     [
       getEnvValue(env, 'OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT'),
       localRuntimeRoot,
-      inferRuntimeRootFromPath(getEnvValue(env, 'PATH'), 'darwin'),
       ...MAC_FRAMEWORK_ROOTS,
     ],
     'darwin',
