@@ -9,6 +9,7 @@ import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { AlertCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface ExportProviderDialogProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ interface ExportProviderDialogProps {
 }
 
 export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogProps) {
+  const { t } = useTranslation();
   const instances = useProviderInstanceStore((s) => s.instances);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -46,17 +48,17 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
 
   const handleExport = async () => {
     if (exportableInstances.length === 0) {
-      setError('没有可导出的 Provider（需要已启用且已配置凭证）');
+      setError(t('settings.providerErrors.noExportable'));
       return;
     }
 
     if (password.length < 6) {
-      setError('导出密码至少 6 个字符');
+      setError(t('settings.providerErrors.exportPasswordTooShort'));
       return;
     }
 
     if (password !== confirmPassword) {
-      setError('两次输入的密码不一致');
+      setError(t('settings.providerErrors.passwordMismatch'));
       return;
     }
 
@@ -117,14 +119,14 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
       setSuccess(true);
       setTimeout(handleClose, 1500);
     } catch (err) {
-      setError(getErrorMessage(err, '导出失败'));
+      setError(getErrorMessage(err, t('settings.providerErrors.exportFailed')));
     } finally {
       setExporting(false);
     }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="导出 Provider 配置" size="md">
+    <Modal isOpen={isOpen} onClose={handleClose} title={t('settings.provider.exportTitle')} size="md">
       <div className="space-y-4">
         {error && (
           <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
@@ -135,21 +137,21 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
 
         {success && (
           <div className="p-2 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-400">
-            导出成功！
+            {t('settings.provider.exportSuccess')}
           </div>
         )}
 
         {warningInstances.length > 0 && (
           <div className="flex items-start gap-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-400">
             <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-            <span>{warningInstances.length} 个已启用的 Provider 未配置凭证，将不会被导出</span>
+            <span>{t('settings.provider.exportWarning', { count: warningInstances.length })}</span>
           </div>
         )}
 
         {exportableInstances.length > 0 ? (
           <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700 space-y-1.5">
             <p className="text-sm text-zinc-400 mb-2">
-              将导出 {exportableInstances.length} 个已启用的 Provider
+              {t('settings.provider.exportCount', { count: exportableInstances.length })}
             </p>
             {exportableInstances.map((inst) => (
               <ExportProviderRow key={inst.instanceId} instance={inst} />
@@ -157,29 +159,29 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
           </div>
         ) : (
           <p className="text-sm text-zinc-500 text-center py-4">
-            没有可导出的 Provider（需要已启用且已配置凭证）
+            {t('settings.provider.noExportable')}
           </p>
         )}
 
         <Input
-          label="导出密码"
+          label={t('settings.provider.exportPassword')}
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="设置用于加密导出文件的密码（至少 6 位）"
+          placeholder={t('settings.provider.exportPasswordPlaceholder')}
         />
 
         <Input
-          label="确认密码"
+          label={t('settings.provider.confirmPassword')}
           type="password"
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
-          placeholder="再次输入密码"
+          placeholder={t('settings.provider.confirmPasswordPlaceholder')}
         />
 
         <div className="flex gap-2 pt-2">
           <Button variant="ghost" onClick={handleClose} disabled={exporting} className="flex-1">
-            取消
+            {t('common.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -187,7 +189,7 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
             disabled={exporting || success || exportableInstances.length === 0}
             className="flex-1"
           >
-            {exporting ? '导出中...' : success ? '成功' : '导出'}
+            {exporting ? t('settings.provider.exporting') : success ? t('common.success') : t('common.export')}
           </Button>
         </div>
       </div>

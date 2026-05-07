@@ -1,3 +1,5 @@
+import { t } from '@opendirector/core/i18n';
+
 interface StartupShellProps {
   detail: string;
 }
@@ -33,7 +35,7 @@ export function StartupShell({ detail }: StartupShellProps) {
             }}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <p style={{ margin: 0, fontSize: 14, color: '#e4e4e7' }}>正在启动编辑器</p>
+            <p style={{ margin: 0, fontSize: 14, color: '#e4e4e7' }}>{t('app.startup.title')}</p>
             <p style={{ margin: 0, fontSize: 12, color: '#71717a' }}>{detail}</p>
           </div>
         </div>

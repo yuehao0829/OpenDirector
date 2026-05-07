@@ -12,6 +12,7 @@ import { CredentialFormField } from './CredentialFormField';
 import { AssetGroupSelector } from './AssetGroupSelector';
 import { Panel } from '../layout/Panel';
 import { AlertCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface AddProviderDialogProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ interface AddProviderDialogProps {
 }
 
 export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
+  const { t } = useTranslation();
   const addInstance = useProviderInstanceStore((s) => s.addInstance);
   const instances = useProviderInstanceStore((s) => s.instances);
 
@@ -88,12 +90,12 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
     const assetProject = credentials.asset_project?.trim();
 
     if (!ak || !sk || !region) {
-      setError('请先填写 Access Key ID、Secret Access Key 和 Region');
+      setError(t('settings.providerErrors.fillTosBase'));
       return;
     }
     if (!assetEndpoint && !assetProject) {
       // Neither TOS nor Asset filled — nothing to validate
-      setError('请先填写 Asset Endpoint 或 Asset Project');
+      setError(t('settings.providerErrors.fillAssetTarget'));
       return;
     }
 
@@ -109,7 +111,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           ak, sk, tosBucket, tosEndpoint, region,
         );
         if (!result.valid) {
-          setError(`TOS 验证失败: ${result.message}`);
+          setError(t('settings.providerErrors.tosValidationFailed', { message: result.message }));
           return;
         }
       }
@@ -132,7 +134,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           useProviderInstanceStore.getState().instances.length - 1
         ];
         if (!instance) {
-          setError('创建实例失败');
+          setError(t('settings.providerErrors.createInstanceFailed'));
           return;
         }
 
@@ -174,7 +176,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
       );
       setGroups(result.groups);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '刷新 Group 列表失败');
+      setError(err instanceof Error ? err.message : t('settings.providerErrors.refreshGroupsFailed'));
     } finally {
       setValidating(false);
       setLoadingGroups(false);
@@ -183,11 +185,11 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
   const handleSubmit = async () => {
     if (!selectedType) {
-      setError('请选择 Provider 类型');
+      setError(t('settings.providerErrors.chooseType'));
       return;
     }
     if (!displayName.trim()) {
-      setError('请输入显示名称');
+      setError(t('settings.providerErrors.displayNameRequired'));
       return;
     }
 
@@ -210,7 +212,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
     // Validate required credential fields (only non-hidden, common section)
     for (const field of selectedType.credentialFields ?? []) {
       if (field.required && field.type !== 'hidden' && !credentials[field.key]?.trim()) {
-        setError(`请填写 ${field.label}`);
+        setError(t('settings.providerErrors.fillField', { label: field.label }));
         return;
       }
     }
@@ -295,7 +297,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
       } catch (err: unknown) {
         // .enc save failed — remove orphaned instance
         useProviderInstanceStore.getState().removeInstance(instance.instanceId);
-        setError(err instanceof Error ? err.message : '保存凭证失败');
+        setError(err instanceof Error ? err.message : t('settings.providerErrors.saveCredentialsFailed'));
         return;
       }
 
@@ -305,7 +307,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
       resetAndClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '验证失败');
+      setError(err instanceof Error ? err.message : t('settings.providerErrors.validationFailed'));
     } finally {
       setValidating(false);
     }
@@ -353,7 +355,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
   const assetFields = credFields.filter((f) => f.section === 'asset' && f.type !== 'hidden');
 
   return (
-    <Modal isOpen={isOpen} onClose={handleCancel} title="添加 Provider">
+    <Modal isOpen={isOpen} onClose={handleCancel} title={t('settings.provider.addTitle')}>
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         {error && (
           <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
@@ -364,14 +366,14 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
         {/* Vendor selection */}
         <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-300">厂商</label>
+          <label className="text-sm font-medium text-zinc-300">{t('settings.provider.vendor')}</label>
           <select
             value={selectedTypeId}
             onChange={(e) => handleTypeChange(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white text-sm
               focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
-            <option value="" disabled>选择厂商...</option>
+            <option value="" disabled>{t('settings.provider.chooseVendor')}</option>
             {allTypes.map((t) => (
               <option key={t.typeId} value={t.typeId}>
                 {t.name}
@@ -383,10 +385,10 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
         {/* Display name */}
         {selectedType && (
           <Input
-            label="显示名称"
+            label={t('settings.provider.displayName')}
             value={displayName}
             onChange={(e) => { setDisplayName(e.target.value); setError(''); }}
-            placeholder="请输入显示名称"
+            placeholder={t('settings.provider.displayNamePlaceholder')}
           />
         )}
 
@@ -414,7 +416,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
             {/* TOS section */}
             {tosFields.length > 0 && (
-              <Panel title="对象存储 TOS" defaultCollapsed collapsible>
+              <Panel title={t('settings.provider.tosSection')} defaultCollapsed collapsible>
                 <div className="space-y-3">
                   {tosFields.map((field) => (
                     <CredentialFormField
@@ -435,7 +437,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
             {/* Asset section */}
             {assetFields.length > 0 && (
-              <Panel title="素材管理 Asset" defaultCollapsed collapsible>
+              <Panel title={t('settings.provider.assetSection')} defaultCollapsed collapsible>
                 <div className="space-y-3">
                   {assetFields.map((field) => (
                     <CredentialFormField
@@ -475,7 +477,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
         {/* Non-sectioned declarative credential fields (seedance, etc.) */}
         {selectedType && !hasSections && hasDeclarativeFields && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">凭证配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             {credFields.map((field) => (
               <CredentialFormField
                 key={field.key}
@@ -495,7 +497,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
         {/* Per-model config fields */}
         {selectedType && modelFields.length > 0 && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">模型配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.modelConfig')}</h3>
             {selectedType.modelFamilies.flatMap((f) => f.models).map((model) => (
               <div key={model.modelId} className="space-y-2">
                 <p className="text-sm text-zinc-300 font-medium">{model.name}</p>
@@ -524,13 +526,13 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
         {/* Fallback: single API Key when no declarative fields */}
         {selectedType && !hasDeclarativeFields && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">凭证配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             <CredentialFormField
               label="API Key"
               fieldKey="apiKey"
               value={credentials.apiKey ?? ''}
               onChange={handleCredentialChange}
-              placeholder="输入 API Key"
+              placeholder="API Key"
               required
             />
           </div>
@@ -545,7 +547,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           disabled={validating}
           className="flex-1"
         >
-          取消
+          {t('common.cancel')}
         </Button>
         <Button
           variant="primary"
@@ -553,7 +555,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           disabled={validating || !selectedType}
           className="flex-1"
         >
-          {validating ? '验证中...' : pendingInstanceId ? '完成' : '添加'}
+          {validating ? t('common.validating') : pendingInstanceId ? t('common.done') : t('common.add')}
         </Button>
       </div>
     </Modal>

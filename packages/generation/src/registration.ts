@@ -14,10 +14,16 @@ import type {
   IProviderRuntimeRegistry,
   IGenerationService,
 } from '@opendirector/core/types/service-interfaces';
+import { i18n } from '@opendirector/core/i18n';
 import { providerTypeRegistry } from './providers/type-registry';
 import { providerRuntimeRegistry } from './providers/runtime-registry';
-import { submitGenerationTask, refreshActiveGenerations, cancelGenerationTask, restoreProjectGenerations } from './tasks/bridge';
-import './providers';
+import {
+  submitGenerationTask,
+  refreshActiveGenerations,
+  cancelGenerationTask,
+  restoreProjectGenerations,
+} from './tasks/bridge';
+import { registerBuiltinProviderTypes } from './providers';
 
 // providerTypeRegistry satisfies IProviderTypeRegistry — direct assignment
 const typeRegistryAdapter: IProviderTypeRegistry = providerTypeRegistry;
@@ -25,7 +31,8 @@ const typeRegistryAdapter: IProviderTypeRegistry = providerTypeRegistry;
 // providerRuntimeRegistry methods match IProviderRuntimeRegistry — direct bind
 const runtimeRegistryAdapter: IProviderRuntimeRegistry = {
   initializeInstance: providerRuntimeRegistry.initializeInstance.bind(providerRuntimeRegistry),
-  getOrInitializeAssetProvider: providerRuntimeRegistry.getOrInitializeAssetProvider.bind(providerRuntimeRegistry),
+  getOrInitializeAssetProvider:
+    providerRuntimeRegistry.getOrInitializeAssetProvider.bind(providerRuntimeRegistry),
   reinitializeInstance: providerRuntimeRegistry.reinitializeInstance.bind(providerRuntimeRegistry),
   dispose: providerRuntimeRegistry.dispose.bind(providerRuntimeRegistry),
 };
@@ -38,7 +45,12 @@ const generationServiceAdapter: IGenerationService = {
 };
 
 export function registerGenerationServices(): void {
+  registerBuiltinProviderTypes();
   registerProviderTypeRegistry(typeRegistryAdapter);
   registerProviderRuntimeRegistry(runtimeRegistryAdapter);
   registerGenerationService(generationServiceAdapter);
 }
+
+i18n.on('languageChanged', () => {
+  registerBuiltinProviderTypes();
+});

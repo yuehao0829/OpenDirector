@@ -1,22 +1,26 @@
 import { useState } from 'react';
 import { ProviderList } from './ProviderList';
 import { GenerationDefaultsPanel } from './GenerationDefaultsPanel';
+import { GeneralSettingsPanel } from './GeneralSettingsPanel';
 import { EditProviderDialog } from './EditProviderDialog';
 import { ExportProviderDialog } from './ExportProviderDialog';
 import { ImportProviderConfigDialog } from './ImportProviderConfigDialog';
 import type { ProviderInstance } from '@opendirector/core/types/provider-system';
+import { useTranslation } from 'react-i18next';
 
-type SettingsNavItem = 'provider' | 'generation';
+type SettingsNavItem = 'general' | 'provider' | 'generation';
 
 export function ProviderSettingsPanel() {
-  const [activeNav, setActiveNav] = useState<SettingsNavItem>('provider');
+  const { t } = useTranslation();
+  const [activeNav, setActiveNav] = useState<SettingsNavItem>('general');
   const [editingInstance, setEditingInstance] = useState<ProviderInstance | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
 
   const navItems: { key: SettingsNavItem; label: string }[] = [
-    { key: 'provider', label: 'Provider' },
-    { key: 'generation', label: '生成参数' },
+    { key: 'general', label: t('settings.nav.general') },
+    { key: 'provider', label: t('settings.nav.provider') },
+    { key: 'generation', label: t('settings.nav.generation') },
   ];
 
   return (
@@ -42,6 +46,9 @@ export function ProviderSettingsPanel() {
 
       {/* Right content */}
       <div className="flex-1 overflow-y-auto p-6">
+        {activeNav === 'general' && (
+          <GeneralSettingsPanel />
+        )}
         {activeNav === 'provider' && (
           <ProviderList
             onEdit={setEditingInstance}

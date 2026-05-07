@@ -5,6 +5,7 @@ import { Plus, FileOutput, FileInput } from 'lucide-react';
 import { Button } from '../common/Button';
 import { ProviderInstanceCard } from './ProviderInstanceCard';
 import { AddProviderDialog } from './AddProviderDialog';
+import { useTranslation } from 'react-i18next';
 
 interface ProviderListProps {
   onEdit: (instance: ProviderInstance) => void;
@@ -13,6 +14,7 @@ interface ProviderListProps {
 }
 
 export function ProviderList({ onEdit, onExport, onImport }: ProviderListProps) {
+  const { t } = useTranslation();
   const instances = useProviderInstanceStore((s) => s.instances);
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -21,27 +23,27 @@ export function ProviderList({ onEdit, onExport, onImport }: ProviderListProps) 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-zinc-300">Provider 列表</h3>
+        <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.listTitle')}</h3>
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={onExport}>
             <FileOutput size={14} className="mr-1" />
-            导出
+            {t('common.export')}
           </Button>
           <Button variant="ghost" size="sm" onClick={onImport}>
             <FileInput size={14} className="mr-1" />
-            导入
+            {t('common.import')}
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setShowAddDialog(true)}>
             <Plus size={14} className="mr-1" />
-            添加
+            {t('common.add')}
           </Button>
         </div>
       </div>
 
       {sortedInstances.length === 0 ? (
         <div className="text-center py-8 text-zinc-500 text-sm">
-          <p>暂无已配置的 Provider</p>
-          <p className="mt-1 text-xs">点击"添加"按钮配置一个 Provider</p>
+          <p>{t('settings.provider.emptyTitle')}</p>
+          <p className="mt-1 text-xs">{t('settings.provider.emptyHint')}</p>
         </div>
       ) : (
         <div className="space-y-2">

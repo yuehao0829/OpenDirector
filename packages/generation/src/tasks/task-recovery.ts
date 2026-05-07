@@ -14,6 +14,7 @@ import type { PendingGenerationTask, TaskStatusResult } from '@opendirector/core
 import type { Generation } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import type { ProviderInstance } from '@opendirector/core/types/provider-system';
+import { t } from '@opendirector/core/i18n';
 import { getErrorMessage } from '@opendirector/core/utils/common';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
 import { generateId } from '@opendirector/core/utils/id';
@@ -95,7 +96,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
       for (const record of staleRecords) {
         const idx = generationsFile.generations.findIndex((g) => g.id === record.id);
         if (idx < 0) continue;
-        const errorMsg = '未配置生成服务，无法检查任务状态';
+        const errorMsg = t('generation.task.serviceNotConfigured');
         generationsFile.generations[idx] = {
           ...generationsFile.generations[idx],
           status: 'failed',
@@ -120,7 +121,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
         if (idx < 0) continue;
 
         if (!record.providerTaskId) {
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', '任务缺少服务端ID，无法恢复');
+          markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.missingServerId'));
           continue;
         }
 
@@ -142,14 +143,14 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
             generationsFile.generations[idx] = updatedRecord;
           } catch (error) {
             taskLog.error(folderPath, 'restore_error', 'Failed to restore succeeded task', { taskId: record.id, error: getErrorMessage(error) });
-            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', `恢复已完成任务失败: ${getErrorMessage(error)}`);
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.restoreSucceededFailed', { message: getErrorMessage(error) }));
           }
         } else if (serverStatus === 'cancelled') {
           markRecordTerminal(generationsFile, idx, storeUpdates, 'cancelled');
         } else if (serverStatus === 'expired') {
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'expired', '生成结果已过期');
+          markRecordTerminal(generationsFile, idx, storeUpdates, 'expired', t('generation.task.resultExpired'));
         } else {
-          const errorMsg = serverStatus === 'failed' ? '生成任务在服务器端失败' : '任务在重启后丢失';
+          const errorMsg = serverStatus === 'failed' ? t('generation.task.serverFailed') : t('generation.task.lostAfterRestart');
           markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', errorMsg);
         }
       }
@@ -400,7 +401,7 @@ export async function refreshActiveGenerations(): Promise<void> {
     } else if (serverStatus === 'failed') {
       const error = serverResult.error
         ? (typeof serverResult.error === 'string' ? serverResult.error : JSON.stringify(serverResult.error))
-        : '生成任务在服务器端失败';
+        : t('generation.task.serverFailed');
       if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
       const written = await failGeneration(gen.id, error, folderPath);
       if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
@@ -409,7 +410,7 @@ export async function refreshActiveGenerations(): Promise<void> {
       const written = await cancelGeneration(gen.id, folderPath);
       if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
     } else if (serverStatus === 'expired') {
-      const error = '生成结果已过期';
+      const error = t('generation.task.resultExpired');
       if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
       const written = await expireGeneration(gen.id, error, folderPath);
       if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
@@ -447,7 +448,7 @@ async function refreshSucceededTaskFromServer(
     });
   } catch (err) {
     taskLog.error(folderPath, 'refresh_download_error', 'Failed to download/complete task', { taskId: gen.id, error: getErrorMessage(err) });
-    const errorMsg = `恢复已完成任务失败: ${getErrorMessage(err)}`;
+    const errorMsg = t('generation.task.restoreSucceededFailed', { message: getErrorMessage(err) });
     await failGeneration(gen.id, errorMsg, folderPath);
   }
 }

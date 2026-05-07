@@ -6,7 +6,12 @@ export * from './runtime-registry';
 
 // Register built-in provider types on import
 import { providerTypeRegistry } from './type-registry';
-import { seedanceTypeDefinition, volcengineTosTypeDefinition } from './builtin-types/seedance-type';
+import {
+  createSeedanceTypeDefinition,
+  createVolcengineTosTypeDefinition,
+} from './builtin-types/seedance-type';
 
-providerTypeRegistry.registerBuiltin(seedanceTypeDefinition);
-providerTypeRegistry.registerBuiltin(volcengineTosTypeDefinition);
+export function registerBuiltinProviderTypes(): void {
+  providerTypeRegistry.registerBuiltin(createSeedanceTypeDefinition());
+  providerTypeRegistry.registerBuiltin(createVolcengineTosTypeDefinition());
+}

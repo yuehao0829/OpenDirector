@@ -11,6 +11,7 @@ import { Button } from '../common/Button';
 import { CredentialFormField } from './CredentialFormField';
 import { AssetGroupSelector } from './AssetGroupSelector';
 import { Panel } from '../layout/Panel';
+import { useTranslation } from 'react-i18next';
 
 interface EditProviderDialogProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ interface EditProviderDialogProps {
 }
 
 export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDialogProps) {
+  const { t } = useTranslation();
   const updateInstance = useProviderInstanceStore((s) => s.updateInstance);
   const [displayName, setDisplayName] = useState('');
   const [credentials, setCredentials] = useState<Record<string, string>>({});
@@ -104,14 +106,14 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
   const handleSubmit = async () => {
     if (!instance) return;
     if (!displayName.trim()) {
-      setError('请输入显示名称');
+      setError(t('settings.providerErrors.displayNameRequired'));
       return;
     }
 
     // Validate required credential fields (skip hidden fields, skip if stored in .enc)
     for (const field of typeDef?.credentialFields ?? []) {
       if (field.required && field.type !== 'hidden' && !credentials[field.key]?.trim() && !originalConfig[field.key]?.trim() && !hasEncPassword) {
-        setError(`请填写 ${field.label}`);
+        setError(t('settings.providerErrors.fillField', { label: field.label }));
         return;
       }
     }
@@ -228,7 +230,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
 
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '保存凭证失败');
+      setError(err instanceof Error ? err.message : t('settings.providerErrors.saveCredentialsFailed'));
     } finally {
       setValidating(false);
     }
@@ -253,7 +255,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
   const assetFields = credFields.filter((f) => f.section === 'asset' && f.type !== 'hidden');
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="编辑 Provider">
+    <Modal isOpen={isOpen} onClose={handleClose} title={t('settings.provider.editTitle')}>
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         {error && (
           <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
@@ -262,10 +264,10 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         )}
 
         <Input
-          label="显示名称"
+          label={t('settings.provider.displayName')}
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="Provider 显示名称"
+          placeholder={t('settings.provider.providerDisplayNamePlaceholder')}
         />
 
         {/* Sectioned credential fields (volcengine) */}
@@ -294,7 +296,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
 
             {/* TOS section */}
             {tosFields.length > 0 && (
-              <Panel title="对象存储 TOS" defaultCollapsed collapsible>
+              <Panel title={t('settings.provider.tosSection')} defaultCollapsed collapsible>
                 <div className="space-y-3">
                   {tosFields.map((field) => (
                     <CredentialFormField
@@ -317,7 +319,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
 
             {/* Asset section */}
             {assetFields.length > 0 && (
-              <Panel title="素材管理 Asset" defaultCollapsed collapsible>
+              <Panel title={t('settings.provider.assetSection')} defaultCollapsed collapsible>
                 <div className="space-y-3">
                   {assetFields.map((field) => (
                     <CredentialFormField
@@ -358,7 +360,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         {/* Non-sectioned declarative credential fields */}
         {!hasSections && hasDeclarativeFields && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">凭证配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             {credFields.map((field) => (
               <CredentialFormField
                 key={field.key}
@@ -380,7 +382,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         {/* Per-model config fields */}
         {modelFields.length > 0 && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">模型配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.modelConfig')}</h3>
             {typeDef.modelFamilies.flatMap((f) => f.models).map((model) => (
               <div key={model.modelId} className="space-y-2">
                 <p className="text-sm text-zinc-300 font-medium">{model.name}</p>
@@ -409,7 +411,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         {/* Fallback: single API Key when no declarative fields */}
         {!hasDeclarativeFields && (
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">凭证配置</h3>
+            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             <CredentialFormField
               label="API Key"
               fieldKey="apiKey"
@@ -417,7 +419,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
               onChange={handleCredentialChange}
               masked
               configured={hasEncPassword}
-              placeholder="输入 API Key"
+              placeholder="API Key"
               required
             />
           </div>
@@ -427,10 +429,10 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
       {/* Buttons — always visible, outside scroll area */}
       <div className="flex gap-2 pt-4 mt-2 border-t border-zinc-700">
         <Button variant="ghost" onClick={handleClose} disabled={validating} className="flex-1">
-          取消
+          {t('common.cancel')}
         </Button>
         <Button variant="primary" onClick={handleSubmit} disabled={validating} className="flex-1">
-          {validating ? '验证中...' : '保存'}
+          {validating ? t('common.validating') : t('common.save')}
         </Button>
       </div>
     </Modal>

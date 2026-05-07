@@ -14,6 +14,7 @@ import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { SeedanceContentItem } from '@opendirector/core/types/ai-video';
 import type { Generation, GenerationParams } from '@opendirector/core/types/generation';
 import type { SubmitGenerationOptions } from '@opendirector/core/types/service-interfaces';
+import { t } from '@opendirector/core/i18n';
 import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
 import { generateId } from '@opendirector/core/utils/id';
 import { seedanceTypeDefinition } from '../providers/builtin-types/seedance-type';
@@ -202,7 +203,7 @@ export async function submitGenerationTask(
       const firstFrameImageIndex = imageItemsBefore + 1;
       const promptItem = content.find((c) => c.type === 'text');
       if (promptItem && promptItem.text) {
-        promptItem.text += `\n[图片${firstFrameImageIndex}]为首帧`;
+        promptItem.text += `\n${t('generation.prompt.firstFrameHint', { index: firstFrameImageIndex })}`;
       }
       useGenerationStore.getState().updateGeneration(taskId, {
         firstFrameAsReference: true,
@@ -243,10 +244,10 @@ export async function submitGenerationTask(
             index: i,
             error: String(err),
           });
-          const typeLabel = item.type === 'video_url' ? '视频'
-            : item.type === 'audio_url' ? '音频'
-            : '图片';
-          const errorMsg = `${typeLabel}参考资源上传失败，请检查云存储(TOS)配置`;
+          const typeLabel = item.type === 'video_url' ? t('common.video')
+            : item.type === 'audio_url' ? t('common.audio')
+            : t('common.image');
+          const errorMsg = t('generation.task.uploadFailed', { type: typeLabel });
           await failGeneration(taskId, errorMsg, folderPath);
           resetFragmentIfGenerating(fragmentId, 'draft');
           return taskId;
@@ -258,7 +259,7 @@ export async function submitGenerationTask(
       if (item.type === 'video_url') {
         const url = item.video_url?.url ?? '';
         if (!isRemoteUrl(url)) {
-          const errorMsg = '视频参考资源需要配置云存储 (TOS)，请在设置中添加素材存储 Provider';
+          const errorMsg = t('generation.task.videoReferenceNeedsStorage');
           await failGeneration(taskId, errorMsg, folderPath);
           resetFragmentIfGenerating(fragmentId, 'draft');
           return taskId;

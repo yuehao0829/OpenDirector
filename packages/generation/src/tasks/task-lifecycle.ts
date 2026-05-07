@@ -12,6 +12,7 @@ import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { Generation } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
+import { t } from '@opendirector/core/i18n';
 import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
 import { generateId } from '@opendirector/core/utils/id';
@@ -554,8 +555,8 @@ async function persistLastFrame(
 
     // Create an independent image generation record for the last-frame card
     const segmentLabel = parentGen.continuousMode && parentGen.currentSegmentIndex != null
-      ? `段${parentGen.currentSegmentIndex + 1}尾帧`
-      : '尾帧';
+      ? t('generation.task.segmentLastFrame', { index: parentGen.currentSegmentIndex + 1 })
+      : t('generation.task.lastFrame');
     const lastFrameGen: Generation = {
       ...parentGen,
       id: imageId,

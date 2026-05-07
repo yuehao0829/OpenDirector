@@ -9,6 +9,7 @@ import { Modal } from '@opendirector/ui/components/common/Modal';
 import { Button } from '@opendirector/ui/components/common/Button';
 import { useWindowCloseHandler } from '@opendirector/ui/hooks/useWindowCloseHandler';
 import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useTranslation } from 'react-i18next';
 
 declare global {
   interface Window {
@@ -54,6 +55,7 @@ function GenerationPanel({ ready, loadingLabel, initLabel, className, children }
 }
 
 function App() {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<'video' | 'audio'>('video');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [generationReady, setGenerationReady] = useState(false);
@@ -106,13 +108,14 @@ function App() {
   }, []);
 
   const titleBarMenuActions = useMemo<MenuAction[]>(() => [
-    { icon: 'new', label: '新建工程', action: handleCreateProject, errorLabel: '新建工程失败' },
-    { icon: 'open', label: '打开工程', action: openProjectDialog, errorLabel: '打开工程失败' },
-    { icon: 'save', label: '保存工程', action: saveProject, errorLabel: '保存工程失败' },
-    { icon: 'export', label: '导出成片', action: exportTimelineRender, errorLabel: '导出成片失败', dividerBefore: true },
-    { icon: 'export', label: '导出 XML（Premiere 兼容）', action: exportXmeml, errorLabel: '导出 XML 失败' },
-    { icon: 'import', label: '导入 XML', action: importXmeml, errorLabel: '导入 XML 失败' },
+    { icon: 'new', label: t('app.menu.newProject'), action: handleCreateProject, errorLabel: t('app.menu.newProjectFailed') },
+    { icon: 'open', label: t('app.menu.openProject'), action: openProjectDialog, errorLabel: t('app.menu.openProjectFailed') },
+    { icon: 'save', label: t('app.menu.saveProject'), action: saveProject, errorLabel: t('app.menu.saveProjectFailed') },
+    { icon: 'export', label: t('app.menu.exportRender'), action: exportTimelineRender, errorLabel: t('app.menu.exportRenderFailed'), dividerBefore: true },
+    { icon: 'export', label: t('app.menu.exportXml'), action: exportXmeml, errorLabel: t('app.menu.exportXmlFailed') },
+    { icon: 'import', label: t('app.menu.importXml'), action: importXmeml, errorLabel: t('app.menu.importXmlFailed') },
   ], [
+    t,
     handleCreateProject,
     openProjectDialog,
     saveProject,
@@ -294,13 +297,13 @@ function App() {
             className="border-r border-zinc-800 flex flex-col overflow-hidden bg-zinc-900"
             style={{ width: assetsWidth }}
           >
-            <GenerationPanel ready={generationReady} loadingLabel="加载资源面板..." initLabel="初始化资源能力..." className="bg-zinc-900">
+            <GenerationPanel ready={generationReady} loadingLabel={t('app.fallback.loadingAssets')} initLabel={t('app.fallback.initializingAssets')} className="bg-zinc-900">
               <LazyAssetPanel />
             </GenerationPanel>
           </div>
           <Resizer direction="horizontal" onResize={handleAssetsResize} />
           <div className="flex-1 flex flex-col overflow-hidden" style={{ minWidth: MIN_PREVIEW_WIDTH }}>
-            <Suspense fallback={<PanelFallback label="加载预览面板..." className="bg-black" />}>
+            <Suspense fallback={<PanelFallback label={t('app.fallback.loadingPreview')} className="bg-black" />}>
               <LazyPreviewPanel />
             </Suspense>
           </div>
@@ -316,7 +319,7 @@ function App() {
           className="border-l border-zinc-800 flex flex-col overflow-hidden bg-zinc-900"
           style={{ gridColumn: '3', gridRow: inspectorExpanded ? '1 / -1' : '1' }}
         >
-          <GenerationPanel ready={generationReady} loadingLabel="加载检查器..." initLabel="初始化生成功能..." className="bg-zinc-900">
+          <GenerationPanel ready={generationReady} loadingLabel={t('app.fallback.loadingInspector')} initLabel={t('app.fallback.initializingGeneration')} className="bg-zinc-900">
             <LazyInspectorPanel />
           </GenerationPanel>
         </div>
@@ -331,48 +334,48 @@ function App() {
           className="flex flex-col overflow-hidden bg-zinc-950"
           style={{ gridColumn: inspectorExpanded ? '1' : '1 / -1', gridRow: '3' }}
         >
-          <Suspense fallback={<PanelFallback label="加载时间线..." className="bg-zinc-950" />}>
+          <Suspense fallback={<PanelFallback label={t('app.fallback.loadingTimeline')} className="bg-zinc-950" />}>
             <LazyTimelineCanvas />
           </Suspense>
         </div>
       </div>
 
       {/* Close confirmation modal */}
-      <Modal isOpen={showCloseConfirm} onClose={handleCloseCancel} title="未保存的更改">
+      <Modal isOpen={showCloseConfirm} onClose={handleCloseCancel} title={t('app.modal.unsavedTitle')}>
         <p className="text-sm text-zinc-300 mb-6">
-          当前项目有未保存的更改。关闭前是否保存？
+          {t('app.modal.unsavedCloseMessage')}
         </p>
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={handleDiscardAndClose}>
-            不保存
+            {t('app.modal.discard')}
           </Button>
           <Button variant="primary" onClick={handleSaveAndClose}>
-            保存
+            {t('common.save')}
           </Button>
         </div>
       </Modal>
 
       {/* New project confirmation modal */}
-      <Modal isOpen={showNewProjectConfirm} onClose={handleNewProjectCancel} title="新建工程">
+      <Modal isOpen={showNewProjectConfirm} onClose={handleNewProjectCancel} title={t('app.menu.newProject')}>
         <p className="text-sm text-zinc-300 mb-6">
-          当前项目有未保存的更改。是否保存后再新建？
+          {t('app.modal.unsavedNewProjectMessage')}
         </p>
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={handleNewProjectCancel}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button variant="ghost" onClick={handleNewProjectDiscard}>
-            不保存
+            {t('app.modal.discard')}
           </Button>
           <Button variant="primary" onClick={handleNewProjectSave}>
-            保存
+            {t('common.save')}
           </Button>
         </div>
       </Modal>
 
       {/* Settings Modal */}
-      <Modal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} title="设置" size="lg">
-        <GenerationPanel ready={generationReady} loadingLabel="加载设置..." initLabel="初始化设置..." className="min-h-[24rem]">
+      <Modal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} title={t('app.modal.settings')} size="lg">
+        <GenerationPanel ready={generationReady} loadingLabel={t('app.fallback.loadingSettings')} initLabel={t('app.fallback.initializingSettings')} className="min-h-[24rem]">
           <LazyProviderSettingsPanel />
         </GenerationPanel>
       </Modal>

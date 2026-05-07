@@ -10,6 +10,7 @@ import type { Asset, Reference } from './asset';
 import { getEffectiveImageRole } from './asset';
 import { getProviderTypeRegistry } from '../services/service-locator';
 import { computeVisibleCropSize } from '../utils/crop';
+import { t as translate } from '../i18n';
 
 // ── Constraint Indicator Types ──
 
@@ -179,10 +180,10 @@ export function validateInputRequirements(
 
   // Prompt checks
   if (requirements.promptRequired && !prompt) {
-    errors.push('提示词不能为空');
+    errors.push(translate('generation.validation.promptRequired'));
   }
   if (requirements.maxPromptLength && prompt.length > requirements.maxPromptLength) {
-    errors.push(`提示词长度超出限制: ${prompt.length} > ${requirements.maxPromptLength}`);
+    errors.push(translate('generation.validation.promptTooLong', { actual: prompt.length, max: requirements.maxPromptLength }));
   }
 
   // Prompt suggestion checks (warnings, not blocking)
@@ -212,20 +213,20 @@ export function validateInputRequirements(
     if (typeof constraint !== 'object' || constraint === null) continue;
     const count = typeCounts[refType] ?? 0;
     if (constraint.required && count === 0) {
-      errors.push(`需要至少一个${refType}参考素材`);
+      errors.push(translate('generation.validation.needReference', { type: refType }));
     }
     if (constraint.min !== undefined && count < constraint.min) {
-      errors.push(`${refType}参考素材数量不足: ${count} < ${constraint.min}`);
+      errors.push(translate('generation.validation.referenceCountTooLow', { type: refType, count, min: constraint.min }));
     }
     if (constraint.max !== undefined && count > constraint.max) {
-      errors.push(`${refType}参考素材数量超出限制: ${count} > ${constraint.max}`);
+      errors.push(translate('generation.validation.referenceCountTooHigh', { type: refType, count, max: constraint.max }));
     }
   }
 
   // Total reference count check
   if (requirements.references.maxTotal !== undefined) {
     if (references.length > requirements.references.maxTotal) {
-      errors.push(`参考素材总数超出限制: ${references.length} > ${requirements.references.maxTotal}`);
+      errors.push(translate('generation.validation.totalReferencesTooHigh', { count: references.length, max: requirements.references.maxTotal }));
     }
   }
 
@@ -255,7 +256,7 @@ export function validateInputRequirements(
     if (vidConstraints?.maxTotalDuration) {
       const totalDurationSec = totalVideoDurationMs / 1000;
       if (totalDurationSec > vidConstraints.maxTotalDuration) {
-        errors.push(`参考视频总时长超出限制: ${totalDurationSec.toFixed(1)}s > ${vidConstraints.maxTotalDuration}s`);
+        errors.push(translate('generation.validation.totalVideoDurationTooHigh', { actual: totalDurationSec.toFixed(1), max: vidConstraints.maxTotalDuration }));
       }
     }
 
@@ -263,12 +264,15 @@ export function validateInputRequirements(
     if (audioConstraints?.maxTotalDuration) {
       const totalDurationSec = totalAudioDurationMs / 1000;
       if (totalDurationSec > audioConstraints.maxTotalDuration) {
-        errors.push(`参考音频总时长超出限制: ${totalDurationSec.toFixed(1)}s > ${audioConstraints.maxTotalDuration}s`);
+        errors.push(translate('generation.validation.totalAudioDurationTooHigh', { actual: totalDurationSec.toFixed(1), max: audioConstraints.maxTotalDuration }));
       }
     }
 
     if (totalRefSize > MAX_TOTAL_REFERENCE_SIZE) {
-      warnings.push(`参考素材总体积超限: ${(totalRefSize / 1024 / 1024).toFixed(1)}MB > ${MAX_TOTAL_REFERENCE_SIZE / 1024 / 1024}MB，将从最大文件开始压缩`);
+      warnings.push(translate('generation.validation.totalReferenceSizeTooHigh', {
+        actual: (totalRefSize / 1024 / 1024).toFixed(1),
+        max: MAX_TOTAL_REFERENCE_SIZE / 1024 / 1024,
+      }));
     }
   }
 
@@ -298,16 +302,16 @@ export function validateInputRequirements(
     }
 
     if ((firstFrameCount > 0 || lastFrameCount > 0) && refImageCount > 0) {
-      errors.push('首帧/尾帧与参考图不能同时使用');
+      errors.push(translate('generation.validation.imageRoleConflict'));
     }
     if (lastFrameCount > 0 && firstFrameCount === 0) {
-      errors.push('指定尾帧需要先指定首帧图片');
+      errors.push(translate('generation.validation.lastFrameNeedsFirstFrame'));
     }
     if (firstFrameCount > 1) {
-      errors.push('只能指定一张首帧图片');
+      errors.push(translate('generation.validation.oneFirstFrameOnly'));
     }
     if (lastFrameCount > 1) {
-      errors.push('只能指定一张尾帧图片');
+      errors.push(translate('generation.validation.oneLastFrameOnly'));
     }
   }
 
@@ -329,7 +333,7 @@ function classifyMediaConstraints(
     if (asset.mimeType && !c.allowedFormats.includes(asset.mimeType)) {
       violations.push({
         kind: 'format',
-        message: `「${label}」格式不支持: ${asset.mimeType}，需要: ${c.allowedFormats.join('、')}`,
+        message: translate('generation.validation.formatUnsupported', { label, actual: asset.mimeType, expected: c.allowedFormats.join(', ') }),
         autoFixable: true,
       });
     }
@@ -339,14 +343,14 @@ function classifyMediaConstraints(
     if (asset.width < c.widthRange.min) {
       violations.push({
         kind: 'width',
-        message: `「${label}」宽度过小: ${asset.width}px < ${c.widthRange.min}px`,
+        message: translate('generation.validation.widthTooSmall', { label, actual: asset.width, min: c.widthRange.min }),
         autoFixable: false, // Cannot upscale reliably
       });
     }
     if (asset.width > c.widthRange.max) {
       violations.push({
         kind: 'width',
-        message: `「${label}」宽度过大: ${asset.width}px > ${c.widthRange.max}px`,
+        message: translate('generation.validation.widthTooLarge', { label, actual: asset.width, max: c.widthRange.max }),
         autoFixable: true,
       });
     }
@@ -356,14 +360,14 @@ function classifyMediaConstraints(
     if (asset.height < c.heightRange.min) {
       violations.push({
         kind: 'height',
-        message: `「${label}」高度过小: ${asset.height}px < ${c.heightRange.min}px`,
+        message: translate('generation.validation.heightTooSmall', { label, actual: asset.height, min: c.heightRange.min }),
         autoFixable: false,
       });
     }
     if (asset.height > c.heightRange.max) {
       violations.push({
         kind: 'height',
-        message: `「${label}」高度过大: ${asset.height}px > ${c.heightRange.max}px`,
+        message: translate('generation.validation.heightTooLarge', { label, actual: asset.height, max: c.heightRange.max }),
         autoFixable: true,
       });
     }
@@ -374,14 +378,14 @@ function classifyMediaConstraints(
     if (ratio < c.aspectRatioRange.min) {
       violations.push({
         kind: 'aspect_ratio',
-        message: `「${label}」宽高比过小: ${ratio.toFixed(2)} < ${c.aspectRatioRange.min}，建议裁剪或调整`,
+        message: translate('generation.validation.aspectRatioTooSmall', { label, actual: ratio.toFixed(2), min: c.aspectRatioRange.min }),
         autoFixable: false,
       });
     }
     if (ratio > c.aspectRatioRange.max) {
       violations.push({
         kind: 'aspect_ratio',
-        message: `「${label}」宽高比过大: ${ratio.toFixed(2)} > ${c.aspectRatioRange.max}，建议裁剪或调整`,
+        message: translate('generation.validation.aspectRatioTooLarge', { label, actual: ratio.toFixed(2), max: c.aspectRatioRange.max }),
         autoFixable: false,
       });
     }
@@ -391,7 +395,11 @@ function classifyMediaConstraints(
     if (asset.fileSize > c.maxFileSize) {
       violations.push({
         kind: 'size',
-        message: `「${label}」文件过大: ${(asset.fileSize / 1024 / 1024).toFixed(1)}MB > ${(c.maxFileSize / 1024 / 1024).toFixed(0)}MB，建议压缩`,
+        message: translate('generation.validation.fileTooLarge', {
+          label,
+          actual: (asset.fileSize / 1024 / 1024).toFixed(1),
+          max: (c.maxFileSize / 1024 / 1024).toFixed(0),
+        }),
         autoFixable: true,
       });
     }
@@ -404,14 +412,14 @@ function classifyMediaConstraints(
     if (durationSec < vc.durationRange.min) {
       violations.push({
         kind: 'duration',
-        message: `「${label}」时长过短: ${durationSec.toFixed(1)}s < ${vc.durationRange.min}s`,
+        message: translate('generation.validation.durationTooShort', { label, actual: durationSec.toFixed(1), min: vc.durationRange.min }),
         autoFixable: false,
       });
     }
     if (durationSec > vc.durationRange.max) {
       violations.push({
         kind: 'duration',
-        message: `「${label}」时长过长: ${durationSec.toFixed(1)}s > ${vc.durationRange.max}s`,
+        message: translate('generation.validation.durationTooLong', { label, actual: durationSec.toFixed(1), max: vc.durationRange.max }),
         autoFixable: false,
       });
     }
@@ -422,14 +430,14 @@ function classifyMediaConstraints(
     if (pixels < vc.pixelCountRange.min) {
       violations.push({
         kind: 'pixel',
-        message: `「${label}」画面像素不足: ${pixels} < ${vc.pixelCountRange.min}，建议调整分辨率`,
+        message: translate('generation.validation.pixelsTooFew', { label, actual: pixels, min: vc.pixelCountRange.min }),
         autoFixable: false,
       });
     }
     if (pixels > vc.pixelCountRange.max) {
       violations.push({
         kind: 'pixel',
-        message: `「${label}」画面像素过多: ${pixels} > ${vc.pixelCountRange.max}，建议调整分辨率`,
+        message: translate('generation.validation.pixelsTooMany', { label, actual: pixels, max: vc.pixelCountRange.max }),
         autoFixable: true,
       });
     }
@@ -439,14 +447,14 @@ function classifyMediaConstraints(
     if (asset.fps < vc.fpsRange.min) {
       violations.push({
         kind: 'fps',
-        message: `「${label}」帧率过低: ${asset.fps}fps < ${vc.fpsRange.min}fps`,
+        message: translate('generation.validation.fpsTooLow', { label, actual: asset.fps, min: vc.fpsRange.min }),
         autoFixable: false,
       });
     }
     if (asset.fps > vc.fpsRange.max) {
       violations.push({
         kind: 'fps',
-        message: `「${label}」帧率过高: ${asset.fps}fps > ${vc.fpsRange.max}fps`,
+        message: translate('generation.validation.fpsTooHigh', { label, actual: asset.fps, max: vc.fpsRange.max }),
         autoFixable: true,
       });
     }
@@ -545,12 +553,12 @@ function violationToIndicatorType(kind: ConstraintViolation['kind']): Constraint
 
 function indicatorLabel(type: ConstraintIndicatorType, severity: 'error' | 'warning'): string {
   switch (type) {
-    case 'size_over_limit': return severity === 'error' ? '体积超限' : '体积超限，将自动压缩';
-    case 'aspect_ratio_over_limit': return '宽高比超限，需手动裁剪';
-    case 'pixel_over_limit': return severity === 'error' ? '像素过少' : '像素过多，将自动缩放';
-    case 'fps_over_limit': return severity === 'error' ? '帧率过低' : '帧率过高，将自动调整';
-    case 'format_not_supported': return severity === 'error' ? '格式不支持' : '格式不支持，将自动转码';
-    case 'duration_over_limit': return '时长超限，需手动截取';
+    case 'size_over_limit': return severity === 'error' ? translate('generation.indicator.sizeError') : translate('generation.indicator.sizeWarning');
+    case 'aspect_ratio_over_limit': return translate('generation.indicator.aspectRatio');
+    case 'pixel_over_limit': return severity === 'error' ? translate('generation.indicator.pixelError') : translate('generation.indicator.pixelWarning');
+    case 'fps_over_limit': return severity === 'error' ? translate('generation.indicator.fpsError') : translate('generation.indicator.fpsWarning');
+    case 'format_not_supported': return severity === 'error' ? translate('generation.indicator.formatError') : translate('generation.indicator.formatWarning');
+    case 'duration_over_limit': return translate('generation.indicator.duration');
   }
 }
 

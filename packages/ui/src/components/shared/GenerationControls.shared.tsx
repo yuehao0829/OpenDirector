@@ -6,12 +6,12 @@ export type ToggleKey = 'enableAudio' | 'enableMusic' | 'enableSubtitle' | 'enab
 export interface ToggleDefinition {
   key: ToggleKey;
   icon: ReactNode;
-  label: string;
+  labelKey: string;
 }
 
 export const TOGGLE_DEFS: ToggleDefinition[] = [
-  { key: 'enableAudio', icon: <Volume2 size={14} />, label: '音频' },
-  { key: 'enableMusic', icon: <Music size={14} />, label: '音乐' },
-  { key: 'enableSubtitle', icon: <Subtitles size={14} />, label: '字幕' },
-  { key: 'enableWatermark', icon: <Stamp size={14} />, label: '水印' },
+  { key: 'enableAudio', icon: <Volume2 size={14} />, labelKey: 'generation.toggle.audio' },
+  { key: 'enableMusic', icon: <Music size={14} />, labelKey: 'generation.toggle.music' },
+  { key: 'enableSubtitle', icon: <Subtitles size={14} />, labelKey: 'generation.toggle.subtitle' },
+  { key: 'enableWatermark', icon: <Stamp size={14} />, labelKey: 'generation.toggle.watermark' },
 ];

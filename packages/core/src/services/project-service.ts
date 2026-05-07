@@ -13,14 +13,28 @@ import { Project } from '../types/project';
 import { AutosaveTrigger } from '../types/persistence';
 import { getPlatformAdapter } from '../adapters';
 import type { FileSystemAdapter } from '../adapters';
-import { loadProjectFiles, saveProjectFiles, renameProjectFile, createProjectStructure } from './project-io';
-import { DEFAULT_PROJECT_SETTINGS, DEFAULT_FPS, DEFAULT_PROVIDER, DEFAULT_ASPECT_RATIO } from '../constants';
+import {
+  loadProjectFiles,
+  saveProjectFiles,
+  renameProjectFile,
+  createProjectStructure,
+} from './project-io';
+import {
+  DEFAULT_PROJECT_SETTINGS,
+  DEFAULT_FPS,
+  DEFAULT_PROVIDER,
+  DEFAULT_ASPECT_RATIO,
+} from '../constants';
 import { exportOtioToFile, importOtioFromFile } from './otio-io';
 import { exportXgesToFile, importXgesFromFile } from './xges-io';
 import { exportXmemlToFile, importXmeml } from './xmeml-io';
 import { deleteAssetFiles } from './asset-import';
 import { cleanupOrphanFiles } from './project-cleanup';
-import { hydrateNewProject, hydrateLoadedProject, hydrateImportedProject } from './project-hydration';
+import {
+  hydrateNewProject,
+  hydrateLoadedProject,
+  hydrateImportedProject,
+} from './project-hydration';
 import {
   buildImportedProjectFromTimelineData,
   hydrateImportedProjectAssetMetadata,
@@ -43,6 +57,7 @@ import { mapAssetSnapshots, setSavedSnapshot } from '../stores/undoManager';
 import { getTempDir } from '../utils/temp-path';
 import { generateId } from '../utils/id';
 import { useProjectStore, getProjectOpenCallbacks } from '../stores/projectStore';
+import { t } from '../i18n';
 
 // ============================================================================
 // Helpers
@@ -52,7 +67,11 @@ function stripOdpSuffix(name: string): string {
   return name.toLowerCase().endsWith('.odp') ? name.slice(0, -4) : name;
 }
 
-function parseSavePath(savePath: string): { folderPath: string; fileName: string; baseName: string } {
+function parseSavePath(savePath: string): {
+  folderPath: string;
+  fileName: string;
+  baseName: string;
+} {
   const lastSep = Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\'));
   const chosenFileName = savePath.substring(lastSep + 1);
   const fileName = chosenFileName.toLowerCase().endsWith('.odp')
@@ -63,17 +82,19 @@ function parseSavePath(savePath: string): { folderPath: string; fileName: string
 }
 
 function sanitizeProjectName(name: string): string {
-  return name
-    .trim()
-    // Remove illegal characters for Windows/macOS/Linux file names
-    // eslint-disable-next-line no-control-regex
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
-    // Remove leading/trailing dots and spaces
-    .replace(/^[.\s]+|[.\s]+$/g, '')
-    // Collapse consecutive dots (prevent hidden files on Unix)
-    .replace(/\.{2,}/g, '.')
+  return (
+    name
+      .trim()
+      // Remove illegal characters for Windows/macOS/Linux file names
+      // eslint-disable-next-line no-control-regex
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+      // Remove leading/trailing dots and spaces
+      .replace(/^[.\s]+|[.\s]+$/g, '')
+      // Collapse consecutive dots (prevent hidden files on Unix)
+      .replace(/\.{2,}/g, '.') ||
     // Replace with fallback if empty
-    || 'Untitled Project';
+    'Untitled Project'
+  );
 }
 
 type SaveDialogFilter = {
@@ -84,7 +105,7 @@ type SaveDialogFilter = {
 const inFlightProjectVideoSourceAudioHydrations = new Map<string, Promise<Project>>();
 
 function selectSingleFilePath(selected: string | string[] | null): string | null {
-  return Array.isArray(selected) ? selected[0] ?? null : selected;
+  return Array.isArray(selected) ? (selected[0] ?? null) : selected;
 }
 
 async function chooseImportFile(
@@ -115,11 +136,15 @@ function buildProjectAssetPathResolver(project: Project): (asset: Asset) => stri
   };
 }
 
-function buildImportedProjectFromOtio(result: Awaited<ReturnType<typeof importOtioFromFile>>): Project {
+function buildImportedProjectFromOtio(
+  result: Awaited<ReturnType<typeof importOtioFromFile>>,
+): Project {
   return buildImportedProjectFromTimelineData(result, 'Imported OTIO Project');
 }
 
-function buildImportedProjectFromXges(result: Awaited<ReturnType<typeof importXgesFromFile>>): Project {
+function buildImportedProjectFromXges(
+  result: Awaited<ReturnType<typeof importXgesFromFile>>,
+): Project {
   return buildImportedProjectFromTimelineData(result, 'Imported XGES Project');
 }
 
@@ -166,7 +191,9 @@ function buildTimelineRenderDefaultName(project: Project): string {
   return `${sanitizeProjectName(project.name)}.${defaultExtension}`;
 }
 
-function getProjectVideoSourceAudioHydrationKey(project: Pick<Project, 'id' | 'folderPath'>): string {
+function getProjectVideoSourceAudioHydrationKey(
+  project: Pick<Project, 'id' | 'folderPath'>,
+): string {
   return `${project.id}::${project.folderPath ?? ''}`;
 }
 
@@ -181,8 +208,8 @@ async function syncHydratedProjectAssetsToCurrentProject(
   }
 
   if (
-    currentProject.id !== sourceProject.id
-    || currentProject.folderPath !== sourceProject.folderPath
+    currentProject.id !== sourceProject.id ||
+    currentProject.folderPath !== sourceProject.folderPath
   ) {
     return;
   }
@@ -250,12 +277,13 @@ export async function ensureProjectVideoSourceAudioMetadata(project: Project): P
 
   const hydratedProject = await hydrationPromise;
   const mergedAssets = mergeProjectAssetMetadata(project.assets, hydratedProject.assets);
-  const mergedProject = mergedAssets === project.assets
-    ? project
-    : {
-        ...project,
-        assets: mergedAssets,
-      };
+  const mergedProject =
+    mergedAssets === project.assets
+      ? project
+      : {
+          ...project,
+          assets: mergedAssets,
+        };
 
   const stillNeedsHydration = projectNeedsVideoSourceAudioMetadataHydration(mergedProject);
   if (!stillNeedsHydration) {
@@ -274,7 +302,9 @@ export function scheduleProjectVideoSourceAudioMetadataHydration(project: Projec
     return;
   }
 
-  void ensureProjectVideoSourceAudioMetadata(project).catch(() => { /* best-effort */ });
+  void ensureProjectVideoSourceAudioMetadata(project).catch(() => {
+    /* best-effort */
+  });
 }
 
 // ============================================================================
@@ -288,7 +318,9 @@ export function ensureProject(): void {
   const { currentProject } = useProjectStore.getState();
   if (currentProject !== null) return;
   hydrateNewProject({ name: 'Untitled Project', folderPath: undefined, isTemp: true });
-  void setupTempFolder().catch(() => { /* best-effort: temp folder is not critical */ });
+  void setupTempFolder().catch(() => {
+    /* best-effort: temp folder is not critical */
+  });
 }
 
 /**
@@ -313,7 +345,11 @@ export async function cleanupTempFolder(): Promise<void> {
   const { currentProject } = useProjectStore.getState();
   if (!currentProject?.isTemp || !currentProject.folderPath) return;
   const adapter = await getPlatformAdapter();
-  try { await adapter.fs.removeDir(currentProject.folderPath, true); } catch { /* ignore */ }
+  try {
+    await adapter.fs.removeDir(currentProject.folderPath, true);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -414,9 +450,7 @@ export async function openProjectFromFolder(filePath: string): Promise<void> {
 
     // Notify project-open callbacks (e.g. restoreProjectGenerations)
     const callbacks = getProjectOpenCallbacks();
-    await Promise.allSettled(
-      callbacks.map((cb) => cb(project)),
-    );
+    await Promise.allSettled(callbacks.map((cb) => cb(project)));
 
     // If callbacks modified stores (e.g. restored succeeded tasks), save to persist fragment changes
     const { isDirty } = useProjectStore.getState();
@@ -447,7 +481,7 @@ export async function openProjectDialog(): Promise<void> {
   const adapter = await getPlatformAdapter();
 
   const selected = await adapter.fs.selectFile({
-    title: '打开工程',
+    title: t('app.menu.openProject'),
     accept: ['.odp'],
   });
   const filePath = selectSingleFilePath(selected);
@@ -503,14 +537,22 @@ export async function saveProject(): Promise<void> {
             for (const file of files) {
               if (file.isDirectory) continue;
               const destFile = `${project.folderPath}/${dir}/${file.name}`;
-              try { await fs.copyFile(file.path, destFile); } catch { /* skip */ }
+              try {
+                await fs.copyFile(file.path, destFile);
+              } catch {
+                /* skip */
+              }
             }
           } catch {
             // Source dir may not exist — skip
           }
         }
         // Cleanup temp folder after migration
-        try { await fs.removeDir(oldFolderPath, true); } catch { /* ignore */ }
+        try {
+          await fs.removeDir(oldFolderPath, true);
+        } catch {
+          /* ignore */
+        }
       }
       if (isTemp) project.isTemp = false;
     }
@@ -524,9 +566,12 @@ export async function saveProject(): Promise<void> {
       fs,
       project.folderPath,
       project.fileName,
-      { generations: useGenerationStore.getState().generations
-        .filter((g) => g.projectId === project.id)
-        .map(generationToRecord) },
+      {
+        generations: useGenerationStore
+          .getState()
+          .generations.filter((g) => g.projectId === project.id)
+          .map(generationToRecord),
+      },
       assetsFile,
     );
 
@@ -603,10 +648,9 @@ export async function exportXmeml(): Promise<void> {
   if (!currentProject) return;
 
   const project = buildProjectSnapshot(currentProject);
-  const { adapter, filePath } = await chooseExportFile(
-    `${sanitizeProjectName(project.name)}.xml`,
-    [{ name: 'XML', extensions: ['xml'] }],
-  );
+  const { adapter, filePath } = await chooseExportFile(`${sanitizeProjectName(project.name)}.xml`, [
+    { name: 'XML', extensions: ['xml'] },
+  ]);
   if (!filePath) return;
 
   await exportXmemlToFile(
@@ -641,7 +685,11 @@ export async function exportOtioProject(): Promise<void> {
 }
 
 export async function importOtioProject(): Promise<void> {
-  const { adapter, filePath } = await chooseImportFile('导入 OTIO', ['.otio', '.otio.json', '.json']);
+  const { adapter, filePath } = await chooseImportFile(t('app.menu.importOtio'), [
+    '.otio',
+    '.otio.json',
+    '.json',
+  ]);
   if (!filePath) return;
 
   const result = await importOtioFromFile({
@@ -664,10 +712,9 @@ export async function exportXgesProject(): Promise<void> {
   const project = buildProjectSnapshot(currentProject);
   const projectPath = requireSavedProjectFolder(project, 'XGES export');
 
-  const { filePath } = await chooseExportFile(
-    `${sanitizeProjectName(project.name)}.xges`,
-    [{ name: 'XGES', extensions: ['xges'] }],
-  );
+  const { filePath } = await chooseExportFile(`${sanitizeProjectName(project.name)}.xges`, [
+    { name: 'XGES', extensions: ['xges'] },
+  ]);
   if (!filePath) return;
 
   await exportXgesToFile({
@@ -688,7 +735,7 @@ export async function importXgesProject(): Promise<void> {
   const projectPath = requireSavedProjectFolder(currentProject, 'XGES import');
   const adapter = await getPlatformAdapter();
 
-  const { filePath } = await chooseImportFile('导入 XGES', ['.xges']);
+  const { filePath } = await chooseImportFile(t('app.menu.importXges'), ['.xges']);
   if (!filePath) return;
 
   const result = await importXgesFromFile({
@@ -711,15 +758,12 @@ export async function exportTimelineRenderProject(): Promise<void> {
 
   try {
     let project = buildProjectSnapshot(currentProject);
-    const { filePath } = await chooseExportFile(
-      buildTimelineRenderDefaultName(project),
-      [
-        { name: 'MP4 Video', extensions: ['mp4'] },
-        { name: 'QuickTime MOV', extensions: ['mov'] },
-        { name: 'WAV Audio', extensions: ['wav'] },
-        { name: 'MP3 Audio', extensions: ['mp3'] },
-      ],
-    );
+    const { filePath } = await chooseExportFile(buildTimelineRenderDefaultName(project), [
+      { name: 'MP4 Video', extensions: ['mp4'] },
+      { name: 'QuickTime MOV', extensions: ['mov'] },
+      { name: 'WAV Audio', extensions: ['wav'] },
+      { name: 'MP3 Audio', extensions: ['mp3'] },
+    ]);
     if (!filePath) {
       useProjectStore.setState({ isLoading: false });
       return;
@@ -727,12 +771,14 @@ export async function exportTimelineRenderProject(): Promise<void> {
 
     project = await ensureProjectVideoSourceAudioMetadata(project);
 
-    await tauriBridge.mediaApi.render(buildProjectTimelineRenderRequest({
-      project,
-      outputPath: filePath,
-      outputFormat: resolveTimelineRenderOutputFormat(filePath),
-      assetPathResolver: buildProjectAssetPathResolver(project),
-    }));
+    await tauriBridge.mediaApi.render(
+      buildProjectTimelineRenderRequest({
+        project,
+        outputPath: filePath,
+        outputFormat: resolveTimelineRenderOutputFormat(filePath),
+        assetPathResolver: buildProjectAssetPathResolver(project),
+      }),
+    );
 
     useProjectStore.setState({ isLoading: false });
   } catch (error) {
@@ -745,7 +791,7 @@ export async function exportTimelineRenderProject(): Promise<void> {
  * Import a project from XMEML (FCP7 XML).
  */
 export async function importXmemlProject(): Promise<void> {
-  const { adapter, filePath } = await chooseImportFile('导入 XML', ['.xml']);
+  const { adapter, filePath } = await chooseImportFile(t('app.menu.importXml'), ['.xml']);
   if (!filePath) return;
 
   const result = await importXmeml({ filePath, fsAdapter: adapter.fs });
@@ -754,13 +800,16 @@ export async function importXmemlProject(): Promise<void> {
   const project: Project = {
     id: generateId(),
     name: 'Imported Project',
-    tracks: result.tracks.map((t) => ({
-      id: `track-${t.type}-${t.order}`,
-      type: t.type,
-      name: t.type === 'video' ? `视频轨道 ${t.order + 1}` : `音频轨道 ${t.order + 1}`,
+    tracks: result.tracks.map((track) => ({
+      id: `track-${track.type}-${track.order}`,
+      type: track.type,
+      name:
+        track.type === 'video'
+          ? t('timeline.videoTrack', { index: track.order + 1 })
+          : t('timeline.audioTrack', { index: track.order + 1 }),
       muted: false,
       locked: false,
-      order: t.order,
+      order: track.order,
     })),
     fragments: result.tracks.flatMap((t) =>
       t.fragments.map((f) => ({
@@ -775,7 +824,7 @@ export async function importXmemlProject(): Promise<void> {
         trimStart: f.trimStart,
         createdAt: new Date(),
         updatedAt: new Date(),
-      }))
+      })),
     ),
     scenes: [],
     assets: result.assets.map((a) => ({
@@ -844,11 +893,19 @@ export async function updateProjectName(name: string): Promise<void> {
       const project = { ...useProjectStore.getState().currentProject!, fileName: newFileName };
       const assetState = useAssetStore.getState();
       const assetsFile = { assets: assetState.assets.map(assetToRecord) };
-      await saveProjectFiles(project, adapter.fs, currentProject.folderPath, newFileName, {
-        generations: useGenerationStore.getState().generations
-          .filter((g) => g.projectId === project.id)
-          .map(generationToRecord),
-      }, assetsFile);
+      await saveProjectFiles(
+        project,
+        adapter.fs,
+        currentProject.folderPath,
+        newFileName,
+        {
+          generations: useGenerationStore
+            .getState()
+            .generations.filter((g) => g.projectId === project.id)
+            .map(generationToRecord),
+        },
+        assetsFile,
+      );
     } catch (_error) {
       // rename is best-effort — the project remains functional under its old name
     }

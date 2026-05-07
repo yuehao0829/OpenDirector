@@ -6,6 +6,7 @@ import { Monitor, RectangleHorizontal, Clock, Volume2, VolumeX, Music, Music4, S
 import { Panel } from '../layout/Panel';
 import { TOGGLE_DEFS, type ToggleKey } from '../shared/GenerationControls.shared';
 import { TogglePill, SettingCard } from '../shared/GenerationControls';
+import { useTranslation } from 'react-i18next';
 
 export interface GenerationParamsValue extends GenerationParamDefaults {
   duration: number;
@@ -68,6 +69,7 @@ export function GenerationParamsSection({
   continuousPlan,
   totalDuration,
 }: GenerationParamsSectionProps) {
+  const { t } = useTranslation();
   const params = useMemo(
     () => resolveEffectiveParams(capabilityParams ?? DEFAULT_CAPABILITY_PARAMS),
     [capabilityParams],
@@ -87,7 +89,7 @@ export function GenerationParamsSection({
         {continuousMode && continuousPlan && continuousPlan.length > 0 && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5">
             <div className="text-sm font-medium text-amber-400">
-              连续生成模式: {continuousPlan.length} 段
+              {t('generationParams.continuousMode', { count: continuousPlan.length })}
             </div>
             <div className="text-xs text-amber-400/70 mt-0.5">
               {continuousPlan.join('s + ')}s = {Math.ceil((totalDuration ?? 0) / 1000)}s
@@ -97,7 +99,7 @@ export function GenerationParamsSection({
 
         {/* Resolution */}
         {params.resolution && params.resolution.length > 0 && (
-          <SettingCard label="分辨率">
+          <SettingCard label={t('settings.generationDefaults.resolution')}>
             <div className="flex gap-1.5">
               {params.resolution.map((r) => (
                 <button
@@ -119,7 +121,7 @@ export function GenerationParamsSection({
 
         {/* Aspect Ratio */}
         {params.aspectRatios && params.aspectRatios.length > 0 && (
-          <SettingCard label="宽高比">
+          <SettingCard label={t('settings.generationDefaults.aspectRatio')}>
             <div className="flex gap-1.5 min-w-0">
               {params.aspectRatios.map((ratio) => (
                 <button
@@ -142,22 +144,22 @@ export function GenerationParamsSection({
         {/* Toggles */}
         {visibleToggles.length > 0 && (
           <div className="grid grid-cols-2 gap-1.5">
-            {visibleToggles.map((t) => (
+            {visibleToggles.map((toggle) => (
               <TogglePill
-                key={t.key}
-                icon={t.icon}
-                label={t.label}
-                active={t.key === 'enableMusic' ? value[t.key] && value.enableAudio : value[t.key]}
+                key={toggle.key}
+                icon={toggle.icon}
+                label={t(toggle.labelKey)}
+                active={toggle.key === 'enableMusic' ? value[toggle.key] && value.enableAudio : value[toggle.key]}
                 onClick={() => {
-                  if (t.key === 'enableAudio' && value.enableAudio) {
+                  if (toggle.key === 'enableAudio' && value.enableAudio) {
                     const next = { ...value, enableAudio: false };
                     if (value.enableMusic) next.enableMusic = false;
                     onChange(next);
                   } else {
-                    onChange({ ...value, [t.key]: !value[t.key] });
+                    onChange({ ...value, [toggle.key]: !value[toggle.key] });
                   }
                 }}
-                disabled={disabled || (t.key === 'enableMusic' && !value.enableAudio)}
+                disabled={disabled || (toggle.key === 'enableMusic' && !value.enableAudio)}
               />
             ))}
           </div>
@@ -168,12 +170,12 @@ export function GenerationParamsSection({
           <SettingCard
             label={
               continuousMode
-                ? `时长: ${Math.ceil((totalDuration ?? 0) / 1000)}s (连续生成)`
-                : `时长: ${value.autoDuration ? '自适应' : `${value.duration}s`}`
+                ? t('generationParams.durationContinuous', { seconds: Math.ceil((totalDuration ?? 0) / 1000) })
+                : t('generationParams.duration', { value: value.autoDuration ? t('generationParams.adaptive') : `${value.duration}s` })
             }
             extra={
               <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-400">自适应</span>
+                <span className="text-xs text-zinc-400">{t('generationParams.adaptive')}</span>
                 <button
                   onClick={() => onChange({ ...value, autoDuration: !value.autoDuration })}
                   disabled={disabled || continuousMode}
@@ -218,6 +220,7 @@ export function GenerationParamsSection({
 }
 
 function SummaryBar({ value, params, continuousMode, totalDuration }: { value: GenerationParamsValue; params: CapabilityParams; continuousMode?: boolean; totalDuration?: number }) {
+  const { t } = useTranslation();
   const items: { icon: React.ReactNode; active?: boolean }[] = [];
 
   items.push({ icon: <Monitor size={15} />, active: true });
@@ -248,7 +251,7 @@ function SummaryBar({ value, params, continuousMode, totalDuration }: { value: G
   if (params.durationRange) {
     items.push({ icon: <Clock size={15} />, active: true });
     if (continuousMode) {
-      items.push({ icon: <span className="text-sm font-medium">{Math.ceil((totalDuration ?? 0) / 1000)}s (连续)</span>, active: true });
+      items.push({ icon: <span className="text-sm font-medium">{t('generationParams.secondsContinuousShort', { seconds: Math.ceil((totalDuration ?? 0) / 1000) })}</span>, active: true });
     } else {
       items.push({ icon: <span className="text-sm font-medium">{value.duration}s</span>, active: true });
     }

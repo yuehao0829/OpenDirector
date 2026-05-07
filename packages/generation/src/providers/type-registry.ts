@@ -15,10 +15,6 @@ class ProviderTypeRegistry {
   private types = new Map<string, ProviderTypeDefinition>();
 
   registerBuiltin(definition: ProviderTypeDefinition): void {
-    if (this.types.has(definition.typeId)) {
-      console.warn(`Provider type "${definition.typeId}" is already registered, skipping duplicate.`);
-      return;
-    }
     this.types.set(definition.typeId, definition);
   }
 

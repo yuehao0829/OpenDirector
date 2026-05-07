@@ -7,6 +7,9 @@ export * from './constants';
 // Stores
 export * from './stores';
 
+// i18n
+export * from './i18n';
+
 // Services
 export * from './services';
 

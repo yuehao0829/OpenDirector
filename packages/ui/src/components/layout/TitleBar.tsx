@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { getTauriWindow } from '../../utils/tauri-window';
 
@@ -48,7 +49,7 @@ const menuIcons = {
 } as const;
 
 export function TitleBar({
-  projectName = 'Untitled Project',
+  projectName,
   isDirty = false,
   mode = 'video',
   onModeChange,
@@ -57,6 +58,8 @@ export function TitleBar({
   onSaveProject,
   menuActions = [],
 }: TitleBarProps) {
+  const { t } = useTranslation();
+  const displayProjectName = projectName ?? t('titleBar.untitledProject');
   const [isMaximized, setIsMaximized] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const clickCountRef = useRef(0);
@@ -194,11 +197,11 @@ export function TitleBar({
     try {
       await action();
     } catch (error) {
-      const label = errorLabel ?? '操作失败';
+      const label = errorLabel ?? t('titleBar.operationFailed');
       console.error(`${label}:`, error);
       alert(`${label}: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, []);
+  }, [t]);
 
   const shortcutLabel = useMemo(() => (navigator.userAgent.includes('Mac') ? '⌘S' : 'Ctrl+S'), []);
   const resolvedMenuActions = useMemo<MenuAction[]>(() => menuActions.map((item) => {
@@ -223,7 +226,7 @@ export function TitleBar({
           onMouseDown={(event) => event.stopPropagation()}
           onClick={() => setMenuOpen((value) => !value)}
           className="ml-1.5 rounded p-1 text-zinc-200 transition-colors hover:bg-zinc-800 hover:text-white"
-          aria-label="Menu"
+          aria-label={t('titleBar.menu')}
         >
           <Menu size={16} />
         </button>
@@ -261,7 +264,7 @@ export function TitleBar({
 
       <div className="absolute left-1/2 -translate-x-1/2">
         <span className="text-sm text-zinc-400">
-          {projectName}
+          {displayProjectName}
           {isDirty && ' *'}
         </span>
       </div>
@@ -276,7 +279,7 @@ export function TitleBar({
             className="h-6 px-2"
           >
             <Video size={14} className="mr-1" />
-            Video
+            {t('titleBar.videoMode')}
           </Button>
           <Button
             variant={mode === 'audio' ? 'primary' : 'ghost'}
@@ -286,7 +289,7 @@ export function TitleBar({
             className="h-6 px-2"
           >
             <Music size={14} className="mr-1" />
-            Audio
+            {t('titleBar.audioMode')}
           </Button>
         </div>
 
@@ -295,6 +298,7 @@ export function TitleBar({
           size="sm"
           onClick={onSettingsClick}
           className="mr-2 h-6 w-6 p-0"
+          aria-label={t('titleBar.settings')}
         >
           <Settings size={16} />
         </Button>
@@ -307,7 +311,7 @@ export function TitleBar({
                 void handleMinimize();
               }}
               className="flex h-8 w-11 items-center justify-center text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
-              aria-label="Minimize"
+              aria-label={t('titleBar.minimize')}
             >
               <Minus size={14} />
             </button>
@@ -317,7 +321,7 @@ export function TitleBar({
                 void handleMaximize();
               }}
               className="flex h-8 w-11 items-center justify-center text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
-              aria-label={isMaximized ? 'Restore' : 'Maximize'}
+              aria-label={isMaximized ? t('titleBar.restore') : t('titleBar.maximize')}
             >
               {isMaximized ? <Copy size={12} /> : <Square size={12} />}
             </button>
@@ -327,7 +331,7 @@ export function TitleBar({
                 void handleClose();
               }}
               className="flex h-8 w-11 items-center justify-center text-zinc-400 transition-colors hover:bg-red-600 hover:text-white"
-              aria-label="Close"
+              aria-label={t('titleBar.close')}
             >
               <X size={14} />
             </button>

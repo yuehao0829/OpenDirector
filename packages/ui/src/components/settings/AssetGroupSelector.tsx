@@ -1,5 +1,6 @@
 import type { AssetGroup } from '@opendirector/core/types/ai-video';
 import { ChevronDown, RefreshCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface AssetGroupSelectorProps {
   groups: AssetGroup[];
@@ -22,6 +23,8 @@ export function AssetGroupSelector({
   onGroupNameChange,
   onRefresh,
 }: AssetGroupSelectorProps) {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-1">
       <label className="text-sm font-medium text-zinc-300">Asset Group</label>
@@ -37,7 +40,7 @@ export function AssetGroupSelector({
               }}
               className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded-lg pl-3 pr-8 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
             >
-              <option value="">-- 选择 Asset Group --</option>
+              <option value="">{t('settings.provider.assetGroupOption')}</option>
               {groups.map((g) => (
                 <option key={g.group_id} value={g.group_id}>
                   {g.name}
@@ -51,7 +54,7 @@ export function AssetGroupSelector({
             type="text"
             value={selectedGroupName}
             onChange={(e) => onGroupNameChange(e.target.value)}
-            placeholder="点击刷新按钮加载 Group 列表"
+            placeholder={t('settings.provider.assetGroupPlaceholder')}
             className="flex-1 w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white placeholder-zinc-500 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         )}
@@ -60,7 +63,7 @@ export function AssetGroupSelector({
           onClick={onRefresh}
           disabled={loading || disabled}
           className="p-2 text-zinc-400 hover:text-white transition-colors disabled:opacity-50"
-          title="刷新 Group 列表"
+          title={t('settings.provider.refreshGroups')}
         >
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>

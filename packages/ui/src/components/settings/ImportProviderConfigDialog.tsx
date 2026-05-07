@@ -14,6 +14,7 @@ import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { FileDown, ArrowLeft, ArrowRight, AlertCircle, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface ImportProviderConfigDialogProps {
   isOpen: boolean;
@@ -64,6 +65,7 @@ interface ImportMeta {
 }
 
 export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderConfigDialogProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>('file');
   const [filePath, setFilePath] = useState('');
   const [preview, setPreview] = useState<MultiProviderExportPreview | null>(null);
@@ -118,7 +120,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
       setSelectedIndices(new Set(result.providers.map((_, i) => i)));
       setStep('preview');
     } catch (err) {
-      setError(getErrorMessage(err, '无法读取文件'));
+      setError(getErrorMessage(err, t('settings.providerErrors.readFileFailed')));
     } finally {
       setLoading(false);
     }
@@ -175,7 +177,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
 
   const handleImport = async () => {
     if (!preview || !password.trim()) {
-      setError('请输入密码');
+      setError(t('settings.providerErrors.passwordRequired'));
       return;
     }
 
@@ -183,7 +185,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
     const activeIndices = [...selectedIndices].filter((i) => !skipIndices.has(i));
 
     if (activeIndices.length === 0) {
-      setError('没有需要导入的 Provider');
+      setError(t('settings.providerErrors.noProvidersToImport'));
       return;
     }
 
@@ -255,7 +257,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             type_id: meta.typeId,
             provider_name: meta.provider.provider_name,
             credentials_saved: false,
-            error: importResult?.error ?? '导入失败',
+            error: importResult?.error ?? t('settings.providerErrors.importFailed'),
           });
           continue;
         }
@@ -300,7 +302,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
               type_id: resolveTypeId(provider) ?? provider.provider_id,
               provider_name: provider.provider_name,
               credentials_saved: false,
-              error: '已跳过',
+              error: t('settings.provider.skipped'),
             });
           }
         }
@@ -314,7 +316,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
       for (const id of preCreatedInstanceIds) {
         store.removeInstance(id);
       }
-      setError(getErrorMessage(err, '导入失败'));
+      setError(getErrorMessage(err, t('settings.providerErrors.importFailed')));
     } finally {
       setImporting(false);
     }
@@ -322,10 +324,10 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
 
   const successCount = results.filter((r) => r.success).length;
   const failCount = results.filter((r) => !r.success).length;
-  const skippedCount = results.filter((r) => r.error === '已跳过').length;
+  const skippedCount = results.filter((r) => r.error === t('settings.provider.skipped')).length;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="导入 Provider 配置" size="md">
+    <Modal isOpen={isOpen} onClose={handleClose} title={t('settings.provider.importTitle')} size="md">
       <div className="space-y-4">
         {error && step !== 'result' && (
           <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
@@ -345,7 +347,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             ) : (
               <div className="flex flex-col items-center gap-2 text-zinc-400 hover:text-zinc-300">
                 <FileDown size={24} />
-                <span className="text-sm">选择 .odprovider 文件</span>
+                <span className="text-sm">{t('settings.provider.chooseProviderFile')}</span>
               </div>
             )}
           </div>
@@ -356,10 +358,10 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
           <>
             <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
               <p className="text-xs text-zinc-500 mb-1">
-                导出时间: {new Date(preview.exported_at).toLocaleString()}
+                {t('settings.provider.exportedAt', { time: new Date(preview.exported_at).toLocaleString() })}
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                共 {preview.providers.length} 个 Provider
+                {t('settings.provider.providerCount', { count: preview.providers.length })}
               </p>
             </div>
 
@@ -391,12 +393,12 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
                         )}
                         {hasConflict && (
                           <span className="text-xs px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
-                            已存在
+                            {t('settings.provider.alreadyExists')}
                           </span>
                         )}
                       </div>
                       {typeId && (
-                        <p className="text-xs text-zinc-500 truncate">类型: {typeId}</p>
+                        <p className="text-xs text-zinc-500 truncate">{t('settings.provider.typeLabel', { type: typeId })}</p>
                       )}
                     </div>
                   </label>
@@ -407,7 +409,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => { setStep('file'); setPreview(null); }} className="flex-1">
                 <ArrowLeft size={14} className="mr-1" />
-                返回
+                {t('settings.provider.back')}
               </Button>
               <Button
                 variant="primary"
@@ -415,7 +417,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
                 disabled={selectedIndices.size === 0}
                 className="flex-1"
               >
-                下一步
+                {t('settings.provider.next')}
                 <ArrowRight size={14} className="ml-1" />
               </Button>
             </div>
@@ -428,7 +430,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             {conflicts.length > 0 && (
               <div className="space-y-2">
                 <p className="text-sm text-yellow-400 font-medium">
-                  检测到 {conflicts.length} 个冲突
+                  {t('settings.provider.conflictCount', { count: conflicts.length })}
                 </p>
                 {conflicts.map((c) => {
                   const provider = preview.providers[c.providerIndex];
@@ -443,9 +445,9 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
                       </div>
                       <div className="flex gap-2">
                         {([
-                          { value: 'skip' as ConflictAction, label: '跳过' },
-                          { value: 'replace' as ConflictAction, label: '替换' },
-                          { value: 'keep' as ConflictAction, label: '保留两者' },
+                          { value: 'skip' as ConflictAction, label: t('settings.provider.skip') },
+                          { value: 'replace' as ConflictAction, label: t('settings.provider.replace') },
+                          { value: 'keep' as ConflictAction, label: t('settings.provider.keepBoth') },
                         ]).map((opt) => (
                           <button
                             key={opt.value}
@@ -467,17 +469,17 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             )}
 
             <Input
-              label="导出密码"
+              label={t('settings.provider.exportPassword')}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="输入导出时设置的密码"
+              placeholder={t('settings.provider.passwordPlaceholder')}
             />
 
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => { setError(''); setStep('preview'); }} className="flex-1">
                 <ArrowLeft size={14} className="mr-1" />
-                返回
+                {t('settings.provider.back')}
               </Button>
               <Button
                 variant="primary"
@@ -485,7 +487,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
                 disabled={importing || !password.trim()}
                 className="flex-1"
               >
-                {importing ? '导入中...' : '导入'}
+                {importing ? t('settings.provider.importing') : t('common.import')}
               </Button>
             </div>
           </>
@@ -497,14 +499,14 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
             <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700 space-y-2">
               <div className="flex items-center gap-4 text-sm">
                 <span className="text-green-400 flex items-center gap-1">
-                  <CheckCircle2 size={14} /> 成功 {successCount - skippedCount}
+                  <CheckCircle2 size={14} /> {t('settings.provider.successCount', { count: successCount - skippedCount })}
                 </span>
                 {skippedCount > 0 && (
-                  <span className="text-zinc-400">跳过 {skippedCount}</span>
+                  <span className="text-zinc-400">{t('settings.provider.skippedCount', { count: skippedCount })}</span>
                 )}
                 {failCount > 0 && (
                   <span className="text-red-400 flex items-center gap-1">
-                    <XCircle size={14} /> 失败 {failCount}
+                    <XCircle size={14} /> {t('settings.provider.failCount', { count: failCount })}
                   </span>
                 )}
               </div>
@@ -512,19 +514,19 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {results.map((r, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs">
-                    {r.success && r.error !== '已跳过' ? (
+                    {r.success && r.error !== t('settings.provider.skipped') ? (
                       <CheckCircle2 size={12} className="text-green-400 flex-shrink-0" />
-                    ) : r.error === '已跳过' ? (
+                    ) : r.error === t('settings.provider.skipped') ? (
                       <span className="text-zinc-500 w-3 text-center flex-shrink-0">—</span>
                     ) : (
                       <XCircle size={12} className="text-red-400 flex-shrink-0" />
                     )}
                     <span className="text-zinc-300 truncate">{r.provider_name}</span>
-                    {!r.success && r.error && r.error !== '已跳过' && (
+                    {!r.success && r.error && r.error !== t('settings.provider.skipped') && (
                       <span className="text-red-400 truncate">{r.error}</span>
                     )}
-                    {r.error === '已跳过' && (
-                      <span className="text-zinc-500">已跳过</span>
+                    {r.error === t('settings.provider.skipped') && (
+                      <span className="text-zinc-500">{t('settings.provider.skipped')}</span>
                     )}
                   </div>
                 ))}
@@ -533,7 +535,7 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
 
             <div className="flex gap-2">
               <Button variant="primary" onClick={handleClose} className="flex-1">
-                完成
+                {t('common.done')}
               </Button>
             </div>
           </>

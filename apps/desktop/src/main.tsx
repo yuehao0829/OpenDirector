@@ -1,5 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { I18nextProvider } from 'react-i18next';
+import { i18n, initializeI18n, normalizeLanguage, t } from '@opendirector/core/i18n';
 import './styles.css';
 import { StartupShell } from './StartupShell';
 
@@ -19,9 +21,28 @@ function renderStartupShell(detail: string) {
   );
 }
 
-renderStartupShell('加载主界面');
+renderStartupShell(t('app.startup.loadingMain'));
+
+async function getSystemLanguage() {
+  try {
+    const { locale } = await import('@tauri-apps/plugin-os');
+    return normalizeLanguage(await locale());
+  } catch {
+    return normalizeLanguage(navigator.language);
+  }
+}
+
+async function resolveInitialLanguage() {
+  const { getPersistedLanguage, useSettingsStore } = await import('@opendirector/core/stores/settingsStore');
+  const language = getPersistedLanguage() ?? (await getSystemLanguage());
+  if (useSettingsStore.getState().language !== language) {
+    useSettingsStore.getState().setLanguage(language);
+  }
+  return language;
+}
 
 async function bootstrapApp() {
+  const languagePromise = resolveInitialLanguage();
   const appPromise = import('./App');
   const errorBoundaryPromise = import('@opendirector/ui/components/common/ErrorBoundary');
   const projectStorePromise = import('@opendirector/core/stores/projectStore');
@@ -35,12 +56,15 @@ async function bootstrapApp() {
     appPromise,
     errorBoundaryPromise,
   ]);
+  await initializeI18n(await languagePromise);
 
   root.render(
     <StrictMode>
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
+      <I18nextProvider i18n={i18n}>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </I18nextProvider>
     </StrictMode>
   );
 

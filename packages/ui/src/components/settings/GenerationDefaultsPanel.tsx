@@ -3,20 +3,22 @@ import { GLOBAL_GENERATION_OPTIONS } from '@opendirector/core/types/generation';
 import { Monitor, RectangleHorizontal } from 'lucide-react';
 import { TOGGLE_DEFS } from '../shared/GenerationControls.shared';
 import { TogglePill, SettingCard } from '../shared/GenerationControls';
+import { useTranslation } from 'react-i18next';
 
 export function GenerationDefaultsPanel() {
+  const { t } = useTranslation();
   const params = useSettingsStore((s) => s.defaultGenerationParams);
   const setParams = useSettingsStore((s) => s.setDefaultGenerationParams);
 
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-medium text-zinc-200 mb-1">默认生成参数</h2>
+        <h2 className="text-lg font-medium text-zinc-200 mb-1">{t('settings.generationDefaults.title')}</h2>
       </div>
 
       <div className="space-y-4">
         {/* Resolution */}
-        <SettingCard label="分辨率" icon={<Monitor size={15} />}>
+        <SettingCard label={t('settings.generationDefaults.resolution')} icon={<Monitor size={15} />}>
           <div className="flex gap-1.5">
             {GLOBAL_GENERATION_OPTIONS.resolution.map((r) => (
               <button
@@ -35,7 +37,7 @@ export function GenerationDefaultsPanel() {
         </SettingCard>
 
         {/* Aspect Ratio */}
-        <SettingCard label="宽高比" icon={<RectangleHorizontal size={15} />}>
+        <SettingCard label={t('settings.generationDefaults.aspectRatio')} icon={<RectangleHorizontal size={15} />}>
           <div className="flex gap-1.5 min-w-0">
             {GLOBAL_GENERATION_OPTIONS.aspectRatios.map((ratio) => (
               <button
@@ -55,22 +57,22 @@ export function GenerationDefaultsPanel() {
 
         {/* Toggles */}
         <div className="grid grid-cols-2 gap-1.5">
-          {TOGGLE_DEFS.map((t) => (
+          {TOGGLE_DEFS.map((toggle) => (
             <TogglePill
-              key={t.key}
-              icon={t.icon}
-              label={t.label}
-              active={params[t.key]}
-              onClick={() => setParams({ [t.key]: !params[t.key] })}
+              key={toggle.key}
+              icon={toggle.icon}
+              label={t(toggle.labelKey)}
+              active={params[toggle.key]}
+              onClick={() => setParams({ [toggle.key]: !params[toggle.key] })}
             />
           ))}
         </div>
 
         {/* Web search toggle */}
         {GLOBAL_GENERATION_OPTIONS.enableWebSearch && (
-          <SettingCard label="联网搜索">
+          <SettingCard label={t('settings.generationDefaults.webSearch')}>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-400">生成时启用联网搜索</span>
+              <span className="text-sm text-zinc-400">{t('settings.generationDefaults.enableWebSearch')}</span>
               <button
                 onClick={() => setParams({ enableWebSearch: !params.enableWebSearch })}
                 className={`relative w-9 h-5 rounded-full transition-colors ${

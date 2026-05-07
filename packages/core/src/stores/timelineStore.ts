@@ -16,6 +16,7 @@ import { storeEvents } from './store-events';
 import { useSelectionStore } from './selectionStore';
 import { useSettingsStore } from './settingsStore';
 import { createDefaultTracks, createDefaultScene } from '../services/project-defaults';
+import { t } from '../i18n';
 
 export function registerNativePreviewStepFrameHandler(
   handler: NativePreviewStepFrameHandler,
@@ -387,12 +388,11 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       const sameTypeTracks = shiftedTracks.filter((t) => t.type === targetTrack.type);
       const newOrder = targetTrack.order + 1;
       const trackNumber = sameTypeTracks.length + 1;
-      const prefix = targetTrack.type === 'video' ? '视频轨道' : '音频轨道';
 
       const newTrack: Track = {
         id: `${targetTrack.type}-track-${Date.now()}`,
         type: targetTrack.type,
-        name: `${prefix} ${trackNumber}`,
+        name: t(targetTrack.type === 'video' ? 'timeline.videoTrack' : 'timeline.audioTrack', { index: trackNumber }),
         muted: false,
         locked: false,
         order: newOrder,
@@ -1353,7 +1353,7 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
               const newTrack: Track = {
                 id: `track-${sourceTrack.type}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
                 type: sourceTrack.type,
-                name: `${sourceTrack.type === 'video' ? '视频' : '音频'}轨道 ${Math.abs(targetOrder)}`,
+                name: t(sourceTrack.type === 'video' ? 'timeline.videoTrack' : 'timeline.audioTrack', { index: Math.abs(targetOrder) }),
                 muted: false,
                 locked: false,
                 order: targetOrder,
@@ -1383,7 +1383,7 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
               const newTrack: Track = {
                 id: `track-${sourceTrack.type}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
                 type: sourceTrack.type,
-                name: `${sourceTrack.type === 'video' ? '视频' : '音频'}轨道 ${targetOrder + 1}`,
+                name: t(sourceTrack.type === 'video' ? 'timeline.videoTrack' : 'timeline.audioTrack', { index: targetOrder + 1 }),
                 muted: false,
                 locked: false,
                 order: targetOrder,
