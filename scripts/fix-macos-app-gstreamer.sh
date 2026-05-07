@@ -62,6 +62,7 @@ find "$RUNTIME_DIR" -type l ! -exec test -e {} \; -delete 2>/dev/null || true
 # to update the app binary itself to point to the embedded runtime.
 
 MACH_O_ROOT="$RUNTIME_DIR"
+REWRITE_PREFIX="@rpath"
 # shellcheck source=mach-o-common.sh
 source "$SCRIPT_DIR/mach-o-common.sh"
 
