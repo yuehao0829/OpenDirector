@@ -13,6 +13,14 @@ Timeline-based AI video creation tool with native Seedance 2.0 support.
 
 The automated media-runtime setup currently supports Windows and macOS only.
 
+## Desktop Runtime Flow
+
+- Local development uses `pnpm setup:gstreamer`.
+- On macOS, that links `apps/desktop/src-tauri/gstreamer-dev` to an existing official framework install or the Homebrew `gstreamer` formula.
+- Desktop release builds stage a separate `apps/desktop/src-tauri/gstreamer-runtime` bundle before Tauri packaging.
+- GitHub Actions downloads the macOS runtime bundle from the shared `gstreamer-runtime` GitHub Release cache instead of rebuilding it inside CI.
+- The macOS runtime cache can be refreshed with `scripts/package-gstreamer-macos-runtime.sh`, then uploaded to the `gstreamer-runtime` release tag.
+
 ## First-Time Setup
 
 Run the bootstrap command from the repo root:

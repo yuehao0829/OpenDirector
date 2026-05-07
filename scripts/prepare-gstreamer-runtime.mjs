@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ const runtimeRootDir = path.join(tauriDir, 'gstreamer-runtime-root');
 const stagingToken = `${process.pid}-${Date.now()}`;
 const windowsRenameRetryCount = 20;
 const windowsRenameRetryDelayMs = 300;
+const PREBUNDLED_MAC_RUNTIME_MARKER = '.opendirector-gstreamer-runtime.json';
 
 async function main() {
   const stagedOutput = createStagedOutputPaths();
@@ -88,16 +89,25 @@ function prepareMacRuntime(stagedOutput) {
     console.log(`[GStreamer Bundle] Using macOS runtime root: ${runtimeRoot}`);
   } else {
     console.warn(
-      '[GStreamer Bundle] No macOS runtime root detected before bundling; falling back to Homebrew gstreamer.',
+      '[GStreamer Bundle] No prebuilt macOS runtime root detected; falling back to local macOS bundling.',
     );
   }
 
-  runCommand('bash', [path.join(__dirname, 'bundle-gstreamer-macos.sh')], env);
+  if (runtimeRoot && isPrebundledMacRuntime(runtimeRoot)) {
+    cpSync(runtimeRoot, stagedOutput.runtime, { recursive: true });
+    console.log(`[GStreamer Bundle] Copied prebundled macOS runtime from: ${runtimeRoot}`);
+  } else {
+    runCommand('bash', [path.join(__dirname, 'bundle-gstreamer-macos.sh')], env);
+  }
 
   // macOS does not need root-level DLLs, but tauri.conf.json references
   // gstreamer-runtime-root/ as a resource path. Create an empty directory
   // so Tauri's build does not fail with "resource path doesn't exist".
   mkdirSync(stagedOutput.rootDll, { recursive: true });
+}
+
+function isPrebundledMacRuntime(runtimeRoot) {
+  return existsSync(path.join(runtimeRoot, PREBUNDLED_MAC_RUNTIME_MARKER));
 }
 
 function createStagedOutputPaths() {

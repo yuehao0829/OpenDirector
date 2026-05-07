@@ -8,7 +8,9 @@ on:
     branches: [main]
 
 env:
+  GSTREAMER_RUNTIME_RELEASE_TAG: 'gstreamer-runtime'
   GSTREAMER_MSVC_VERSION: '1.28.2'
+  GSTREAMER_MACOS_VERSION: '1.28.2'
 
 jobs:
   build-macos-arm:
@@ -34,8 +36,27 @@ jobs:
           workspaces: apps/desktop/src-tauri -> target
           key: "v2-macos-arm"
 
-      - name: Install GStreamer (Homebrew)
+      - name: Install macOS GStreamer build dependencies
         run: brew install gstreamer
+
+      - name: Download prebuilt macOS GStreamer runtime
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          runtimeDir="$RUNNER_TEMP/gstreamer-macos-runtime"
+          if scripts/download-gstreamer-macos-runtime.sh --allow-missing \
+            "${{ github.repository }}" \
+            "${{ env.GSTREAMER_RUNTIME_RELEASE_TAG }}" \
+            "${{ env.GSTREAMER_MACOS_VERSION }}" \
+            "$runtimeDir" \
+            "$RUNNER_TEMP"; then
+            echo "OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT=$runtimeDir" >> "$GITHUB_ENV"
+          else
+            download_status=$?
+            if [ "$download_status" -ne 3 ]; then
+              exit "$download_status"
+            fi
+          fi
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -253,8 +274,27 @@ jobs:
           workspaces: apps/desktop/src-tauri -> target
           key: "v2-macos-intel"
 
-      - name: Install GStreamer (Homebrew)
+      - name: Install macOS GStreamer build dependencies
         run: brew install gstreamer
+
+      - name: Download prebuilt macOS GStreamer runtime
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          runtimeDir="$RUNNER_TEMP/gstreamer-macos-runtime"
+          if scripts/download-gstreamer-macos-runtime.sh --allow-missing \
+            "${{ github.repository }}" \
+            "${{ env.GSTREAMER_RUNTIME_RELEASE_TAG }}" \
+            "${{ env.GSTREAMER_MACOS_VERSION }}" \
+            "$runtimeDir" \
+            "$RUNNER_TEMP"; then
+            echo "OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT=$runtimeDir" >> "$GITHUB_ENV"
+          else
+            download_status=$?
+            if [ "$download_status" -ne 3 ]; then
+              exit "$download_status"
+            fi
+          fi
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -487,7 +527,7 @@ jobs:
           $assetName = "gstreamer-1.0-msvc-x86_64-${{ env.GSTREAMER_MSVC_VERSION }}.exe"
           $out = "${{ runner.temp }}\$assetName"
           Write-Host "Downloading GStreamer $assetName from GitHub Release..."
-          gh release download gstreamer-runtime --repo ${{ github.repository }} --pattern $assetName --dir ${{ runner.temp }}
+          gh release download ${{ env.GSTREAMER_RUNTIME_RELEASE_TAG }} --repo ${{ github.repository }} --pattern $assetName --dir ${{ runner.temp }}
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Failed to download GStreamer from GitHub Release"
             exit 1
