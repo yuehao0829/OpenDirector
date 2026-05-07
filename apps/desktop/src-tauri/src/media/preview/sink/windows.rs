@@ -21,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::media::model::{PreviewSurfaceRect, PreviewViewport};
 
-const SURFACE_WINDOW_CLASS_NAME: &str = "GenLineNativePreviewSurface";
+const SURFACE_WINDOW_CLASS_NAME: &str = "OpenDirectorNativePreviewSurface";
 
 static WINDOW_CLASS_REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 

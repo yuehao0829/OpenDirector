@@ -61,6 +61,11 @@ pub fn configured_video_sink_type() -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn fail_next_bind_surface_and_preroll_for_tests(count: usize) {
+    imp::fail_next_bind_surface_and_preroll_for_tests(count);
+}
+
 #[cfg(not(test))]
 mod imp {
     use std::collections::BTreeMap;
@@ -71,6 +76,7 @@ mod imp {
 
     use crate::media::ges::clip_modifiers::{apply_ges_clip_modifiers, GesClipModifierPlan};
     use crate::media::ges::preview_timeline_builder::GesPreviewClipPlan;
+    use crate::media::gstreamer::clock_time::{clock_time_from_ms, clock_time_to_ms};
     use crate::media::model::TimelineTrackType;
     use crate::media::runtime::prepare_gstreamer_process_environment;
 
@@ -98,10 +104,7 @@ mod imp {
     unsafe impl Send for GstreamerPreviewPlayer {}
 
     impl GstreamerPreviewPlayer {
-        pub fn new(
-            prepared_timeline: &GesPreviewTimeline,
-            surface_window_handle: Option<usize>,
-        ) -> Result<Self, String> {
+        pub fn new_pending(prepared_timeline: &GesPreviewTimeline) -> Result<Self, String> {
             prepare_gstreamer_process_environment()?;
             ges::init().map_err(|error| format!("failed to initialize GStreamer/GES: {error}"))?;
 
@@ -110,7 +113,6 @@ mod imp {
 
             let video_sink = if prepared_timeline.has_video {
                 let sink = create_video_sink()?;
-                bind_video_overlay(&sink, surface_window_handle)?;
                 pipeline.preview_set_video_sink(Some(&sink));
                 Some(sink)
             } else {
@@ -123,23 +125,25 @@ mod imp {
             pipeline
                 .set_mode(preview_mode(prepared_timeline))
                 .map_err(|error| format!("failed to set preview pipeline mode: {error}"))?;
-            pipeline
-                .set_state(gst::State::Paused)
-                .map_err(|error| format!("failed to preroll preview pipeline: {error}"))?;
-            if let Err(error) =
-                wait_for_pipeline_async_completion(&pipeline, "preroll preview pipeline")
-            {
-                let _ = pipeline.set_state(gst::State::Null);
-                return Err(error);
-            }
 
             Ok(Self {
                 pipeline,
                 _timeline: timeline,
                 video_sink,
-                surface_window_handle,
+                surface_window_handle: None,
                 duration_ms: sanitize_duration_ms(prepared_timeline.duration_ms),
             })
+        }
+
+        pub fn bind_surface_and_preroll(
+            &mut self,
+            surface_window_handle: Option<usize>,
+        ) -> Result<(), String> {
+            self.bind_surface_handle(surface_window_handle)?;
+            self.pipeline
+                .set_state(gst::State::Paused)
+                .map_err(|error| format!("failed to preroll preview pipeline: {error}"))?;
+            wait_for_pipeline_async_completion(&self.pipeline, "preroll preview pipeline")
         }
 
         pub fn bind_surface_handle(
@@ -149,10 +153,10 @@ mod imp {
             if self.surface_window_handle == surface_window_handle {
                 return Ok(());
             }
-            self.surface_window_handle = surface_window_handle;
             if let Some(video_sink) = self.video_sink.as_ref() {
                 bind_video_overlay(video_sink, surface_window_handle)?;
             }
+            self.surface_window_handle = surface_window_handle;
             Ok(())
         }
 
@@ -228,6 +232,7 @@ mod imp {
                 .set_state(gst::State::Null)
                 .map_err(|error| format!("failed to stop preview pipeline: {error}"))?;
             wait_for_pipeline_async_completion(&self.pipeline, "stop preview pipeline")?;
+            self.surface_window_handle = None;
             Ok(())
         }
 
@@ -430,7 +435,6 @@ mod imp {
         let Some(surface_window_handle) = surface_window_handle else {
             return Ok(());
         };
-
         let overlay = video_sink
             .dynamic_cast_ref::<gst_video::VideoOverlay>()
             .ok_or_else(|| {
@@ -444,25 +448,34 @@ mod imp {
         Ok(())
     }
 
-    fn clock_time_from_ms(value_ms: f64) -> gst::ClockTime {
-        let clamped = if value_ms.is_finite() {
-            value_ms.max(0.0)
-        } else {
-            0.0
-        };
-        gst::ClockTime::from_nseconds((clamped * 1_000_000.0).round() as u64)
-    }
-
-    fn clock_time_to_ms(value: gst::ClockTime) -> f64 {
-        value.nseconds() as f64 / 1_000_000.0
-    }
 }
 
 #[cfg(test)]
 mod imp {
+    use std::cell::Cell;
+
     use super::{
         clamp_seek_position_ms, sanitize_duration_ms, GesPreviewTimeline, PreviewBackendPollResult,
     };
+
+    thread_local! {
+        static FAIL_NEXT_BIND_SURFACE_AND_PREROLL_COUNT: Cell<usize> = Cell::new(0);
+    }
+
+    pub(super) fn fail_next_bind_surface_and_preroll_for_tests(count: usize) {
+        FAIL_NEXT_BIND_SURFACE_AND_PREROLL_COUNT.with(|remaining| remaining.set(count));
+    }
+
+    fn should_fail_bind_surface_and_preroll() -> bool {
+        FAIL_NEXT_BIND_SURFACE_AND_PREROLL_COUNT.with(|remaining| {
+            let count = remaining.get();
+            if count == 0 {
+                return false;
+            }
+            remaining.set(count - 1);
+            true
+        })
+    }
 
     #[derive(Debug)]
     pub struct GstreamerPreviewPlayer {
@@ -474,17 +487,24 @@ mod imp {
     }
 
     impl GstreamerPreviewPlayer {
-        pub fn new(
-            prepared_timeline: &GesPreviewTimeline,
-            surface_window_handle: Option<usize>,
-        ) -> Result<Self, String> {
+        pub fn new_pending(prepared_timeline: &GesPreviewTimeline) -> Result<Self, String> {
             Ok(Self {
                 duration_ms: sanitize_duration_ms(prepared_timeline.duration_ms),
                 position_ms: 0.0,
                 rate: 1.0,
                 playing: false,
-                surface_window_handle,
+                surface_window_handle: None,
             })
+        }
+
+        pub fn bind_surface_and_preroll(
+            &mut self,
+            surface_window_handle: Option<usize>,
+        ) -> Result<(), String> {
+            if should_fail_bind_surface_and_preroll() {
+                return Err("injected preview preroll failure".to_string());
+            }
+            self.bind_surface_handle(surface_window_handle)
         }
 
         pub fn bind_surface_handle(
@@ -520,6 +540,10 @@ mod imp {
         pub fn poll(&mut self) -> Result<PreviewBackendPollResult, String> {
             let _ = (self.rate, self.playing, self.surface_window_handle);
             Ok(PreviewBackendPollResult::default())
+        }
+
+        pub fn is_playing_for_tests(&self) -> bool {
+            self.playing
         }
 
         pub fn shutdown(&mut self) -> Result<(), String> {

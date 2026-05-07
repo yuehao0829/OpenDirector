@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod backend;
 pub mod error;
 pub mod ges;

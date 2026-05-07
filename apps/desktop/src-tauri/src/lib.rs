@@ -31,7 +31,10 @@ fn register_dev_pid_file() {
     }
 
     if let Err(error) = std::fs::write(&pid_file_path, format!("{}\n", std::process::id())) {
-        eprintln!("[Desktop Dev] Failed to write PID file {}: {error}", pid_file_path);
+        eprintln!(
+            "[Desktop Dev] Failed to write PID file {}: {error}",
+            pid_file_path
+        );
     }
 }
 
@@ -41,9 +44,7 @@ fn restore_dev_dock_icon<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
     use std::sync::mpsc::sync_channel;
 
     use objc2::{AllocAnyThread, MainThreadMarker};
-    use objc2_app_kit::{
-        NSApplication, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage,
-    };
+    use objc2_app_kit::{NSApplication, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage};
     use objc2_foundation::NSSize;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

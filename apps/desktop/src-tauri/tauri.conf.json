@@ -2,9 +2,9 @@
   "$schema": "https://v2.tauri.app/schemas/tauri.config.json",
   "productName": "OpenDirector",
   "identifier": "com.opendirector.app",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "build": {
-    "beforeBuildCommand": "pnpm --filter @opendirector/desktop build",
+    "beforeBuildCommand": "pnpm --filter @opendirector/desktop bundle:gstreamer && pnpm --filter @opendirector/desktop build",
     "beforeDevCommand": "pnpm --filter @opendirector/desktop dev",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../dist"
@@ -34,8 +34,13 @@
         "installMode": "currentUser"
       }
     },
+    "resources": {
+      "gstreamer-runtime/": "gstreamer-runtime/",
+      "gstreamer-runtime-root/": ""
+    },
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "10.13"
     }
   }
 }

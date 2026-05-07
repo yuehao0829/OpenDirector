@@ -2,6 +2,16 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+const defaultDevServerPort = 3000;
+const configuredDevServerPort = Number.parseInt(
+  process.env.OPENDIRECTOR_DEV_SERVER_PORT ?? String(defaultDevServerPort),
+  10,
+);
+const devServerPort =
+  Number.isFinite(configuredDevServerPort) && configuredDevServerPort > 0
+    ? configuredDevServerPort
+    : defaultDevServerPort;
+
 const prebundledDeps = [
   'react',
   'react-dom',
@@ -30,7 +40,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: devServerPort,
     strictPort: true,
     warmup: {
       clientFiles: entryFiles,

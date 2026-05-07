@@ -9,6 +9,7 @@ use image::{imageops::FilterType, DynamicImage, ImageFormat, RgbImage};
 
 use super::super::error::MediaResult;
 use super::super::runtime;
+use super::clock_time::{clock_time_from_ms, clock_time_to_ms};
 use super::command::{canonicalize_media_path, file_uri};
 
 const THUMBNAIL_MAX_SIZE: u32 = 512;
@@ -22,7 +23,6 @@ pub fn render_video_thumbnail(
 ) -> MediaResult<()> {
     runtime::require_gstreamer_preview_runtime()?;
     runtime::prepare_gstreamer_process_environment()?;
-    gst::init().map_err(|error| format!("failed to initialize GStreamer: {error}"))?;
 
     let input_path = canonicalize_media_path(input_path)?;
     let output_path = resolve_output_path(output_path)?;
@@ -239,19 +239,6 @@ fn wait_for_pipeline_async_completion(
             ));
         }
     }
-}
-
-fn clock_time_from_ms(value_ms: f64) -> gst::ClockTime {
-    let clamped = if value_ms.is_finite() {
-        value_ms.max(0.0)
-    } else {
-        0.0
-    };
-    gst::ClockTime::from_nseconds((clamped * 1_000_000.0).round() as u64)
-}
-
-fn clock_time_to_ms(value: gst::ClockTime) -> f64 {
-    value.nseconds() as f64 / 1_000_000.0
 }
 
 fn duration_to_clock_time(duration: Duration) -> gst::ClockTime {

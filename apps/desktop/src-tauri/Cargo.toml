@@ -1,6 +1,6 @@
 [package]
 name = "opendirector"
-version = "0.0.1"
+version = "0.1.2"
 description = "AI-powered video/audio editing software"
 authors = ["OpenDirector Team"]
 edition = "2021"

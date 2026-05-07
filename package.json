@@ -1,10 +1,11 @@
 {
   "name": "opendirector",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "AI-powered video/audio editing software",
   "scripts": {
+    "bootstrap": "pnpm install && pnpm setup:gstreamer",
     "dev": "node ./scripts/run-desktop-tauri-dev.mjs",
     "dev:desktop": "node ./scripts/run-desktop-tauri-dev.mjs",
     "setup:gstreamer": "pnpm node ./scripts/setup-gstreamer-dev.mjs",

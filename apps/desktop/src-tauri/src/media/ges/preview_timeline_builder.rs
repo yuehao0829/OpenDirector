@@ -440,7 +440,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time before unix epoch")
             .as_millis();
-        let dir = std::env::temp_dir().join(format!("genline-preview-{case_name}-{suffix}"));
+        let dir = std::env::temp_dir().join(format!("opendirector-preview-{case_name}-{suffix}"));
         fs::create_dir_all(&dir).expect("failed to create temp case dir");
         dir
     }

@@ -2,8 +2,20 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CropRect, Reference } from '@opendirector/core/types/asset';
 import { computeInitialCropRect } from '../utils/crop';
 
+function isSameCropRect(left: CropRect | null, right: CropRect | null): boolean {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return (
+    Math.abs(left.x - right.x) < 0.001 &&
+    Math.abs(left.y - right.y) < 0.001 &&
+    Math.abs(left.width - right.width) < 0.001 &&
+    Math.abs(left.height - right.height) < 0.001
+  );
+}
+
 interface UseReferenceCropOptions {
   reference: Reference;
+  referenceIdentity?: string;
   imageInfo: { naturalWidth: number; naturalHeight: number };
   targetAspectRatio: number | null;
   onCropChange: (rect: CropRect) => void;
@@ -21,6 +33,7 @@ interface UseReferenceCropResult {
 
 export function useReferenceCrop({
   reference,
+  referenceIdentity,
   imageInfo,
   targetAspectRatio,
   onCropChange,
@@ -28,18 +41,20 @@ export function useReferenceCrop({
 }: UseReferenceCropOptions): UseReferenceCropResult {
   const [cropRect, setCropRect] = useState<CropRect | null>(null);
   const [defaultCropRect, setDefaultCropRect] = useState<CropRect | null>(null);
-  const prevEnabledRef = useRef(enabled);
-  const prevRefIdRef = useRef<string | null>(null);
   const syncedFromStoreRef = useRef(false);
-  const justEnabledRef = useRef(false);
+  const hasInitializedRef = useRef(false);
+  const identity = referenceIdentity ?? `${reference.id}:${reference.assetId}`;
 
-  // When enabled transitions from false→true, or reference.id changes, compute fresh defaults
+  // When a crop session opens or its identity changes, rebuild the session from the
+  // latest external state. This keeps saved cropRect visible when reopening the overlay
+  // and prevents crop state from leaking across different references that reuse the
+  // same reference.id / assetId pair.
   useEffect(() => {
     if (!enabled) {
       setCropRect(null);
       setDefaultCropRect(null);
-      prevEnabledRef.current = false;
-      justEnabledRef.current = false;
+      syncedFromStoreRef.current = false;
+      hasInitializedRef.current = false;
       return;
     }
 
@@ -50,34 +65,33 @@ export function useReferenceCrop({
       imageInfo.naturalHeight,
       targetAspectRatio,
     );
+    const nextCropRect = reference.cropRect ?? defaultCr;
 
-    const enabledJustTurnedOn = !prevEnabledRef.current;
-    const refIdChanged = prevRefIdRef.current !== reference.id;
+    setDefaultCropRect((prev) => (isSameCropRect(prev, defaultCr) ? prev : defaultCr));
+    setCropRect((prev) => (isSameCropRect(prev, nextCropRect) ? prev : nextCropRect));
+    syncedFromStoreRef.current = false;
+    hasInitializedRef.current = false;
+  }, [
+    enabled,
+    imageInfo.naturalWidth,
+    imageInfo.naturalHeight,
+    targetAspectRatio,
+    identity,
+  ]);
 
-    if (enabledJustTurnedOn || refIdChanged) {
-      setDefaultCropRect(defaultCr);
-      setCropRect(defaultCr);
-      justEnabledRef.current = enabledJustTurnedOn;
-    }
-
-    prevEnabledRef.current = true;
-    prevRefIdRef.current = reference.id;
-  }, [enabled, imageInfo.naturalWidth, imageInfo.naturalHeight, targetAspectRatio, reference.id]);
-
-  // Sync internal cropRect when external reference.cropRect changes
-  // (e.g. from CropOverlay pan/zoom writing to the store),
-  // but not on the same commit as an enable transition (to avoid overriding the fresh default)
+  // Keep the local crop session in sync with external reference.cropRect changes on the same
+  // reference, including undo/redo paths that clear cropRect back to the default.
   useEffect(() => {
-    if (!enabled) return;
-    if (justEnabledRef.current) {
-      justEnabledRef.current = false;
+    if (!enabled || !defaultCropRect) return;
+
+    const nextCropRect = reference.cropRect ?? defaultCropRect;
+    if (isSameCropRect(cropRect, nextCropRect)) {
       return;
     }
-    if (reference.cropRect) {
-      syncedFromStoreRef.current = true;
-      setCropRect(reference.cropRect);
-    }
-  }, [enabled, reference.cropRect]);
+
+    syncedFromStoreRef.current = true;
+    setCropRect(nextCropRect);
+  }, [enabled, reference.cropRect, defaultCropRect, cropRect]);
 
   const resetCrop = useCallback(() => {
     if (imageInfo.naturalWidth === 0 || imageInfo.naturalHeight === 0) return;
@@ -87,12 +101,10 @@ export function useReferenceCrop({
       imageInfo.naturalHeight,
       targetAspectRatio,
     );
+    hasInitializedRef.current = true;
     setDefaultCropRect(defaultCr);
     setCropRect(defaultCr);
   }, [imageInfo.naturalWidth, imageInfo.naturalHeight, targetAspectRatio]);
-
-  // Track whether the initial crop has been set (to skip onCropChange for the default value)
-  const hasInitializedRef = useRef(false);
 
   // Expose cropRect externally via onCropChange when it changes (for CropOverlay pan/zoom)
   // but only after initialization, and not when the change came from a store sync

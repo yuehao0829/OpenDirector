@@ -23,6 +23,13 @@ const METRICS_EVENT: &str = "media-preview://metrics";
 const CONSECUTIVE_SEEK_WINDOW_MS: f64 = 200.0;
 const EMPTY_TIMELINE_VIRTUAL_DURATION_MS: f64 = 60_000.0;
 
+#[derive(Clone, Copy, Debug)]
+struct PreviewPlayerResumeState {
+    position_ms: f64,
+    rate: f64,
+    playing: bool,
+}
+
 #[derive(Debug)]
 pub struct PreviewSession {
     pub session_id: String,
@@ -75,7 +82,7 @@ impl PreviewSession {
         PreviewSessionInfo {
             session_id: self.session_id.clone(),
             window_label: self.window_label.clone(),
-            state: self.state.clone(),
+            state: self.state,
             native_surface_supported: self.native_surface_supported,
             native_surface_implemented: native_surface_platform_status().implemented,
             native_surface_platform_status: native_surface_platform_status().status.to_string(),
@@ -124,7 +131,7 @@ impl PreviewSession {
         PreviewDiagnostics {
             session_id: self.session_id.clone(),
             window_label: self.window_label.clone(),
-            state: self.state.clone(),
+            state: self.state,
             playback_backend: "in-process-ges-pipeline".to_string(),
             configured_video_sink_type: configured_video_sink_type().map(str::to_string),
             native_surface_supported: self.native_surface_supported,
@@ -386,6 +393,18 @@ impl PreviewSession {
     pub fn set_timeline(&mut self, timeline: TimelinePreviewSnapshot) -> Result<(), String> {
         let was_playing = matches!(self.state, PreviewSessionState::Playing);
         self.sync_playback_position();
+        let previous_state = self.state;
+        let previous_position_ms = self.position_ms;
+        let previous_virtual_play_started_at = self.virtual_play_started_at;
+        let previous_virtual_play_base_position_ms = self.virtual_play_base_position_ms;
+        let existing_preview_resume_state =
+            self.preview_player
+                .as_ref()
+                .map(|_| PreviewPlayerResumeState {
+                    position_ms: self.position_ms,
+                    rate: self.rate,
+                    playing: was_playing,
+                });
 
         let prepared_timeline = match build_preview_timeline(&timeline) {
             Ok(prepared_timeline) => prepared_timeline,
@@ -408,21 +427,26 @@ impl PreviewSession {
                     .fail_operation("Failed to reset preview backend for empty timeline", error));
             }
         } else {
-            let preview_player =
-                match GstreamerPreviewPlayer::new(&prepared_timeline, self.surface_window_handle())
-                {
-                    Ok(player) => player,
-                    Err(error) => {
-                        return Err(
-                            self.fail_operation("Failed to initialize preview backend", error)
-                        );
-                    }
-                };
-            if let Err(error) = self.replace_preview_player(Some(preview_player)) {
-                return Err(self.fail_operation(
+            let preview_player = match GstreamerPreviewPlayer::new_pending(&prepared_timeline) {
+                Ok(player) => player,
+                Err(error) => {
+                    return Err(self.fail_operation("Failed to initialize preview backend", error));
+                }
+            };
+            if let Err(error) = self
+                .replace_preview_player_with_pending(preview_player, existing_preview_resume_state)
+            {
+                self.position_ms = previous_position_ms;
+                self.virtual_play_started_at = previous_virtual_play_started_at;
+                self.virtual_play_base_position_ms = previous_virtual_play_base_position_ms;
+                let message = self.fail_operation(
                     "Failed to bind preview backend to native preview surface",
                     error,
-                ));
+                );
+                if self.preview_player.is_some() || self.virtual_play_started_at.is_some() {
+                    self.state = previous_state;
+                }
+                return Err(message);
             }
         }
 
@@ -701,7 +725,7 @@ impl PreviewSession {
             STATE_EVENT,
             PreviewSessionStateEvent {
                 session_id: self.session_id.clone(),
-                state: self.state.clone(),
+                state: self.state,
                 position_ms: self.position_ms,
                 rate: self.rate,
                 native_surface_attached: self.native_surface_attached(),
@@ -731,7 +755,7 @@ impl PreviewSession {
         app.emit(
             METRICS_EVENT,
             self.metrics
-                .as_event(self.session_id.clone(), self.state.clone()),
+                .as_event(self.session_id.clone(), self.state),
         )
         .map_err(|error| error.to_string())
     }
@@ -884,7 +908,7 @@ impl PreviewSession {
     pub fn tick(&mut self) -> Result<SessionTick, String> {
         let mut tick = SessionTick::default();
         let previous_position_ms = self.position_ms;
-        let previous_state = self.state.clone();
+        let previous_state = self.state;
 
         if let Some(preview_player) = self.preview_player.as_mut() {
             let poll = preview_player.poll()?;
@@ -961,6 +985,125 @@ impl PreviewSession {
         }
 
         self.preview_player = preview_player;
+        Ok(())
+    }
+
+    fn replace_preview_player_with_pending(
+        &mut self,
+        mut preview_player: GstreamerPreviewPlayer,
+        existing_resume_state: Option<PreviewPlayerResumeState>,
+    ) -> Result<(), String> {
+        let surface_window_handle = self.surface_window_handle();
+
+        if let Some(surface) = self.native_surface.as_mut() {
+            if let Err(error) = surface.set_embedded_content_attached(false) {
+                let _ = preview_player.shutdown();
+                return Err(error);
+            }
+        }
+
+        let mut existing = self.preview_player.take();
+
+        if let Some(existing_player) = existing.as_mut() {
+            if let Err(error) = existing_player.bind_surface_handle(None) {
+                self.preview_player = existing;
+                if let Some(surface) = self.native_surface.as_mut() {
+                    let _ = surface.set_embedded_content_attached(surface_window_handle.is_some());
+                }
+                return Err(error);
+            }
+        }
+
+        if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
+            let _ = preview_player.shutdown();
+            return self.abort_pending_replacement(
+                existing,
+                existing_resume_state,
+                error,
+            );
+        }
+
+        if let Some(existing_player) = existing.as_mut() {
+            if let Err(error) = existing_player.shutdown() {
+                let _ = preview_player.shutdown();
+                return self.abort_pending_replacement(
+                    existing,
+                    existing_resume_state,
+                    error,
+                );
+            }
+        }
+
+        if let Some(surface) = self.native_surface.as_mut() {
+            if let Err(error) =
+                surface.set_embedded_content_attached(surface_window_handle.is_some())
+            {
+                let _ = preview_player.shutdown();
+                return self.abort_pending_replacement(
+                    existing,
+                    existing_resume_state,
+                    error,
+                );
+            }
+        }
+
+        self.preview_player = Some(preview_player);
+        Ok(())
+    }
+
+    fn abort_pending_replacement(
+        &mut self,
+        existing: Option<GstreamerPreviewPlayer>,
+        existing_resume_state: Option<PreviewPlayerResumeState>,
+        error: String,
+    ) -> Result<(), String> {
+        if let Err(restore_error) =
+            self.restore_existing_preview_player(existing, existing_resume_state)
+        {
+            return Err(format!(
+                "{error}; additionally failed to restore existing preview backend: {restore_error}"
+            ));
+        }
+        Err(error)
+    }
+
+    fn restore_existing_preview_player(
+        &mut self,
+        existing: Option<GstreamerPreviewPlayer>,
+        resume_state: Option<PreviewPlayerResumeState>,
+    ) -> Result<(), String> {
+        let Some(mut existing_player) = existing else {
+            return Ok(());
+        };
+
+        let surface_window_handle = self.surface_window_handle();
+        if let Err(error) = existing_player.bind_surface_handle(surface_window_handle) {
+            let _ = existing_player.shutdown();
+            return Err(error);
+        }
+        if let Some(resume_state) = resume_state {
+            let resume_result = if resume_state.playing {
+                existing_player.play(resume_state.position_ms, resume_state.rate)
+            } else if resume_state.position_ms > 0.0 {
+                existing_player.seek_paused(resume_state.position_ms)
+            } else {
+                existing_player.pause()
+            };
+            if let Err(error) = resume_result {
+                let _ = existing_player.shutdown();
+                return Err(error);
+            }
+        }
+
+        if let Some(surface) = self.native_surface.as_mut() {
+            let attach_result =
+                surface.set_embedded_content_attached(surface_window_handle.is_some());
+            self.preview_player = Some(existing_player);
+            attach_result?;
+        } else {
+            self.preview_player = Some(existing_player);
+        }
+
         Ok(())
     }
 
@@ -1076,6 +1219,7 @@ mod tests {
         PreviewSessionState, PreviewViewport, TimelinePreviewFragment, TimelinePreviewSnapshot,
         TimelinePreviewTrack, TimelineTrackType,
     };
+    use crate::media::preview::player::fail_next_bind_surface_and_preroll_for_tests;
 
     fn temp_case_dir(case_name: &str) -> std::path::PathBuf {
         let suffix = SystemTime::now()
@@ -1083,7 +1227,7 @@ mod tests {
             .expect("system time before unix epoch")
             .as_millis();
         let dir =
-            std::env::temp_dir().join(format!("genline-preview-session-{case_name}-{suffix}"));
+            std::env::temp_dir().join(format!("opendirector-preview-session-{case_name}-{suffix}"));
         fs::create_dir_all(&dir).expect("failed to create temp case dir");
         dir
     }
@@ -1541,6 +1685,36 @@ mod tests {
             .expect("tick should preserve the new end position");
         assert_eq!(session.state, PreviewSessionState::Ended);
         assert!((session.position_ms - 500.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn failed_pending_preview_replacement_preserves_playing_backend() {
+        let mut session = PreviewSession::new(
+            "session-failed-preview-replacement".to_string(),
+            "main".to_string(),
+            false,
+        );
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+        session
+            .play_from(250.0)
+            .expect("preview playback should start");
+
+        let original_position_ms = session.position_ms;
+        fail_next_bind_surface_and_preroll_for_tests(1);
+
+        let result = session.set_timeline(build_short_snapshot(500.0));
+
+        assert!(result.is_err());
+        assert_eq!(session.state, PreviewSessionState::Playing);
+        assert_eq!(session.position_ms, original_position_ms);
+        let preview_player = session
+            .preview_player
+            .as_ref()
+            .expect("existing preview backend should be restored");
+        assert!(preview_player.is_playing_for_tests());
+        assert_eq!(preview_player.query_position_ms(), original_position_ms);
     }
 
     #[test]

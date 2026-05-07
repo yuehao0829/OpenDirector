@@ -3,7 +3,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, createWriteStream } from 'node:fs';
 import {
-  access,
   lstat,
   mkdir,
   mkdtemp,
@@ -16,13 +15,18 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import {
+  inferRuntimeRootFromPath,
+  inspectRuntime,
+  MAC_FRAMEWORK_ROOTS,
+  resolvePkgConfigExecutable,
+} from './gstreamer-dev-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TAURI_DIR = path.join(REPO_ROOT, 'apps', 'desktop', 'src-tauri');
 const DEFAULT_RUNTIME_ROOT = path.join(TAURI_DIR, 'gstreamer-dev');
-const DEFAULT_WINDOWS_VERSION = process.env.GENLINE_GSTREAMER_VERSION || '1.28.2';
-const REQUIRED_TOOLS = ['gst-discoverer-1.0', 'gst-inspect-1.0', 'ges-launch-1.0'];
+const DEFAULT_WINDOWS_VERSION = process.env.OPENDIRECTOR_GSTREAMER_VERSION || '1.28.2';
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -37,11 +41,12 @@ async function main() {
   log(`Runtime target: ${runtimeRoot}`);
 
   if (options.doctor) {
-    await runDoctor(runtimeRoot);
+    runDoctor(runtimeRoot);
     return;
   }
 
   if (process.platform === 'win32') {
+    ensureWindowsBuildDeps();
     await setupWindowsRuntime(runtimeRoot, options.force, options.version);
   } else if (process.platform === 'darwin') {
     await setupMacRuntime(runtimeRoot, options.force);
@@ -51,7 +56,7 @@ async function main() {
     );
   }
 
-  const localRuntime = await inspectRuntime(runtimeRoot);
+  const localRuntime = inspectRuntime(runtimeRoot);
   if (!localRuntime.ready) {
     throw new Error(
       `Configured runtime is still incomplete: missing ${localRuntime.missingTools.join(', ')}`,
@@ -114,8 +119,8 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
-async function runDoctor(runtimeRoot) {
-  const candidates = await collectRuntimeCandidates(runtimeRoot);
+function runDoctor(runtimeRoot) {
+  const candidates = collectRuntimeCandidates(runtimeRoot);
   const readyCandidate = candidates.find((candidate) => candidate.ready);
 
   if (candidates.length === 0) {
@@ -134,11 +139,11 @@ async function runDoctor(runtimeRoot) {
   }
 
   log(`Using candidate: ${readyCandidate.path}`);
-  printNextSteps(runtimeRoot);
+  printNextSteps(readyCandidate.path);
 }
 
 async function setupWindowsRuntime(runtimeRoot, force, version) {
-  const localRuntime = await inspectRuntime(runtimeRoot);
+  const localRuntime = inspectRuntime(runtimeRoot);
   if (localRuntime.ready && !force) {
     log('Existing repo-local runtime is already ready.');
     return;
@@ -155,7 +160,7 @@ async function setupWindowsRuntime(runtimeRoot, force, version) {
 
   await mkdir(runtimeRoot, { recursive: true });
 
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'genline-gstreamer-'));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'opendirector-gstreamer-'));
   const installerPath = path.join(tempDir, `gstreamer-runtime-${version}.exe`);
   const installerUrl =
     `https://gstreamer.freedesktop.org/data/pkg/windows/${version}/msvc/` +
@@ -170,13 +175,14 @@ async function setupWindowsRuntime(runtimeRoot, force, version) {
 }
 
 async function setupMacRuntime(runtimeRoot, force) {
-  const localRuntime = await inspectRuntime(runtimeRoot);
+  const localRuntime = inspectRuntime(runtimeRoot);
   if (localRuntime.ready && !force) {
     log('Existing repo-local runtime is already ready.');
     return;
   }
 
-  const sourceRoot = await resolveMacRuntimeSource();
+  ensureMacBuildDeps();
+  const sourceRoot = resolveMacRuntimeSource();
   if (!sourceRoot) {
     throw new Error(
       'Unable to find a macOS GStreamer runtime. Install Homebrew first, or install the official GStreamer framework.',
@@ -191,14 +197,64 @@ async function setupMacRuntime(runtimeRoot, force) {
   log(`Linked ${runtimeRoot} -> ${sourceRoot}`);
 }
 
-async function resolveMacRuntimeSource() {
-  const frameworkCandidates = [
-    '/Library/Frameworks/GStreamer.framework/Versions/Current',
-    '/Library/Frameworks/GStreamer.framework/Versions/1.0',
-  ];
+function ensureWindowsBuildDeps() {
+  const pkgConfigExecutable = resolvePkgConfigExecutable(process.env);
+  if (pkgConfigExecutable) {
+    log(`pkg-config is available at ${pkgConfigExecutable}`);
+    return;
+  }
+
+  const wingetResult = spawnSync('winget', ['--version'], { encoding: 'utf8' });
+  if (wingetResult.status !== 0) {
+    throw new Error(
+      'pkg-config is required but not found. Install Pkg Config Lite via WinGet, ' +
+      'or add pkg-config.exe to PATH before building the desktop app.',
+    );
+  }
+
+  log('Installing pkg-config via WinGet ...');
+  runCommand('winget', [
+    'install',
+    '--id',
+    'bloodrock.pkg-config-lite',
+    '--exact',
+    '--accept-source-agreements',
+    '--accept-package-agreements',
+  ]);
+
+  const installedPkgConfig = resolvePkgConfigExecutable(process.env);
+  if (!installedPkgConfig) {
+    throw new Error(
+      'pkg-config installation completed, but the executable could not be located. ' +
+      'Reopen the shell and try again.',
+    );
+  }
+
+  log(`pkg-config is available at ${installedPkgConfig}`);
+}
+
+function ensureMacBuildDeps() {
+  const pkgConfigResult = spawnSync('pkg-config', ['--version'], { encoding: 'utf8' });
+  if (pkgConfigResult.status !== 0) {
+    const brew = spawnSync('brew', ['--prefix'], { encoding: 'utf8' });
+    if (brew.status !== 0) {
+      throw new Error(
+        'pkg-config is required but not found, and Homebrew is not installed. ' +
+        'Install Homebrew first: https://brew.sh',
+      );
+    }
+    log('Installing pkg-config via Homebrew ...');
+    runCommand('brew', ['install', 'pkgconf']);
+  } else {
+    log('pkg-config is available.');
+  }
+}
+
+function resolveMacRuntimeSource() {
+  const frameworkCandidates = MAC_FRAMEWORK_ROOTS;
 
   for (const candidate of frameworkCandidates) {
-    const inspected = await inspectRuntime(candidate);
+    const inspected = inspectRuntime(candidate);
     if (inspected.ready) {
       log(`Using existing macOS framework runtime at ${candidate}`);
       return candidate;
@@ -226,7 +282,7 @@ async function resolveMacRuntimeSource() {
   }
 
   const prefix = prefixResult.stdout.trim();
-  const inspected = await inspectRuntime(prefix);
+  const inspected = inspectRuntime(prefix);
   if (!inspected.ready) {
     throw new Error(
       `Homebrew gstreamer prefix is incomplete: missing ${inspected.missingTools.join(', ')}`,
@@ -236,11 +292,11 @@ async function resolveMacRuntimeSource() {
   return prefix;
 }
 
-async function collectRuntimeCandidates(runtimeRoot) {
+function collectRuntimeCandidates(runtimeRoot) {
   const candidates = [];
   const seen = new Set();
 
-  const addCandidate = async (candidatePath, source) => {
+  const addCandidate = (candidatePath, source) => {
     if (!candidatePath) return;
     const resolvedPath = path.resolve(candidatePath);
     if (seen.has(resolvedPath)) return;
@@ -249,78 +305,29 @@ async function collectRuntimeCandidates(runtimeRoot) {
     candidates.push({
       path: resolvedPath,
       source,
-      ...(await inspectRuntime(resolvedPath)),
+      ...inspectRuntime(resolvedPath),
     });
   };
 
-  await addCandidate(runtimeRoot, 'repo-local');
+  addCandidate(runtimeRoot, 'repo-local');
 
   for (const envName of [
     'GSTREAMER_1_0_ROOT_MSVC_X86_64',
     'GSTREAMER_1_0_ROOT_X86_64',
   ]) {
-    await addCandidate(process.env[envName], `env:${envName}`);
+    addCandidate(process.env[envName], `env:${envName}`);
   }
 
   if (process.platform === 'darwin') {
-    await addCandidate(
-      '/Library/Frameworks/GStreamer.framework/Versions/Current',
-      'mac-framework',
-    );
-    await addCandidate(
-      '/Library/Frameworks/GStreamer.framework/Versions/1.0',
-      'mac-framework',
-    );
+    for (const root of MAC_FRAMEWORK_ROOTS) {
+      addCandidate(root, 'mac-framework');
+    }
   }
 
-  const pathCandidate = await inferRuntimeRootFromPath();
-  await addCandidate(pathCandidate, 'path');
+  const pathCandidate = inferRuntimeRootFromPath(process.env.PATH);
+  addCandidate(pathCandidate, 'path');
 
   return candidates;
-}
-
-async function inferRuntimeRootFromPath() {
-  const pathValue = process.env.PATH;
-  if (!pathValue) {
-    return null;
-  }
-
-  for (const entry of pathValue.split(path.delimiter)) {
-    if (!entry) continue;
-
-    for (const toolName of REQUIRED_TOOLS) {
-      const candidate = path.join(entry, executableName(toolName));
-      try {
-        await access(candidate);
-        return path.dirname(entry);
-      } catch {
-        // Continue scanning PATH entries.
-      }
-    }
-  }
-
-  return null;
-}
-
-async function inspectRuntime(runtimeRoot) {
-  const binDir = path.join(runtimeRoot, 'bin');
-  const missingTools = [];
-
-  for (const toolName of REQUIRED_TOOLS) {
-    const toolPath = path.join(binDir, executableName(toolName));
-    if (!existsSync(toolPath)) {
-      missingTools.push(executableName(toolName));
-    }
-  }
-
-  return {
-    ready: missingTools.length === 0,
-    missingTools,
-  };
-}
-
-function executableName(toolName) {
-  return process.platform === 'win32' ? `${toolName}.exe` : toolName;
 }
 
 async function removeRepoLocalRuntime(runtimeRoot) {
@@ -387,11 +394,17 @@ function runCommand(command, args) {
   }
 }
 
-function printNextSteps(runtimeRoot) {
-  const relativeRuntime = path.relative(REPO_ROOT, runtimeRoot) || runtimeRoot;
-  log(`Repo-local runtime: ${relativeRuntime}`);
+function printNextSteps(activeRuntimeRoot) {
+  const relativeRuntime = path.relative(REPO_ROOT, activeRuntimeRoot) || activeRuntimeRoot;
+  log(`GStreamer runtime: ${relativeRuntime}`);
   log('Next steps:');
-  log('  1. pnpm dev:desktop');
+  log('  1. pnpm dev');
+  if (process.platform === 'win32') {
+    log('  2. Reopen the terminal before running cargo directly if pkg-config was just installed.');
+    log('  3. cargo test xges -- --nocapture');
+    return;
+  }
+
   log('  2. cargo test xges -- --nocapture');
 }
 

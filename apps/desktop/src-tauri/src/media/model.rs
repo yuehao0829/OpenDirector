@@ -140,7 +140,7 @@ pub struct TimelineRenderResult {
     pub backend_used: MediaBackendId,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PreviewSessionState {
     Idle,

@@ -11,6 +11,8 @@ pub struct MediaMetadataResult {
     pub channels: Option<u32>,
     pub sample_rate: Option<u32>,
     pub codec: Option<String>,
+    #[serde(default)]
+    pub has_audio: Option<bool>,
 }
 
 pub(crate) fn read_media_metadata(path: &str) -> Result<MediaMetadataResult, String> {

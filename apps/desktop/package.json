@@ -1,11 +1,12 @@
 {
   "name": "@opendirector/desktop",
-  "version": "0.0.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "bundle:gstreamer": "pnpm node ../../scripts/prepare-gstreamer-runtime.mjs",
     "gstreamer:setup": "pnpm node ../../scripts/setup-gstreamer-dev.mjs",
     "gstreamer:doctor": "pnpm node ../../scripts/setup-gstreamer-dev.mjs --doctor",
     "tauri:dev": "node ../../scripts/run-desktop-tauri-dev.mjs",

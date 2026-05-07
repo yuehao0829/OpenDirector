@@ -1,141 +1,131 @@
+use std::path::Path;
+
 use crate::commands::metadata::MediaMetadataResult;
 
 use super::super::error::MediaResult;
 use super::super::model::MediaProbeRequest;
 use super::super::runtime;
-use super::command::{canonicalize_media_path, portable_path_string, run_tool, GstreamerTool};
+use super::clock_time::clock_time_to_ms;
+use super::command::canonicalize_media_path;
+use ges::gst_pbutils::{prelude::*, Discoverer, DiscovererInfo, DiscovererResult, DiscovererVideoInfo};
+
+const DISCOVERER_TIMEOUT_SECONDS: u64 = 5;
 
 pub fn probe_media(request: &MediaProbeRequest) -> MediaResult<MediaMetadataResult> {
-    let runtime = runtime::require_gstreamer_preview_runtime()?;
+    runtime::require_gstreamer_preview_runtime()?;
+    runtime::prepare_gstreamer_process_environment()?;
+
     let media_path = canonicalize_media_path(&request.path)?;
-    let output = run_tool(
-        &runtime.bootstrap,
-        GstreamerTool::GstDiscoverer,
-        &[portable_path_string(&media_path)],
-    )?;
+    let uri = media_file_uri(&media_path)?;
+    let discoverer = Discoverer::new(gst::ClockTime::from_seconds(DISCOVERER_TIMEOUT_SECONDS))
+        .map_err(|error| format!("failed to create GStreamer discoverer: {error}"))?;
+    let info = discoverer
+        .discover_uri(&uri)
+        .map_err(|error| format!("failed to discover media {}: {error}", media_path.display()))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gst-discoverer-1.0 failed: {}", stderr.trim()));
+    if info.result() != DiscovererResult::Ok {
+        return Err(describe_discoverer_failure(
+            &info,
+            &media_path.display().to_string(),
+        ));
     }
 
-    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-    if !output.stderr.is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-
-    Ok(parse_discoverer_output(&text))
+    Ok(metadata_from_discoverer_info(&info))
 }
 
-fn parse_discoverer_output(text: &str) -> MediaMetadataResult {
-    MediaMetadataResult {
-        duration_ms: find_keys(text, "Duration")
-            .into_iter()
-            .filter_map(parse_duration_ms)
-            .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)),
-        width: find_key(text, "Width").and_then(|value| parse_u32_token(&value)),
-        height: find_key(text, "Height").and_then(|value| parse_u32_token(&value)),
-        frame_rate: find_key(text, "Frame rate").and_then(parse_fractional_rate),
-        channels: find_key(text, "Channels").and_then(|value| parse_u32_token(&value)),
-        sample_rate: find_key(text, "Sample rate").and_then(parse_sample_rate),
-        codec: find_key(text, "Codec"),
-    }
-}
-
-fn find_key(text: &str, key: &str) -> Option<String> {
-    find_keys(text, key).into_iter().next()
-}
-
-fn find_keys(text: &str, key: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let (candidate_key, candidate_value) = trimmed.split_once(':')?;
-            if candidate_key.trim().eq_ignore_ascii_case(key) {
-                Some(candidate_value.trim().to_string())
-            } else {
-                None
-            }
+fn media_file_uri(path: &Path) -> MediaResult<String> {
+    gst::glib::filename_to_uri(path, None)
+        .map(|uri| uri.to_string())
+        .map_err(|error| {
+            format!(
+                "failed to convert media path {} to URI: {error}",
+                path.display()
+            )
         })
-        .collect()
 }
 
-fn parse_u32_token(value: &str) -> Option<u32> {
-    value
-        .split(|c: char| !c.is_ascii_digit())
-        .find(|part| !part.is_empty())
-        .and_then(|part| part.parse::<u32>().ok())
-}
+fn metadata_from_discoverer_info(info: &DiscovererInfo) -> MediaMetadataResult {
+    let video_streams = info.video_streams();
+    let audio_streams = info.audio_streams();
+    let video_stream = video_streams
+        .iter()
+        .find(|stream| !stream.is_image())
+        .or_else(|| video_streams.first());
+    let audio_stream = audio_streams.first();
 
-fn parse_sample_rate(value: String) -> Option<u32> {
-    let normalized = value.replace("Hz", "").replace("hz", "");
-    parse_u32_token(&normalized)
-}
-
-fn parse_fractional_rate(value: String) -> Option<f64> {
-    if let Some((num, den)) = value.split_once('/') {
-        let num = num.trim().parse::<f64>().ok()?;
-        let den = den.trim().parse::<f64>().ok()?;
-        if den > 0.0 {
-            return Some(num / den);
-        }
+    MediaMetadataResult {
+        duration_ms: info.duration().map(clock_time_to_ms),
+        width: video_stream.and_then(|stream| nonzero_u32(stream.width())),
+        height: video_stream.and_then(|stream| nonzero_u32(stream.height())),
+        frame_rate: video_stream.and_then(video_frame_rate),
+        channels: audio_stream.and_then(|stream| nonzero_u32(stream.channels())),
+        sample_rate: audio_stream.and_then(|stream| nonzero_u32(stream.sample_rate())),
+        codec: video_stream
+            .and_then(stream_caps_name)
+            .or_else(|| audio_stream.and_then(stream_caps_name)),
+        has_audio: Some(!audio_streams.is_empty()),
     }
-
-    value.trim().parse::<f64>().ok()
 }
 
-fn parse_duration_ms(value: String) -> Option<f64> {
-    let trimmed = value.trim();
-    let (time_part, fraction_part) = trimmed.split_once('.').unwrap_or((trimmed, "0"));
-    let mut units = time_part.split(':');
-    let hours = units.next()?.trim().parse::<u64>().ok()?;
-    let minutes = units.next()?.trim().parse::<u64>().ok()?;
-    let seconds = units.next()?.trim().parse::<u64>().ok()?;
+fn describe_discoverer_failure(info: &DiscovererInfo, path: &str) -> String {
+    let details = info.missing_elements_installer_details();
+    if details.is_empty() {
+        format!(
+            "GStreamer discoverer failed for {path}: {:?}",
+            info.result()
+        )
+    } else {
+        let names: Vec<_> = details.into_iter().map(|v| v.to_string()).collect();
+        format!(
+            "GStreamer discoverer failed for {path}: {:?}; missing plugins: {}",
+            info.result(),
+            names.join(", ")
+        )
+    }
+}
 
-    let nanos_str: String = fraction_part
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect();
-    let nanos = nanos_str.parse::<u64>().unwrap_or(0);
+fn video_frame_rate(stream: &DiscovererVideoInfo) -> Option<f64> {
+    let fraction = stream.framerate();
+    let numerator = fraction.numer();
+    let denominator = fraction.denom();
+    if numerator > 0 && denominator > 0 {
+        Some(numerator as f64 / denominator as f64)
+    } else {
+        None
+    }
+}
 
-    let millis = hours as f64 * 3_600_000.0
-        + minutes as f64 * 60_000.0
-        + seconds as f64 * 1_000.0
-        + nanos as f64 / 1_000_000.0;
+fn stream_caps_name(stream: &impl DiscovererStreamInfoExt) -> Option<String> {
+    stream
+        .caps()
+        .and_then(|caps| {
+            caps.structure(0)
+                .map(|structure| structure.name().to_string())
+        })
+        .filter(|name| !name.trim().is_empty())
+}
 
-    Some(millis)
+fn nonzero_u32(value: u32) -> Option<u32> {
+    (value > 0).then_some(value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_discoverer_output;
+    use std::path::Path;
+
+    use super::{media_file_uri, nonzero_u32};
 
     #[test]
-    fn parse_discoverer_prefers_longest_duration() {
-        let text = r#"
-Properties:
-  Duration: 0:00:00.033333333
-  Duration: 0:00:02.033333333
-      Width: 1280
-      Height: 720
-      Frame rate: 30/1
-      Channels: 2 (front-left, front-right)
-      Sample rate: 44100
-"#;
+    fn nonzero_u32_filters_zero_values() {
+        assert_eq!(nonzero_u32(0), None);
+        assert_eq!(nonzero_u32(42), Some(42));
+    }
 
-        let metadata = parse_discoverer_output(text);
-        assert_eq!(metadata.width, Some(1280));
-        assert_eq!(metadata.height, Some(720));
-        assert_eq!(metadata.frame_rate, Some(30.0));
-        assert_eq!(metadata.channels, Some(2));
-        assert_eq!(metadata.sample_rate, Some(44100));
-        let duration = metadata.duration_ms.expect("duration should be parsed");
-        assert!(
-            (duration - 2033.333333).abs() < 0.001,
-            "duration={duration}"
-        );
+    #[test]
+    fn media_file_uri_encodes_reserved_characters() {
+        let uri = media_file_uri(Path::new("/tmp/OpenDirector #?.wav"))
+            .expect("path should convert to a file URI");
+
+        assert_eq!(uri, "file:///tmp/OpenDirector%20%23%3F.wav");
     }
 }

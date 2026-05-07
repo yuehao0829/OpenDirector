@@ -2,27 +2,21 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use super::bootstrap::BootstrapReport;
+use super::bootstrap::{self, BootstrapReport};
 
 #[derive(Debug, Clone, Copy)]
 pub enum GstreamerTool {
-    GstDiscoverer,
-    GstInspect,
     GesLaunch,
 }
 
 pub fn tool_label(tool: GstreamerTool) -> &'static str {
     match tool {
-        GstreamerTool::GstDiscoverer => "gst-discoverer-1.0",
-        GstreamerTool::GstInspect => "gst-inspect-1.0",
         GstreamerTool::GesLaunch => "ges-launch-1.0",
     }
 }
 
 pub fn resolve_tool(report: &BootstrapReport, tool: GstreamerTool) -> Option<PathBuf> {
     match tool {
-        GstreamerTool::GstDiscoverer => report.gst_discoverer_path.clone(),
-        GstreamerTool::GstInspect => report.gst_inspect_path.clone(),
         GstreamerTool::GesLaunch => report.ges_launch_path.clone(),
     }
 }
@@ -47,13 +41,13 @@ pub fn configure_command(command: &mut Command, report: &BootstrapReport) {
     }
 
     if let Some(runtime_root) = &report.runtime_root {
-        let bin_dir = runtime_root.join("bin");
-        if bin_dir.exists() {
-            if let Ok(joined) = join_env_path_with_prepend(
+        let path_entries = bootstrap::runtime_environment_path_entries(runtime_root.as_path());
+        if !path_entries.is_empty() {
+            if let Ok(joined) = join_env_path_with_prepends(
                 std::env::var_os("PATH")
                     .as_ref()
                     .map(|value| value.as_os_str()),
-                bin_dir.as_path(),
+                &path_entries,
             ) {
                 command.env("PATH", joined);
             }
@@ -194,16 +188,24 @@ pub fn preferred_plugin_feature_rank() -> String {
     }
 }
 
-fn join_env_path_with_prepend(
+fn join_env_path_with_prepends(
     existing: Option<&OsStr>,
-    new_path: &Path,
+    new_paths: &[PathBuf],
 ) -> Result<OsString, String> {
     let existing_entries = existing
         .into_iter()
         .filter(|value| !value.is_empty())
         .flat_map(std::env::split_paths);
-    std::env::join_paths(std::iter::once(new_path.to_path_buf()).chain(existing_entries))
+    std::env::join_paths(new_paths.iter().cloned().chain(existing_entries))
         .map_err(|error| format!("failed to join environment path entries: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn join_env_path_with_prepend(
+    existing: Option<&OsStr>,
+    new_path: &Path,
+) -> Result<OsString, String> {
+    join_env_path_with_prepends(existing, &[new_path.to_path_buf()])
 }
 
 #[cfg(target_os = "macos")]
@@ -298,25 +300,28 @@ mod tests {
 
     use super::{configure_command, BootstrapReport};
 
-    use super::join_env_path_with_prepend;
+    use super::join_env_path_with_prepends;
 
     #[test]
-    fn join_env_path_with_prepend_splits_existing_entries() {
+    fn join_env_path_with_prepends_splits_existing_entries() {
         let existing = std::env::join_paths([
             PathBuf::from("/existing/one"),
             PathBuf::from("/existing/two"),
         ])
         .expect("existing path list should join");
 
-        let joined =
-            join_env_path_with_prepend(Some(existing.as_os_str()), PathBuf::from("/new").as_path())
-                .expect("joined path list should be valid");
+        let joined = join_env_path_with_prepends(
+            Some(existing.as_os_str()),
+            &[PathBuf::from("/new"), PathBuf::from("/newer")],
+        )
+        .expect("joined path list should be valid");
 
         let entries = std::env::split_paths(&joined).collect::<Vec<_>>();
         assert_eq!(
             entries,
             vec![
                 PathBuf::from("/new"),
+                PathBuf::from("/newer"),
                 PathBuf::from("/existing/one"),
                 PathBuf::from("/existing/two"),
             ]

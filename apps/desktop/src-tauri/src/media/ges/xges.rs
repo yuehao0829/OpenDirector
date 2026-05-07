@@ -894,7 +894,7 @@ fn build_import_tracks(
             warnings.push(XgesImportWarning {
                 code: "unsupported_partial_audio_mute".to_string(),
                 message: format!(
-                    "XGES audio layer {layer_priority} mixes muted and audible clips; GenLine imported the track as audible because fragment-level mute is not supported."
+                    "XGES audio layer {layer_priority} mixes muted and audible clips; OpenDirector imported the track as audible because fragment-level mute is not supported."
                 ),
                 path,
             });
@@ -1210,7 +1210,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("genline-xges-{case_name}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("opendirector-xges-{case_name}-{unique}"));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
     }

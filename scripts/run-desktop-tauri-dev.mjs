@@ -14,6 +14,17 @@ import {
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  delay,
+  getEnvValue,
+  inferRuntimeRootFromPath,
+  MAC_FRAMEWORK_ROOTS,
+  resolveExecutableOnPath,
+  resolvePkgConfigExecutable,
+  resolveReadyRuntimeRoot,
+  runtimeRootLooksReady,
+  setEnvValue,
+} from './gstreamer-dev-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -22,6 +33,7 @@ const tauriDir = path.join(desktopDir, 'src-tauri');
 const tauriConfigPath = path.join(tauriDir, 'tauri.conf.json');
 const localRuntimeRoot = path.join(tauriDir, 'gstreamer-dev');
 const defaultDesktopDevServerPort = 3000;
+const maxDesktopDevServerPortAttempts = 20;
 const viteLogDir = path.join(repoRoot, '.logs');
 const viteLogPaths = {
   out: path.join(viteLogDir, '.desktop-vite-dev.out.log'),
@@ -42,10 +54,10 @@ writeFileSync(tauriPidFilePath, '', 'utf8');
 env.OPENDIRECTOR_DEV_PID_FILE = tauriPidFilePath;
 const pnpmInvocation = resolvePnpmInvocation(env);
 const devEntryPath = resolveDevEntryPath();
-const desktopDevServer = resolveDesktopDevServer();
+let desktopDevServer = resolveDesktopDevServer();
 const viteInvocation = resolveViteInvocation();
 const tauriInvocation = resolveTauriInvocation();
-const tauriCliArgs = process.argv.slice(2);
+const tauriCliArgs = normalizeForwardedCliArgs(process.argv.slice(2));
 const isTauriInfoCommand = tauriCliArgs.some((arg) =>
   ['-h', '--help', '-V', '--version'].includes(arg),
 );
@@ -66,11 +78,7 @@ if (!isTauriInfoCommand) {
   }
 }
 
-const tauriConfigOverride = JSON.stringify({
-  build: {
-    beforeDevCommand: null,
-  },
-});
+const tauriConfigOverride = JSON.stringify(buildTauriDevConfigOverride());
 const tauriArgs = [
   'dev',
   ...(!isTauriInfoCommand ? ['--no-dev-server-wait'] : []),
@@ -456,26 +464,9 @@ function resolvePnpmInvocation(targetEnv) {
     };
   }
 
-  const candidates =
-    process.platform === 'win32'
-      ? ['pnpm.exe', 'pnpm.cmd', 'pnpm.bat', 'pnpm']
-      : ['pnpm'];
-
-  const pathValue = getEnvValue(targetEnv, 'PATH') ?? '';
-  for (const entry of pathValue.split(path.delimiter)) {
-    if (!entry) {
-      continue;
-    }
-
-    for (const candidate of candidates) {
-      const executable = path.join(entry, candidate);
-      if (existsSync(executable)) {
-        return {
-          command: executable,
-          args: [],
-        };
-      }
-    }
+  const pnpmPath = resolveExecutableOnPath(targetEnv, 'pnpm');
+  if (pnpmPath) {
+    return { command: pnpmPath, args: [] };
   }
 
   throw new Error(
@@ -866,10 +857,6 @@ async function waitForProcessesExit(pids, timeoutMs) {
   return pids.every((pid) => !isProcessAlive(pid));
 }
 
-function delay(timeoutMs) {
-  return new Promise((resolve) => setTimeout(resolve, timeoutMs));
-}
-
 async function waitForTargetExit(target, timeoutMs) {
   try {
     await waitForChildExit(target, timeoutMs);
@@ -907,8 +894,30 @@ function waitForChildExit(target, timeoutMs) {
 }
 
 async function ensureDesktopDevServer() {
+  const requestedPort = desktopDevServer.port;
+  const selectedDevServer = resolveAvailableDesktopDevServer(desktopDevServer);
+  desktopDevServer = selectedDevServer.devServer;
+  env.OPENDIRECTOR_DEV_SERVER_PORT = String(desktopDevServer.port);
+
   const { baseUrl, port } = desktopDevServer;
-  const occupant = findListeningProcess(port);
+  const occupant = selectedDevServer.occupant;
+  const portChanged = port !== requestedPort;
+  const portChangeMessage = portChanged
+    ? `Default port ${requestedPort} was unavailable; using ${port} instead. `
+    : '';
+
+  if (selectedDevServer.reusableOccupant) {
+    await waitForDevServerReady(baseUrl, 5000, {
+      includeEntry: false,
+      logPaths: viteLogPaths,
+      timeoutLabel: 'HTTP readiness',
+    });
+
+    return {
+      message: `${portChangeMessage}Reusing desktop Vite dev server on port ${port}.`,
+    };
+  }
+
   if (!occupant) {
     prepareProcessLogFile(viteLogPaths.out);
     prepareProcessLogFile(viteLogPaths.err);
@@ -935,33 +944,73 @@ async function ensureDesktopDevServer() {
 
     return {
       message:
-        `Started desktop Vite dev server on port ${port}; ` +
+        `${portChangeMessage}Started desktop Vite dev server on port ${port}; ` +
         'continuing to warm the app entry in the background.',
     };
   }
 
-  const desktopPathFragment = desktopDir.toLowerCase();
-  const commandLine = (occupant.commandLine ?? '').toLowerCase();
-  const isWorkspaceVite =
-    commandLine.includes(desktopPathFragment) &&
-    commandLine.includes('vite');
+  throw new Error(
+    `Unable to find an available desktop dev server port after checking ` +
+      `${requestedPort}-${requestedPort + maxDesktopDevServerPortAttempts - 1}. ` +
+      `Last conflict was PID ${occupant.pid} (${occupant.name ?? 'unknown'}).`,
+  );
+}
 
-  if (!isWorkspaceVite) {
-    throw new Error(
-      `Port ${port} is already occupied by PID ${occupant.pid} (${occupant.name ?? 'unknown'}). ` +
-        'Stop that process or free port 3000 before starting desktop dev.',
-    );
+function resolveAvailableDesktopDevServer(initialDevServer) {
+  let lastConflict = null;
+
+  const listeningProcesses = batchFindListeningProcesses(
+    initialDevServer.port,
+    initialDevServer.port + maxDesktopDevServerPortAttempts - 1,
+  );
+
+  for (let offset = 0; offset < maxDesktopDevServerPortAttempts; offset += 1) {
+    const port = initialDevServer.port + offset;
+    const candidateDevServer = buildDesktopDevServerForPort(initialDevServer, port);
+    const occupant = listeningProcesses.get(port) ?? null;
+    if (!occupant) {
+      return {
+        devServer: candidateDevServer,
+        occupant: null,
+        reusableOccupant: null,
+      };
+    }
+
+    if (isWorkspaceViteProcess(occupant)) {
+      return {
+        devServer: candidateDevServer,
+        occupant,
+        reusableOccupant: occupant,
+      };
+    }
+
+    lastConflict = occupant;
   }
 
-  await waitForDevServerReady(baseUrl, 5000, {
-    includeEntry: false,
-    logPaths: viteLogPaths,
-    timeoutLabel: 'HTTP readiness',
-  });
-
   return {
-    message: `Reusing desktop Vite dev server on port ${port}.`,
+    devServer: initialDevServer,
+    occupant: lastConflict,
+    reusableOccupant: null,
   };
+}
+
+function buildDesktopDevServerForPort(devServer, port) {
+  return {
+    port,
+    baseUrl: replaceUrlPort(devServer.baseUrl, port),
+  };
+}
+
+function replaceUrlPort(value, port) {
+  const url = normalizeDevServerBaseUrl(value);
+  url.port = String(port);
+  return url.toString();
+}
+
+function isWorkspaceViteProcess(occupant) {
+  const desktopPathFragment = desktopDir.toLowerCase();
+  const commandLine = (occupant?.commandLine ?? '').toLowerCase();
+  return commandLine.includes(desktopPathFragment) && commandLine.includes('vite');
 }
 
 function findListeningProcess(port) {
@@ -970,7 +1019,7 @@ function findListeningProcess(port) {
       '$conn = Get-NetTCPConnection -State Listen -LocalPort ' + port + ' -ErrorAction SilentlyContinue | Select-Object -First 1;',
       'if ($null -eq $conn) { exit 0 }',
       '$proc = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $conn.OwningProcess);',
-      '$payload = [PSCustomObject]@{ pid = $conn.OwningProcess; name = $proc.Name; commandLine = $proc.CommandLine };',
+      '$payload = [PSCustomObject]@{ port = $conn.LocalPort; pid = $conn.OwningProcess; name = $proc.Name; commandLine = $proc.CommandLine };',
       '$payload | ConvertTo-Json -Compress',
     ].join(' ');
 
@@ -993,7 +1042,8 @@ function findListeningProcess(port) {
     }
 
     try {
-      return JSON.parse(stdout);
+      const parsed = JSON.parse(stdout);
+      return { pid: parsed.pid, name: parsed.name, commandLine: parsed.commandLine };
     } catch {
       return null;
     }
@@ -1049,6 +1099,62 @@ function findListeningProcess(port) {
   };
 }
 
+function batchFindListeningProcesses(startPort, endPort) {
+  const result = new Map();
+
+  if (process.platform === 'win32') {
+    const command = [
+      '$conns = Get-NetTCPConnection -State Listen -LocalPort ' + startPort + '..' + endPort + ' -ErrorAction SilentlyContinue;',
+      'if ($null -eq $conns) { exit 0 }',
+      '$items = @($conns) | Select-Object LocalPort, OwningProcess -Unique;',
+      '$pids = $items | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique;',
+      '$procs = @{}; foreach ($p in $pids) { $proc = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $p) -ErrorAction SilentlyContinue; if ($proc) { $procs[$p] = $proc } };',
+      '$payload = @(); foreach ($item in $items) { $proc = $procs[$item.OwningProcess]; $payload += [PSCustomObject]@{ port = $item.LocalPort; pid = $item.OwningProcess; name = if ($proc) { $proc.Name } else { $null }; commandLine = if ($proc) { $proc.CommandLine } else { $null } } };',
+      '$payload | ConvertTo-Json -Compress',
+    ].join(' ');
+
+    const psResult = spawnSync(
+      'powershell',
+      ['-NoProfile', '-Command', command],
+      {
+        stdio: 'pipe',
+        encoding: 'utf8',
+      },
+    );
+
+    if (psResult.status !== 0 || !psResult.stdout.trim()) {
+      return result;
+    }
+
+    try {
+      const parsed = JSON.parse(psResult.stdout.trim());
+      const entries = Array.isArray(parsed) ? parsed : [parsed];
+      for (const entry of entries) {
+        if (typeof entry.port === 'number') {
+          result.set(entry.port, {
+            pid: entry.pid,
+            name: entry.name ?? '',
+            commandLine: entry.commandLine,
+          });
+        }
+      }
+    } catch {
+      // Fall through — return empty map, individual ports will appear unoccupied.
+    }
+
+    return result;
+  }
+
+  for (let port = startPort; port <= endPort; port += 1) {
+    const occupant = findListeningProcess(port);
+    if (occupant) {
+      result.set(port, occupant);
+    }
+  }
+
+  return result;
+}
+
 async function waitForDevServerReady(baseUrl, timeoutMs, options = {}) {
   const deadline = Date.now() + timeoutMs;
   const normalizedBaseUrl = normalizeDevServerBaseUrl(baseUrl);
@@ -1082,7 +1188,7 @@ async function waitForDevServerReady(baseUrl, timeoutMs, options = {}) {
       // keep polling until the dev server is actually ready to serve the app
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await delay(200);
   }
 
   const errorMessage =
@@ -1113,21 +1219,38 @@ function resolveDesktopDevServer() {
     baseUrl: `http://localhost:${defaultDesktopDevServerPort}/`,
   };
 
+  const configuredPort = resolveConfiguredDesktopDevServerPort();
+
   try {
     const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, 'utf8'));
     const devUrl = tauriConfig?.build?.devUrl;
     if (typeof devUrl !== 'string' || devUrl.trim() === '') {
-      return fallback;
+      return configuredPort
+        ? buildDesktopDevServerForPort(fallback, configuredPort)
+        : fallback;
     }
 
     const normalizedBaseUrl = normalizeDevServerBaseUrl(devUrl);
-    return {
+    const resolved = {
       port: parsePortFromUrl(normalizedBaseUrl, fallback.port),
       baseUrl: normalizedBaseUrl.toString(),
     };
+    return configuredPort
+      ? buildDesktopDevServerForPort(resolved, configuredPort)
+      : resolved;
   } catch {
-    return fallback;
+    return configuredPort
+      ? buildDesktopDevServerForPort(fallback, configuredPort)
+      : fallback;
   }
+}
+
+function resolveConfiguredDesktopDevServerPort() {
+  const candidate = Number.parseInt(
+    process.env.OPENDIRECTOR_DEV_SERVER_PORT ?? '',
+    10,
+  );
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : null;
 }
 
 function normalizeDevServerBaseUrl(value) {
@@ -1298,6 +1421,14 @@ function startDetachedWindowsProcess(invocation, options) {
   return { pid: Number.isFinite(pid) ? pid : null };
 }
 
+function normalizeForwardedCliArgs(argv) {
+  if (argv[0] === '--') {
+    return argv.slice(1);
+  }
+
+  return argv;
+}
+
 function createDevServerStartupError(message, logPaths) {
   const logTail = readProcessLogTail(logPaths);
   if (!logTail) {
@@ -1352,49 +1483,93 @@ function toPowerShellString(value) {
   return `'${String(value).replaceAll('\'', '\'\'')}'`;
 }
 
-function resolveRuntimeRoot() {
-  const envCandidates = [
-    process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64,
-    process.env.GSTREAMER_1_0_ROOT_X86_64,
-  ].filter(Boolean);
-
-  for (const candidate of envCandidates) {
-    const resolved = path.resolve(candidate);
-    if (existsSync(path.join(resolved, 'bin'))) {
-      return resolved;
-    }
+function buildTauriDevConfigOverride() {
+  const override = {
+    build: {
+      beforeDevCommand: null,
+      devUrl: desktopDevServer.baseUrl,
+    },
+  };
+  const missingResourcePatch = resolveMissingTauriBundleResourcePatch();
+  if (missingResourcePatch) {
+    override.bundle = {
+      resources: missingResourcePatch,
+    };
   }
-
-  if (existsSync(path.join(localRuntimeRoot, 'bin'))) {
-    return localRuntimeRoot;
-  }
-
-  return inferRuntimeRootFromPath(getEnvValue(process.env, 'PATH'));
+  return override;
 }
 
-function inferRuntimeRootFromPath(pathValue) {
-  if (!pathValue) {
+function resolveMissingTauriBundleResourcePatch() {
+  try {
+    const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, 'utf8'));
+    const resources = tauriConfig?.bundle?.resources;
+    if (!resources) {
+      return null;
+    }
+
+    if (Array.isArray(resources)) {
+      const existingResources = resources.filter((resource) =>
+        typeof resource === 'string' &&
+        (tauriResourceSourceLooksLikeGlob(resource) || tauriResourceSourceExists(resource)),
+      );
+
+      if (existingResources.length === resources.length) {
+        return null;
+      }
+
+      return existingResources;
+    }
+
+    if (typeof resources !== 'object') {
+      return null;
+    }
+
+    const missingEntries = Object.keys(resources).filter(
+      (resource) =>
+        typeof resource === 'string' &&
+        !tauriResourceSourceLooksLikeGlob(resource) &&
+        !tauriResourceSourceExists(resource),
+    );
+
+    if (missingEntries.length === 0) {
+      return null;
+    }
+
+    console.log(
+      `[Tauri Dev] Skipping missing bundle resources: ${missingEntries.join(', ')}`,
+    );
+
+    return Object.fromEntries(
+      missingEntries.map((resource) => [resource, null]),
+    );
+  } catch (error) {
+    console.warn(
+      `[Tauri Dev] Failed to inspect bundle resources from tauri.conf.json: ${error.message}`,
+    );
     return null;
   }
+}
 
-  const executableNames =
-    process.platform === 'win32'
-      ? ['gst-discoverer-1.0.exe', 'gst-inspect-1.0.exe', 'ges-launch-1.0.exe']
-      : ['gst-discoverer-1.0', 'gst-inspect-1.0', 'ges-launch-1.0'];
+function tauriResourceSourceExists(resourceSource) {
+  const resolvedSourcePath = path.resolve(tauriDir, resourceSource);
+  return existsSync(resolvedSourcePath);
+}
 
-  for (const entry of pathValue.split(path.delimiter)) {
-    if (!entry) {
-      continue;
-    }
+function tauriResourceSourceLooksLikeGlob(resourceSource) {
+  return /[*?[\]{}]/.test(resourceSource);
+}
 
-    for (const executableName of executableNames) {
-      if (existsSync(path.join(entry, executableName))) {
-        return path.dirname(entry);
-      }
-    }
-  }
-
-  return null;
+function resolveRuntimeRoot() {
+  return resolveReadyRuntimeRoot(
+    [
+      getEnvValue(process.env, 'OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT'),
+      getEnvValue(process.env, 'GSTREAMER_1_0_ROOT_MSVC_X86_64'),
+      getEnvValue(process.env, 'GSTREAMER_1_0_ROOT_X86_64'),
+      localRuntimeRoot,
+      inferRuntimeRootFromPath(getEnvValue(process.env, 'PATH')),
+    ],
+    process.platform,
+  );
 }
 
 function configureRuntimeEnvironment(targetEnv, root) {
@@ -1402,6 +1577,7 @@ function configureRuntimeEnvironment(targetEnv, root) {
   const pluginDir = path.join(root, 'lib', 'gstreamer-1.0');
   const pkgConfigDir = path.join(root, 'lib', 'pkgconfig');
   const typelibDir = path.join(root, 'lib', 'girepository-1.0');
+  const pkgConfigExecutable = resolvePkgConfigExecutable(targetEnv);
 
   prependPathEntry(targetEnv, 'PATH', binDir);
 
@@ -1421,7 +1597,6 @@ function configureRuntimeEnvironment(targetEnv, root) {
       setEnvValue(targetEnv, 'GST_PLUGIN_SCANNER_1_0', pluginScannerWrapper);
     }
 
-    const pkgConfigExecutable = resolveExecutableOnPath(targetEnv, 'pkg-config');
     if (pkgConfigExecutable) {
       setEnvValue(targetEnv, 'PKG_CONFIG', pkgConfigExecutable);
     }
@@ -1436,8 +1611,25 @@ function configureRuntimeEnvironment(targetEnv, root) {
   }
 
   if (process.platform === 'win32') {
-    targetEnv.GSTREAMER_1_0_ROOT_MSVC_X86_64 ??= root;
-    targetEnv.GSTREAMER_1_0_ROOT_X86_64 ??= root;
+    setEnvValue(targetEnv, 'GSTREAMER_1_0_ROOT_MSVC_X86_64', root);
+    setEnvValue(targetEnv, 'GSTREAMER_1_0_ROOT_X86_64', root);
+
+    if (pkgConfigExecutable) {
+      setEnvValue(targetEnv, 'PKG_CONFIG', pkgConfigExecutable);
+      prependPathEntry(targetEnv, 'PATH', path.dirname(pkgConfigExecutable));
+
+      if (existsSync(pkgConfigDir)) {
+        prependPathEntry(targetEnv, 'PKG_CONFIG_PATH', pkgConfigDir);
+        const pkgConfigLibdir = resolvePkgConfigLibdir(pkgConfigExecutable, pkgConfigDir);
+        if (pkgConfigLibdir) {
+          setEnvValue(targetEnv, 'PKG_CONFIG_LIBDIR', pkgConfigLibdir);
+        }
+      }
+    } else if (existsSync(pkgConfigDir)) {
+      console.warn(
+        '[GStreamer] pkg-config executable not found; Rust/Tauri builds may fail on Windows.',
+      );
+    }
   }
 }
 
@@ -1510,61 +1702,6 @@ function prependPathEntry(targetEnv, key, entry) {
   ];
 
   setEnvValue(targetEnv, key, nextEntries.join(path.delimiter));
-}
-
-function getEnvValue(targetEnv, key) {
-  const exact = targetEnv[key];
-  if (typeof exact === 'string') {
-    return exact;
-  }
-
-  const normalizedKey = key.toLowerCase();
-  for (const [candidateKey, value] of Object.entries(targetEnv)) {
-    if (candidateKey.toLowerCase() === normalizedKey && typeof value === 'string') {
-      return value;
-    }
-  }
-
-  return undefined;
-}
-
-function setEnvValue(targetEnv, key, value) {
-  const normalizedKey = key.toLowerCase();
-  for (const candidateKey of Object.keys(targetEnv)) {
-    if (candidateKey.toLowerCase() === normalizedKey) {
-      targetEnv[candidateKey] = value;
-      return;
-    }
-  }
-
-  targetEnv[key] = value;
-}
-
-function resolveExecutableOnPath(targetEnv, executableName) {
-  const pathValue = getEnvValue(targetEnv, 'PATH');
-  if (!pathValue) {
-    return null;
-  }
-
-  const candidates =
-    process.platform === 'win32'
-      ? [executableName, `${executableName}.exe`, `${executableName}.cmd`, `${executableName}.bat`]
-      : [executableName];
-
-  for (const entry of pathValue.split(path.delimiter)) {
-    if (!entry) {
-      continue;
-    }
-
-    for (const candidate of candidates) {
-      const executablePath = path.join(entry, candidate);
-      if (existsSync(executablePath)) {
-        return executablePath;
-      }
-    }
-  }
-
-  return null;
 }
 
 function resolvePkgConfigLibdir(pkgConfigExecutable, preferredEntry) {

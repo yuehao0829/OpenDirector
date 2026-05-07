@@ -26,19 +26,17 @@ impl BootstrapReport {
 }
 
 pub fn bootstrap(candidates: Vec<PathBuf>) -> BootstrapReport {
-    let runtime_root = candidates
-        .into_iter()
-        .find(|candidate| candidate.exists())
-        .or_else(|| infer_runtime_root_from_path(std::env::var_os("PATH")));
-    let gst_discoverer_path = runtime_root
+    let resolved = resolve_runtime_candidate(candidates);
+    let runtime_root = resolved.as_ref().map(|candidate| candidate.runtime_root.clone());
+    let gst_discoverer_path = resolved
         .as_ref()
-        .and_then(|root| resolve_tool_path(root, "gst-discoverer-1.0"));
-    let gst_inspect_path = runtime_root
+        .and_then(|candidate| candidate.gst_discoverer_path.clone());
+    let gst_inspect_path = resolved
         .as_ref()
-        .and_then(|root| resolve_tool_path(root, "gst-inspect-1.0"));
-    let ges_launch_path = runtime_root
+        .and_then(|candidate| candidate.gst_inspect_path.clone());
+    let ges_launch_path = resolved
         .as_ref()
-        .and_then(|root| resolve_tool_path(root, "ges-launch-1.0"));
+        .and_then(|candidate| candidate.ges_launch_path.clone());
     let plugin_search_paths = runtime_root
         .as_ref()
         .map(resolve_plugin_search_paths)
@@ -71,7 +69,80 @@ pub fn bootstrap(candidates: Vec<PathBuf>) -> BootstrapReport {
     }
 }
 
-fn infer_runtime_root_from_path(path_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+pub fn runtime_environment_path_entries(runtime_root: &std::path::Path) -> Vec<PathBuf> {
+    let mut entries = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        push_existing_path_entry(
+            &mut entries,
+            runtime_root
+                .parent()
+                .map(|parent| parent.join("gstreamer-runtime-root"))
+                .filter(|path| candidate_contains_runtime_dlls(path.as_path())),
+        );
+        push_existing_path_entry(
+            &mut entries,
+            exe_parent_dir().filter(|path| candidate_contains_runtime_dlls(path.as_path())),
+        );
+    }
+
+    push_existing_path_entry(&mut entries, Some(runtime_root.join("bin")));
+    entries
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeCandidate {
+    runtime_root: PathBuf,
+    gst_discoverer_path: Option<PathBuf>,
+    gst_inspect_path: Option<PathBuf>,
+    ges_launch_path: Option<PathBuf>,
+}
+
+impl RuntimeCandidate {
+    fn from_root(runtime_root: PathBuf) -> Self {
+        Self {
+            gst_discoverer_path: resolve_tool_path(&runtime_root, "gst-discoverer-1.0"),
+            gst_inspect_path: resolve_tool_path(&runtime_root, "gst-inspect-1.0"),
+            ges_launch_path: resolve_tool_path(&runtime_root, "ges-launch-1.0"),
+            runtime_root,
+        }
+    }
+
+    fn is_preview_ready(&self) -> bool {
+        self.gst_discoverer_path.is_some() && self.gst_inspect_path.is_some()
+    }
+
+    fn is_runtime_ready(&self) -> bool {
+        self.is_preview_ready() && self.ges_launch_path.is_some()
+    }
+}
+
+fn resolve_runtime_candidate(candidates: Vec<PathBuf>) -> Option<RuntimeCandidate> {
+    let mut first_preview_candidate = None;
+    let mut first_existing_candidate = None;
+
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+
+        let resolved = RuntimeCandidate::from_root(candidate);
+        if resolved.is_runtime_ready() {
+            return Some(resolved);
+        }
+        if first_preview_candidate.is_none() && resolved.is_preview_ready() {
+            first_preview_candidate = Some(resolved.clone());
+        }
+        if first_existing_candidate.is_none() {
+            first_existing_candidate = Some(resolved);
+        }
+    }
+
+    first_preview_candidate.or(first_existing_candidate)
+}
+
+pub(crate) fn infer_runtime_root_from_path(path_value: Option<std::ffi::OsString>) -> Option<PathBuf> {
     let path_value = path_value?;
     let executable_names = if cfg!(target_os = "windows") {
         [
@@ -109,6 +180,32 @@ fn resolve_plugin_search_paths(runtime_root: &PathBuf) -> Vec<PathBuf> {
         .collect()
 }
 
+fn push_existing_path_entry(entries: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+
+    if candidate.exists() && !entries.iter().any(|existing| existing == &candidate) {
+        entries.push(candidate);
+    }
+}
+
+pub(crate) fn exe_parent_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+}
+
+#[cfg(target_os = "windows")]
+const RUNTIME_DLL_NAMES: &[&str] = &["gstreamer-1.0-0.dll", "gstbase-1.0-0.dll", "glib-2.0-0.dll"];
+
+#[cfg(target_os = "windows")]
+fn candidate_contains_runtime_dlls(candidate: &std::path::Path) -> bool {
+    RUNTIME_DLL_NAMES
+        .iter()
+        .all(|dll| candidate.join(dll).exists())
+}
+
 fn resolve_tool_path(runtime_root: &PathBuf, base_name: &str) -> Option<PathBuf> {
     let executable_name = if cfg!(target_os = "windows") {
         format!("{base_name}.exe")
@@ -137,7 +234,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("genline-bootstrap-{case_name}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("opendirector-bootstrap-{case_name}-{unique}"));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
     }
@@ -180,5 +277,67 @@ mod tests {
         assert_eq!(report.runtime_root.as_deref(), Some(runtime_root.as_path()));
         assert_eq!(report.plugin_search_paths, vec![plugin_dir]);
         assert!(report.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn bootstrap_prefers_full_runtime_over_earlier_preview_only_candidate() {
+        let preview_root = unique_temp_dir("preview-root");
+        let preview_bin_dir = preview_root.join("bin");
+        fs::create_dir_all(&preview_bin_dir).expect("preview bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0"] {
+            fs::write(preview_bin_dir.join(executable_name(tool_name)), []).expect("preview tool");
+        }
+
+        let full_root = unique_temp_dir("full-root");
+        let full_bin_dir = full_root.join("bin");
+        fs::create_dir_all(&full_bin_dir).expect("full bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0", "ges-launch-1.0"] {
+            fs::write(full_bin_dir.join(executable_name(tool_name)), []).expect("full tool");
+        }
+
+        let report = bootstrap(vec![preview_root, full_root.clone()]);
+
+        assert_eq!(report.runtime_root.as_deref(), Some(full_root.as_path()));
+        assert!(report.gst_discoverer_path.is_some());
+        assert!(report.gst_inspect_path.is_some());
+        assert!(report.ges_launch_path.is_some());
+    }
+
+    #[test]
+    fn bootstrap_falls_back_to_preview_runtime_when_ges_is_missing() {
+        let preview_root = unique_temp_dir("preview-only-root");
+        let preview_bin_dir = preview_root.join("bin");
+        fs::create_dir_all(&preview_bin_dir).expect("preview bin dir");
+        for tool_name in ["gst-discoverer-1.0", "gst-inspect-1.0"] {
+            fs::write(preview_bin_dir.join(executable_name(tool_name)), []).expect("preview tool");
+        }
+
+        let report = bootstrap(vec![preview_root.clone()]);
+
+        assert_eq!(report.runtime_root.as_deref(), Some(preview_root.as_path()));
+        assert!(report.gst_discoverer_path.is_some());
+        assert!(report.gst_inspect_path.is_some());
+        assert!(report.ges_launch_path.is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_environment_path_entries_include_staged_root_before_bin() {
+        let runtime_root = unique_temp_dir("runtime-env-root");
+        let root_dll_dir = runtime_root
+            .parent()
+            .expect("runtime root parent")
+            .join("gstreamer-runtime-root");
+        let bin_dir = runtime_root.join("bin");
+        fs::create_dir_all(&root_dll_dir).expect("root dll dir");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+
+        for dll_name in RUNTIME_DLL_NAMES {
+            fs::write(root_dll_dir.join(dll_name), []).expect("dll");
+        }
+
+        let entries = runtime_environment_path_entries(runtime_root.as_path());
+
+        assert_eq!(entries, vec![root_dll_dir, bin_dir]);
     }
 }
