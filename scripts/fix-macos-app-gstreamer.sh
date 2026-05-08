@@ -44,14 +44,10 @@ rm -rf "$RUNTIME_DIR"
 mkdir -p "$(dirname "$RUNTIME_DIR")"
 cp -R "$REPO_RUNTIME_DIR" "$RUNTIME_DIR"
 
-# Keep the runtime focused on GStreamer code that can be signed and notarized.
 rm -rf "$RUNTIME_DIR/lib/ruby"
 rm -f "$RUNTIME_DIR/bin/session-manager-plugin"
 rm -f "$RUNTIME_DIR/bin/openssl"
 find "$RUNTIME_DIR" -type l ! -exec test -e {} \; -delete 2>/dev/null || true
-
-# The bundled runtime is already self-contained and uses relative @rpath
-# references. Only the app binary itself needs to point at the embedded copy.
 
 MACH_O_ROOT="$RUNTIME_DIR"
 REWRITE_PREFIX="@rpath"
