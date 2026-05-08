@@ -16,7 +16,7 @@ jobs:
   build-macos-arm:
     name: Build macOS (ARM)
     runs-on: macos-latest
-    if: ${{ !startsWith(github.ref, 'refs/heads/main') || !contains(github.event.head_commit.message, '[skip-main-ci]') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') && (!startsWith(github.ref, 'refs/heads/main') || !contains(github.event.head_commit.message, '[skip-main-ci]')) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -254,7 +254,7 @@ jobs:
   build-macos-intel:
     name: Build macOS (Intel)
     runs-on: macos-13
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.event.head_commit.message, '[skip-main-ci]') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') && startsWith(github.ref, 'refs/heads/main') && !contains(github.event.head_commit.message, '[skip-main-ci]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -492,7 +492,7 @@ jobs:
   build-windows:
     name: Build Windows
     runs-on: windows-latest
-    if: ${{ !startsWith(github.ref, 'refs/heads/main') || !contains(github.event.head_commit.message, '[skip-main-ci]') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') && (!startsWith(github.ref, 'refs/heads/main') || !contains(github.event.head_commit.message, '[skip-main-ci]')) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -566,29 +566,38 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-macos-arm, build-macos-intel, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download macOS ARM artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-arm
-          path: artifacts/macos-arm
+      - name: Find latest main CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
+            --repo ${{ github.repository }} \
+            --branch main \
+            --workflow "Build Desktop" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No successful 'Build Desktop' run found on main"
+            exit 1
+          fi
+          echo "MAIN_CI_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
-      - name: Download macOS Intel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-dmg-intel
-          path: artifacts/macos-intel
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-nsis
-          path: artifacts/windows
+      - name: Download artifacts from main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          download() { gh run download "$MAIN_CI_RUN_ID" --name "$1" --dir "$2"; }
+          download macos-dmg-arm  artifacts/macos-arm  &
+          download macos-dmg-intel artifacts/macos-intel &
+          download windows-nsis    artifacts/windows    &
+          wait
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
