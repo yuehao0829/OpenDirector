@@ -69,6 +69,9 @@ REWRITE_PREFIX="@rpath"
 # shellcheck source=mach-o-common.sh
 source "$SCRIPT_DIR/mach-o-common.sh"
 
+materialize_symlinks "$TARGET_DIR"
+assert_no_symlinks "$TARGET_DIR"
+
 # Extend should_rewrite_reference to recognize the GStreamer prefix used at build time.
 should_rewrite_reference() {
     local ref="$1"

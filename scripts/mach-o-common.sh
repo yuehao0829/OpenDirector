@@ -10,6 +10,60 @@
 #                                delegating unmatched paths to
 #                                should_rewrite_reference_base()
 
+materialize_symlinks() {
+    local root="$1"
+    local link_path
+    local target_path
+    local resolved_path
+    local temp_path
+
+    # Apple bundle signing rejects some symlink destinations inside .app
+    # resources. Replace symlinks with real copies so release assets are
+    # deterministic and codesign --strict friendly.
+    while IFS= read -r -d '' link_path; do
+        target_path="$(readlink "$link_path")"
+        if [ -z "$target_path" ]; then
+            echo "Error: unable to read symlink target: $link_path" >&2
+            exit 1
+        fi
+
+        if [[ "$target_path" = /* ]]; then
+            resolved_path="$target_path"
+        else
+            resolved_path="$(cd "$(dirname "$link_path")" && pwd -P)/$target_path"
+        fi
+
+        if [ ! -e "$resolved_path" ]; then
+            echo "Removing broken symlink: $link_path -> $target_path"
+            rm -f "$link_path"
+            continue
+        fi
+
+        temp_path="${link_path}.materialized.$$"
+        rm -rf "$temp_path"
+        if [ -d "$resolved_path" ]; then
+            cp -R "$resolved_path" "$temp_path"
+        else
+            cp -p "$resolved_path" "$temp_path"
+            chmod u+w "$temp_path" 2>/dev/null || true
+        fi
+
+        rm -f "$link_path"
+        mv "$temp_path" "$link_path"
+    done < <(find "$root" -type l -print0)
+}
+
+assert_no_symlinks() {
+    local root="$1"
+    local symlink_path
+
+    symlink_path="$(find "$root" -type l -print -quit)"
+    if [ -n "$symlink_path" ]; then
+        echo "Error: runtime still contains symlinks; first one: $symlink_path" >&2
+        exit 1
+    fi
+}
+
 is_mach_o() {
     local binary_path="$1"
     file "$binary_path" 2>/dev/null | grep -q "Mach-O"

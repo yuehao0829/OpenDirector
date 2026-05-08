@@ -44,6 +44,11 @@ rm -rf "$RUNTIME_DIR"
 mkdir -p "$(dirname "$RUNTIME_DIR")"
 cp -R "$REPO_RUNTIME_DIR" "$RUNTIME_DIR"
 
+if ! runtime_has_gstreamer "$RUNTIME_DIR"; then
+    echo "Error: app GStreamer runtime is incomplete after copy: $RUNTIME_DIR" >&2
+    exit 1
+fi
+
 rm -rf "$RUNTIME_DIR/lib/ruby"
 rm -f "$RUNTIME_DIR/bin/session-manager-plugin"
 rm -f "$RUNTIME_DIR/bin/openssl"
@@ -53,6 +58,8 @@ MACH_O_ROOT="$RUNTIME_DIR"
 REWRITE_PREFIX="@rpath"
 # shellcheck source=mach-o-common.sh
 source "$SCRIPT_DIR/mach-o-common.sh"
+
+assert_no_symlinks "$RUNTIME_DIR"
 
 # Exclude Ruby/gem paths from reference rewriting
 should_rewrite_reference() {
