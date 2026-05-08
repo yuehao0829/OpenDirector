@@ -5,9 +5,10 @@
  */
 
 import { clsx } from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { twMerge } from 'tailwind-merge';
 import type { AssetSource } from '@opendirector/core/types/persistence';
-import { SOURCE_TABS } from './constants';
+import { getSourceTabs } from './constants';
 
 interface SourceTabsProps {
   source: AssetSource;
@@ -15,9 +16,12 @@ interface SourceTabsProps {
 }
 
 export function SourceTabs({ source, onSourceChange }: SourceTabsProps) {
+  const { t } = useTranslation();
+  const sourceTabs = getSourceTabs(t);
+
   return (
     <div className="flex bg-zinc-800 rounded-lg p-0.5 mx-1.5 mt-1.5 mb-0.5">
-      {SOURCE_TABS.map((tab) => (
+      {sourceTabs.map((tab) => (
         <button
           key={tab.value}
           className={twMerge(

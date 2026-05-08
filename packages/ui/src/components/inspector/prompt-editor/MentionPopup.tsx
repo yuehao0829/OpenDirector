@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { AssetThumbnail } from '../ReferenceSelector';
 import type { MentionItem } from './mentionUtils';
 
@@ -12,6 +13,7 @@ interface MentionPopupProps {
 }
 
 export function MentionPopup({ anchorRef, items, filter, onSelect, onClose }: MentionPopupProps) {
+  const { t } = useTranslation();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pos, setPos] = useState<{ right: number; top: number } | null>(null);
 
@@ -137,7 +139,7 @@ export function MentionPopup({ anchorRef, items, filter, onSelect, onClose }: Me
         className="bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl p-2 text-xs text-zinc-500"
         style={popupStyle}
       >
-        无匹配参考资源
+        {t('inspector.promptBuilder.noMatchingReferences')}
       </div>,
       document.body,
     );

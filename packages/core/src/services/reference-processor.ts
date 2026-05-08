@@ -9,6 +9,7 @@
 
 import type { Asset, Reference } from '../types/asset';
 import type { FileSystemAdapter } from '../adapters/types';
+import { t } from '../i18n';
 import type { AssetProcessRequest } from '../types/media-backend';
 import { runMediaPipeline, cropRectToAssetProcessParams } from './media-pipeline';
 
@@ -52,7 +53,7 @@ export async function applyReference(
     mediaParams.outputFormat = 'jpeg';
     return runMediaPipeline({
       inputPath, outputDir, processRequest: mediaParams,
-      assetType: 'image', sourceAsset: asset, nameSuffix: '(裁切)',
+      assetType: 'image', sourceAsset: asset, nameSuffix: t('assetProcessing.cropSuffix'),
       projectPath, fs,
     });
   }
@@ -63,7 +64,7 @@ export async function applyReference(
 
   return runMediaPipeline({
     inputPath, outputDir, processRequest: mediaParams,
-    assetType: asset.type, sourceAsset: asset, nameSuffix: '(截取)',
+    assetType: asset.type, sourceAsset: asset, nameSuffix: t('assetProcessing.trimSuffix'),
     projectPath, fs,
   });
 }

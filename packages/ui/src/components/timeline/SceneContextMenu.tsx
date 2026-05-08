@@ -2,6 +2,7 @@ import { useRef, useCallback } from 'react';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { Combine, Split, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useContextMenuClose } from '../../hooks/useContextMenuClose';
 
 interface SceneContextMenuProps {
@@ -13,6 +14,7 @@ interface SceneContextMenuProps {
 }
 
 export function SceneContextMenu({ x, y, sceneId, rightClickTime, onClose }: SceneContextMenuProps) {
+  const { t } = useTranslation();
   const scenes = useTimelineStore((s) => s.scenes);
   const sceneSelection = useSelectionStore((s) => s.primaryType === 'scene' ? s.primaryIds : []);
   const splitScene = useTimelineStore((s) => s.splitScene);
@@ -75,7 +77,7 @@ export function SceneContextMenu({ x, y, sceneId, rightClickTime, onClose }: Sce
           className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
         >
           <Combine size={14} />
-          <span>合并</span>
+          <span>{t('timeline.contextMenu.merge')}</span>
         </button>
       )}
       {canMerge() && <div className="border-t border-zinc-700 my-1" />}
@@ -84,8 +86,10 @@ export function SceneContextMenu({ x, y, sceneId, rightClickTime, onClose }: Sce
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Split size={14} />
-        <span className="flex-1 text-left">分割场景</span>
-        <span className="text-zinc-500 text-xs">按右键位置</span>
+        <span className="flex-1 text-left">{t('timeline.contextMenu.splitScene')}</span>
+        <span className="text-zinc-500 text-xs">
+          {t('timeline.contextMenu.splitAtClickPosition')}
+        </span>
       </button>
       <button
         onClick={handleDelete}
@@ -93,8 +97,10 @@ export function SceneContextMenu({ x, y, sceneId, rightClickTime, onClose }: Sce
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-red-400 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
         <Trash2 size={14} />
-        <span className="flex-1 text-left">删除场景</span>
-        <span className="text-zinc-500 text-xs">{canDelete ? '' : '>1个时可用'}</span>
+        <span className="flex-1 text-left">{t('timeline.contextMenu.deleteScene')}</span>
+        <span className="text-zinc-500 text-xs">
+          {canDelete ? '' : t('timeline.contextMenu.deleteSceneHint')}
+        </span>
       </button>
     </div>
   );

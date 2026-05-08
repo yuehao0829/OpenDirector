@@ -4,7 +4,12 @@ import type { Asset, ImageRole, Reference } from '@opendirector/core/types/asset
 import { getEffectiveImageRole } from '@opendirector/core/types/asset';
 import type { ConstraintIndicator } from '@opendirector/core/types/provider-system';
 import { X, Video, ImageIcon, Music, Crop, Scissors } from 'lucide-react';
-import { ASSET_TYPE_LABELS, IMAGE_ROLE_LABELS, groupReferences } from './ReferenceSelector.shared';
+import { useTranslation } from 'react-i18next';
+import {
+  getAssetTypeLabel,
+  getImageRoleLabel,
+  groupReferences,
+} from './ReferenceSelector.shared';
 
 const ASSET_TYPE_ICONS = { video: Video, image: ImageIcon, audio: Music } as const;
 
@@ -32,6 +37,7 @@ interface ReferenceSelectorProps {
 }
 
 export function ReferenceSelector({ references, assets, onChange, fragmentId, indicators }: ReferenceSelectorProps) {
+  const { t } = useTranslation();
   const getAsset = (assetId: string) => assets.find((a) => a.id === assetId);
 
   const secondaryFocus = useSelectionStore((s) => s.secondaryFocus);
@@ -70,7 +76,7 @@ export function ReferenceSelector({ references, assets, onChange, fragmentId, in
   };
 
   if (references.length === 0) {
-    return <div className="text-sm text-zinc-500">暂无参考资源</div>;
+    return <div className="text-sm text-zinc-500">{t('inspector.referenceSelector.noReferences')}</div>;
   }
 
   return (
@@ -81,7 +87,7 @@ export function ReferenceSelector({ references, assets, onChange, fragmentId, in
           <div key={group.type}>
             <div className="flex items-center gap-1.5 text-sm font-medium text-zinc-200 mb-1.5">
               <Icon size={14} className="text-blue-400" />
-              {ASSET_TYPE_LABELS[group.type]}
+              {getAssetTypeLabel(group.type, t)}
             </div>
             <div className="space-y-1">
               {group.refs.map((ref) => {
@@ -119,12 +125,12 @@ export function ReferenceSelector({ references, assets, onChange, fragmentId, in
                             (role === 'first_frame' && anotherHasFirstFrame) ||
                             (role === 'last_frame' && (anotherHasLastFrame || (noFirstFrameAnywhere && currentRole !== 'last_frame')));
                           const title =
-                            role === 'first_frame' && anotherHasFirstFrame ? '只能指定一张首帧图片' :
-                            role === 'last_frame' && anotherHasLastFrame ? '只能指定一张尾帧图片' :
-                            role === 'last_frame' && noFirstFrameAnywhere && currentRole !== 'last_frame' ? '需要先指定首帧图片' : '';
+                            role === 'first_frame' && anotherHasFirstFrame ? t('inspector.referenceSelector.onlyOneFirstFrame') :
+                            role === 'last_frame' && anotherHasLastFrame ? t('inspector.referenceSelector.onlyOneLastFrame') :
+                            role === 'last_frame' && noFirstFrameAnywhere && currentRole !== 'last_frame' ? t('inspector.referenceSelector.needFirstFrame') : '';
                           return (
                             <option key={role} value={role} disabled={disabled} title={title}>
-                              {IMAGE_ROLE_LABELS[role]}
+                              {getImageRoleLabel(role, t)}
                             </option>
                           );
                         })}
@@ -144,16 +150,26 @@ export function ReferenceSelector({ references, assets, onChange, fragmentId, in
                     </div>
                     {/* Crop indicator */}
                     {ref.cropRect && (ref.cropRect.x !== 0 || ref.cropRect.y !== 0 || ref.cropRect.width !== 1 || ref.cropRect.height !== 1) && (
-                      <span className="text-blue-400 shrink-0" title="已裁剪"><Crop size={12} /></span>
+                      <span className="text-blue-400 shrink-0" title={t('inspector.referenceSelector.cropped')}>
+                        <Crop size={12} />
+                      </span>
                     )}
                     {/* Trim indicator */}
                     {ref.trimRange && (ref.trimRange.startMs > 0 || ref.trimRange.endMs < (asset?.duration ?? 0)) && (
-                      <span className="text-blue-400 shrink-0" title={`剪辑: ${(ref.trimRange.startMs / 1000).toFixed(1)}s - ${(ref.trimRange.endMs / 1000).toFixed(1)}s`}><Scissors size={12} /></span>
+                      <span
+                        className="text-blue-400 shrink-0"
+                        title={t('inspector.referenceSelector.trimmed', {
+                          start: (ref.trimRange.startMs / 1000).toFixed(1),
+                          end: (ref.trimRange.endMs / 1000).toFixed(1),
+                        })}
+                      >
+                        <Scissors size={12} />
+                      </span>
                     )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleRemove(ref.id); }}
                       className="text-zinc-500 hover:text-red-400 transition-colors"
-                      title="移除参考"
+                      title={t('inspector.referenceSelector.remove')}
                     >
                       <X size={14} />
                     </button>

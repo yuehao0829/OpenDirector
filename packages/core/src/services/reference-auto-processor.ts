@@ -10,6 +10,7 @@ import type { AssetProcessRequest } from '../types/media-backend';
 import type { InputRequirements } from '../types/provider-system';
 import { MAX_TOTAL_REFERENCE_SIZE } from '../types/provider-system';
 import type { FileSystemAdapter } from '../adapters/types';
+import { t } from '../i18n';
 import { runMediaPipeline } from './media-pipeline';
 
 /** Common constraint fields that may appear on any reference type. */
@@ -247,7 +248,14 @@ async function processViaMediaPipeline(
     outputFormat: isImage ? 'jpeg' : outputFormat,
   };
 
-  const suffix = plan.needsTranscode ? '(转码)' : plan.needsCompress ? '(压缩)' : plan.needsScale ? '(缩放)' : '(处理)';
+  const suffixKey = plan.needsTranscode
+    ? 'assetProcessing.transcodeSuffix'
+    : plan.needsCompress
+    ? 'assetProcessing.compressSuffix'
+    : plan.needsScale
+    ? 'assetProcessing.scaleSuffix'
+    : 'assetProcessing.processSuffix';
+  const suffix = t(suffixKey);
 
   const { newAsset } = await runMediaPipeline({
     inputPath,

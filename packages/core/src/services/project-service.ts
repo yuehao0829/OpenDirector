@@ -77,7 +77,7 @@ function parseSavePath(savePath: string): {
   const fileName = chosenFileName.toLowerCase().endsWith('.odp')
     ? chosenFileName
     : `${chosenFileName}.odp`;
-  const baseName = stripOdpSuffix(fileName) || 'Untitled Project';
+  const baseName = stripOdpSuffix(fileName) || t('titleBar.untitledProject');
   return { folderPath: savePath.substring(0, lastSep), fileName, baseName };
 }
 
@@ -93,7 +93,7 @@ function sanitizeProjectName(name: string): string {
       // Collapse consecutive dots (prevent hidden files on Unix)
       .replace(/\.{2,}/g, '.') ||
     // Replace with fallback if empty
-    'Untitled Project'
+    t('titleBar.untitledProject')
   );
 }
 
@@ -317,7 +317,7 @@ export function scheduleProjectVideoSourceAudioMetadataHydration(project: Projec
 export function ensureProject(): void {
   const { currentProject } = useProjectStore.getState();
   if (currentProject !== null) return;
-  hydrateNewProject({ name: 'Untitled Project', folderPath: undefined, isTemp: true });
+  hydrateNewProject({ name: t('titleBar.untitledProject'), folderPath: undefined, isTemp: true });
   void setupTempFolder().catch(() => {
     /* best-effort: temp folder is not critical */
   });
@@ -381,7 +381,7 @@ export async function newProject(): Promise<void> {
     const fs = adapter.fs;
     if (!fs) throw new Error('File system not available');
 
-    const savePath = await fs.saveFile('Untitled Project.odp');
+    const savePath = await fs.saveFile(`${t('titleBar.untitledProject')}.odp`);
     if (!savePath) {
       useProjectStore.setState({ isLoading: false });
       return;
@@ -428,7 +428,7 @@ export async function openProjectFromFolder(filePath: string): Promise<void> {
     // Build full Project with defaults for missing fields
     const project: Project = {
       id: loaded.id ?? generateId(),
-      name: loaded.name ?? 'Untitled Project',
+      name: loaded.name ?? t('titleBar.untitledProject'),
       folderPath,
       fileName: loaded.fileName,
       tracks: loaded.tracks ?? [],
@@ -757,13 +757,13 @@ export async function exportTimelineRenderProject(): Promise<void> {
   useProjectStore.setState({ isLoading: true });
 
   try {
-    let project = buildProjectSnapshot(currentProject);
-    const { filePath } = await chooseExportFile(buildTimelineRenderDefaultName(project), [
-      { name: 'MP4 Video', extensions: ['mp4'] },
-      { name: 'QuickTime MOV', extensions: ['mov'] },
-      { name: 'WAV Audio', extensions: ['wav'] },
-      { name: 'MP3 Audio', extensions: ['mp3'] },
-    ]);
+      let project = buildProjectSnapshot(currentProject);
+      const { filePath } = await chooseExportFile(buildTimelineRenderDefaultName(project), [
+        { name: t('common.fileFilters.mp4Video'), extensions: ['mp4'] },
+        { name: t('common.fileFilters.quickTimeMov'), extensions: ['mov'] },
+        { name: t('common.fileFilters.wavAudio'), extensions: ['wav'] },
+        { name: t('common.fileFilters.mp3Audio'), extensions: ['mp3'] },
+      ]);
     if (!filePath) {
       useProjectStore.setState({ isLoading: false });
       return;

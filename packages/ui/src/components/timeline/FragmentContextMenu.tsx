@@ -2,6 +2,7 @@ import { useRef, useCallback } from 'react';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { Combine, Scissors, Copy, Trash2, Split } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useContextMenuClose } from '../../hooks/useContextMenuClose';
 
 interface FragmentContextMenuProps {
@@ -13,6 +14,7 @@ interface FragmentContextMenuProps {
 }
 
 export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose }: FragmentContextMenuProps) {
+  const { t } = useTranslation();
   const selection = useSelectionStore((s) => s.primaryType === 'fragment' ? s.primaryIds : []);
   const fragments = useTimelineStore((s) => s.fragments);
   const mergeFragments = useTimelineStore((s) => s.mergeFragments);
@@ -92,7 +94,7 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
           className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
         >
           <Combine size={14} />
-          <span>合并</span>
+          <span>{t('timeline.contextMenu.merge')}</span>
         </button>
       )}
       {canMerge() && <div className="border-t border-zinc-700 my-1" />}
@@ -101,7 +103,7 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Scissors size={14} />
-        <span className="flex-1 text-left">剪切</span>
+        <span className="flex-1 text-left">{t('timeline.contextMenu.cut')}</span>
         <span className="text-zinc-500 text-xs">Ctrl+X</span>
       </button>
       <button
@@ -109,7 +111,7 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Copy size={14} />
-        <span className="flex-1 text-left">复制</span>
+        <span className="flex-1 text-left">{t('timeline.contextMenu.copy')}</span>
         <span className="text-zinc-500 text-xs">Ctrl+C</span>
       </button>
       <div className="border-t border-zinc-700 my-1" />
@@ -118,7 +120,7 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-red-400 hover:bg-zinc-700 transition-colors"
       >
         <Trash2 size={14} />
-        <span className="flex-1 text-left">删除</span>
+        <span className="flex-1 text-left">{t('common.delete')}</span>
         <span className="text-zinc-500 text-xs">Delete</span>
       </button>
       <button
@@ -126,8 +128,10 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Split size={14} />
-        <span className="flex-1 text-left">分割</span>
-        <span className="text-zinc-500 text-xs">按右键位置</span>
+        <span className="flex-1 text-left">{t('timeline.contextMenu.split')}</span>
+        <span className="text-zinc-500 text-xs">
+          {t('timeline.contextMenu.splitAtClickPosition')}
+        </span>
       </button>
     </div>
   );

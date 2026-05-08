@@ -9,6 +9,7 @@ import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { Asset, CropRect, Reference, TrimRange } from '@opendirector/core/types/asset';
 import type { PreviewSessionState } from '@opendirector/core/types/media-preview';
 import { isTauri } from '@opendirector/core/utils/platform';
+import { useTranslation } from 'react-i18next';
 import { usePreviewSource } from '../../hooks/usePreviewSource';
 import {
   computeCropFrameRect,
@@ -53,6 +54,7 @@ function isDefaultTrimRange(trimRange?: TrimRange | null, assetDuration?: number
 }
 
 export function PreviewPanel() {
+  const { t } = useTranslation();
   const tauriEnvironment = isTauri();
   // Get preview source from hook (video only, topmost video track)
   const source = usePreviewSource();
@@ -534,7 +536,7 @@ export function PreviewPanel() {
     if (!source.previewUrl) {
       return (
         <p className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-500 text-sm">
-          No preview available
+          {t('preview.noPreviewAvailable')}
         </p>
       );
     }
@@ -670,7 +672,7 @@ export function PreviewPanel() {
             data-testid="native-preview-error-overlay"
           >
             <div className="w-full max-w-xl space-y-2 text-center">
-              <p className="text-sm font-medium text-white">该工程的时间线预览无法打开</p>
+              <p className="text-sm font-medium text-white">{t('preview.timelinePreviewUnavailableTitle')}</p>
               <p className="text-xs leading-5 text-zinc-300">{nativeTimelinePreviewError}</p>
             </div>
           </div>
@@ -686,7 +688,7 @@ export function PreviewPanel() {
                   : 'bg-black/50 hover:bg-black/70 text-white'
               }`}
               onClick={() => setCropOverlayVisible((v) => !v)}
-              title={cropOverlayVisible ? '隐藏裁剪' : '显示裁剪'}
+              title={cropOverlayVisible ? t('preview.hideCrop') : t('preview.showCrop')}
             >
               <Crop size={14} />
             </button>

@@ -3,18 +3,23 @@
  */
 
 import type { AssetType } from '@opendirector/core/types/persistence';
+import type { TFunction } from 'i18next';
 
-export const FILE_CATEGORIES: { value: 'all' | AssetType; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'video', label: 'Video' },
-  { value: 'image', label: 'Image' },
-  { value: 'audio', label: 'Audio' },
-];
+export function getFileCategories(t: TFunction): { value: 'all' | AssetType; label: string }[] {
+  return [
+    { value: 'all', label: t('assetPanel.tabs.all') },
+    { value: 'video', label: t('common.video') },
+    { value: 'image', label: t('common.image') },
+    { value: 'audio', label: t('common.audio') },
+  ];
+}
 
-export const SOURCE_TABS = [
-  { value: 'original' as const, label: 'Original' },
-  { value: 'generated' as const, label: 'Generated' },
-];
+export function getSourceTabs(t: TFunction) {
+  return [
+    { value: 'original' as const, label: t('assetPanel.tabs.original') },
+    { value: 'generated' as const, label: t('assetPanel.tabs.generated') },
+  ];
+}
 
 export const THUMBNAIL_WIDTH = 80;
 export const THUMBNAIL_HEIGHT = 45;

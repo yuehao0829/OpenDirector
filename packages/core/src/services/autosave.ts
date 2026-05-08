@@ -7,6 +7,7 @@
 import type { Project } from '../types/project';
 import type { AutosaveTrigger } from '../types/persistence';
 import type { FileSystemAdapter } from '../adapters/types';
+import { i18n, normalizeLanguage, t } from '../i18n';
 import { useProjectStore } from '../stores/projectStore';
 import { saveAutosaveSnapshot, cleanupAutosaves } from './project-io';
 
@@ -245,7 +246,7 @@ export function setupAutosaveEventHandlers(
       });
 
       // Show confirmation dialog
-      const message = '项目有未保存的更改，确定要离开吗？';
+      const message = t('autosave.leaveWithUnsavedChanges');
       e.returnValue = message;
       return message;
     }
@@ -282,7 +283,7 @@ export function setupAutosaveEventHandlers(
  * Format autosave timestamp for display
  */
 export function formatAutosaveTime(date: Date): string {
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(normalizeLanguage(i18n.language), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -302,10 +303,10 @@ export function getRelativeAutosaveTime(date: Date): string {
   const diffHours = Math.floor(diffMins / 60);
   const diffDays = Math.floor(diffHours / 24);
 
-  if (diffMins < 1) return '刚刚';
-  if (diffMins < 60) return `${diffMins} 分钟前`;
-  if (diffHours < 24) return `${diffHours} 小时前`;
-  if (diffDays < 7) return `${diffDays} 天前`;
+  if (diffMins < 1) return t('autosave.justNow');
+  if (diffMins < 60) return t('autosave.minutesAgo', { count: diffMins });
+  if (diffHours < 24) return t('autosave.hoursAgo', { count: diffHours });
+  if (diffDays < 7) return t('autosave.daysAgo', { count: diffDays });
 
   return formatAutosaveTime(date);
 }

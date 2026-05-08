@@ -15,11 +15,13 @@ import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import type { Asset } from '@opendirector/core/types/asset';
 import { getProviderPassword, getUploadReadyProviders } from '@opendirector/core/types/provider-system';
 import { toArkAssetType } from '@opendirector/core/utils/common';
+import { useTranslation } from 'react-i18next';
 import { AssetGrid } from './AssetGrid';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 
 export function OriginalPanel() {
+  const { t } = useTranslation();
   const deleteAsset = useAssetStore((s) => s.deleteAsset);
   const filteredAssets = useAssetStore((s) => s.getFilteredAssets());
 
@@ -112,20 +114,22 @@ export function OriginalPanel() {
       <Modal
         isOpen={uploadConfirmAsset !== null}
         onClose={handleCancelUpload}
-        title="上传确认"
+        title={t('assetPanel.uploadDialog.title')}
         size="sm"
       >
         <p className="text-sm text-zinc-300 mb-3">
-          您即将上传该资源至版权素材库，请确认上传内容符合以下要求：
+          {t('assetPanel.uploadDialog.description')}
         </p>
         <ul className="text-sm text-zinc-400 mb-6 space-y-1.5 list-disc list-inside">
-          <li>不侵犯他人知识产权</li>
-          <li>不包含政治敏感内容</li>
-          <li>不包含色情或违法内容</li>
+          <li>{t('assetPanel.uploadDialog.ownership')}</li>
+          <li>{t('assetPanel.uploadDialog.sensitive')}</li>
+          <li>{t('assetPanel.uploadDialog.illegal')}</li>
         </ul>
         <div className="flex justify-end gap-3">
-          <Button variant="ghost" onClick={handleCancelUpload}>取消</Button>
-          <Button variant="primary" onClick={handleConfirmUpload}>确认上传</Button>
+          <Button variant="ghost" onClick={handleCancelUpload}>{t('common.cancel')}</Button>
+          <Button variant="primary" onClick={handleConfirmUpload}>
+            {t('assetPanel.uploadDialog.confirm')}
+          </Button>
         </div>
       </Modal>
     </>

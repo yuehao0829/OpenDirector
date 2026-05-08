@@ -25,8 +25,8 @@ export type { DayGroup, HourGroup } from './TimeGroupSidebar';
 
 // Constants
 export {
-  FILE_CATEGORIES,
-  SOURCE_TABS,
+  getFileCategories,
+  getSourceTabs,
   THUMBNAIL_WIDTH,
   THUMBNAIL_HEIGHT,
   GENERATED_CARD_THUMBNAIL_WIDTH,

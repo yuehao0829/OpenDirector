@@ -3,6 +3,7 @@ import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useCurrentProjectGenerations } from '@opendirector/core/stores/generationStore';
 import { AssetThumbnail } from './ReferenceSelector';
 import { MonitorPlay } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface PlaybackSourceSelectorProps {
   fragmentId: string;
@@ -70,6 +71,7 @@ function Header({ children }: { children: ReactNode }) {
 }
 
 export function PlaybackSourceSelector({ fragmentId, sourceAssetId, onChange }: PlaybackSourceSelectorProps) {
+  const { t } = useTranslation();
   const sources = usePlaybackSources(fragmentId, sourceAssetId);
 
   if (sources.length === 0) return null;
@@ -79,7 +81,7 @@ export function PlaybackSourceSelector({ fragmentId, sourceAssetId, onChange }: 
 
   return (
     <div data-testid="playback-source-selector">
-      <Header>播放源</Header>
+      <Header>{t('inspector.labels.playbackSource')}</Header>
 
       {showDropdown ? (
         <select
@@ -89,7 +91,9 @@ export function PlaybackSourceSelector({ fragmentId, sourceAssetId, onChange }: 
         >
           {sources.map((src) => (
             <option key={src.assetId} value={src.assetId}>
-              {src.isOriginal ? `源视频 — ${src.label}` : src.label}
+              {src.isOriginal
+                ? t('inspector.playbackSource.originalVideoPrefix', { label: src.label })
+                : src.label}
             </option>
           ))}
         </select>
@@ -98,7 +102,9 @@ export function PlaybackSourceSelector({ fragmentId, sourceAssetId, onChange }: 
           <AssetThumbnail type={current?.type ?? 'video'} thumbnailUrl={current?.thumbnailUrl} />
           <span className="text-sm text-zinc-300 flex-1 truncate">{current?.label}</span>
           {current?.isOriginal && (
-            <span className="text-xs text-zinc-500 shrink-0">源视频</span>
+            <span className="text-xs text-zinc-500 shrink-0">
+              {t('inspector.playbackSource.originalVideoTag')}
+            </span>
           )}
         </div>
       )}

@@ -29,6 +29,7 @@ vi.mock('./tauri-bridge', () => ({
 }));
 
 import { exportTimelineRenderProject } from './project-service';
+import { t } from '../i18n';
 import { useAssetStore } from '../stores/assetStore';
 import { useProjectStore } from '../stores/projectStore';
 import { useTimelineStore } from '../stores/timelineStore';
@@ -203,14 +204,14 @@ describe('exportTimelineRenderProject', () => {
       };
     });
 
-    await exportTimelineRenderProject();
+      await exportTimelineRenderProject();
 
-    expect(saveFileMock).toHaveBeenCalledWith('Timeline Render Test.mp4', [
-      { name: 'MP4 Video', extensions: ['mp4'] },
-      { name: 'QuickTime MOV', extensions: ['mov'] },
-      { name: 'WAV Audio', extensions: ['wav'] },
-      { name: 'MP3 Audio', extensions: ['mp3'] },
-    ]);
+      expect(saveFileMock).toHaveBeenCalledWith('Timeline Render Test.mp4', [
+        { name: t('common.fileFilters.mp4Video'), extensions: ['mp4'] },
+        { name: t('common.fileFilters.quickTimeMov'), extensions: ['mov'] },
+        { name: t('common.fileFilters.wavAudio'), extensions: ['wav'] },
+        { name: t('common.fileFilters.mp3Audio'), extensions: ['mp3'] },
+      ]);
     expect(renderMock).toHaveBeenCalledWith({
       outputPath: 'C:/Exports/final-cut.mov',
       outputFormat: 'mov',
@@ -260,14 +261,14 @@ describe('exportTimelineRenderProject', () => {
 
     saveFileMock.mockResolvedValue(null);
 
-    await exportTimelineRenderProject();
+      await exportTimelineRenderProject();
 
-    expect(saveFileMock).toHaveBeenCalledWith('Timeline Render Test.wav', [
-      { name: 'MP4 Video', extensions: ['mp4'] },
-      { name: 'QuickTime MOV', extensions: ['mov'] },
-      { name: 'WAV Audio', extensions: ['wav'] },
-      { name: 'MP3 Audio', extensions: ['mp3'] },
-    ]);
+      expect(saveFileMock).toHaveBeenCalledWith('Timeline Render Test.wav', [
+        { name: t('common.fileFilters.mp4Video'), extensions: ['mp4'] },
+        { name: t('common.fileFilters.quickTimeMov'), extensions: ['mov'] },
+        { name: t('common.fileFilters.wavAudio'), extensions: ['wav'] },
+        { name: t('common.fileFilters.mp3Audio'), extensions: ['mp3'] },
+      ]);
     expect(renderMock).not.toHaveBeenCalled();
     expect(useProjectStore.getState().isLoading).toBe(false);
   });

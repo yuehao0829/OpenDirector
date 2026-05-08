@@ -15,6 +15,7 @@ import {
 import type { Asset } from '@opendirector/core/types';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useProjectStore } from '@opendirector/core/stores/projectStore';
+import { useTranslation } from 'react-i18next';
 import { SourceTabs } from './SourceTabs';
 import { FileCategoryTabs } from './FileCategoryTabs';
 import { SearchBar } from './SearchBar';
@@ -65,6 +66,7 @@ function buildImportedAssetCompletionUpdates(
 }
 
 export function AssetPanel({ onImport }: AssetPanelProps) {
+  const { t } = useTranslation();
   const [showProjectDialog, setShowProjectDialog] = useState(false);
 
   const source = useAssetStore((s) => s.source);
@@ -102,10 +104,10 @@ export function AssetPanel({ onImport }: AssetPanelProps) {
       const selectedPaths = await adapter.fs.selectFile({
         multiple: true,
         filters: [
-          { name: 'Media Files', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'wmv', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac'] },
-          { name: 'Video', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'wmv'] },
-          { name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] },
-          { name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac'] },
+          { name: t('common.fileFilters.mediaFiles'), extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'wmv', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac'] },
+          { name: t('common.video'), extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'wmv'] },
+          { name: t('common.image'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] },
+          { name: t('common.audio'), extensions: ['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac'] },
         ],
       });
       if (!selectedPaths) return;
@@ -161,23 +163,23 @@ export function AssetPanel({ onImport }: AssetPanelProps) {
     } catch (error) {
       console.error('Import failed:', error);
     }
-  }, [currentProject?.folderPath, addAsset, getAssetBySourcePath, onImport, updateAsset]);
+  }, [currentProject?.folderPath, addAsset, getAssetBySourcePath, onImport, t, updateAsset]);
 
   const handleCreateProject = useCallback(async () => {
-    await createProject('Untitled Project');
+    await createProject(t('titleBar.untitledProject'));
     setShowProjectDialog(false);
     // Prompt save-as so the project gets a folderPath on disk
     await saveProject();
-  }, [createProject, saveProject]);
+  }, [createProject, saveProject, t]);
 
   const handleOpenProject = useCallback(async () => {
     try {
       await openProjectDialog();
       setShowProjectDialog(false);
     } catch (error) {
-      console.error('打开工程失败:', error);
+      console.error(`${t('app.menu.openProjectFailed')}:`, error);
     }
-  }, [openProjectDialog]);
+  }, [openProjectDialog, t]);
 
   return (
     <div className="h-full flex flex-col bg-zinc-900" data-testid="asset-panel">
@@ -189,7 +191,11 @@ export function AssetPanel({ onImport }: AssetPanelProps) {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onImportClick={source === 'original' ? handleImportClick : undefined}
-        placeholder={source === 'original' ? '搜索资源...' : '搜索生成内容...'}
+        placeholder={
+          source === 'original'
+            ? t('assetPanel.search.originalPlaceholder')
+            : t('assetPanel.search.generatedPlaceholder')
+        }
       />
 
       {/* File Category Tabs */}
@@ -214,16 +220,21 @@ export function AssetPanel({ onImport }: AssetPanelProps) {
       <Modal
         isOpen={showProjectDialog}
         onClose={() => setShowProjectDialog(false)}
-        title="导入资源"
+        title={t('assetPanel.importDialog.title')}
       >
         <p className="text-sm text-zinc-400 mb-6">
-          请先打开或创建工程，才能导入资源文件。
-          导入的资源会保存到工程文件夹中。
+          {t('assetPanel.importDialog.description')}
         </p>
         <div className="flex justify-end gap-3">
-          <Button variant="ghost" onClick={() => setShowProjectDialog(false)}>取消</Button>
-          <Button variant="ghost" onClick={handleOpenProject}>打开工程</Button>
-          <Button variant="primary" onClick={handleCreateProject}>新建工程</Button>
+          <Button variant="ghost" onClick={() => setShowProjectDialog(false)}>
+            {t('common.cancel')}
+          </Button>
+          <Button variant="ghost" onClick={handleOpenProject}>
+            {t('app.menu.openProject')}
+          </Button>
+          <Button variant="primary" onClick={handleCreateProject}>
+            {t('app.menu.newProject')}
+          </Button>
         </div>
       </Modal>
     </div>

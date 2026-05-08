@@ -1,4 +1,5 @@
-import { initializeI18n } from '@opendirector/core/i18n';
+import { i18n, initializeI18n } from '@opendirector/core/i18n';
+import { initReactI18next } from 'react-i18next';
 
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
   value: true,
@@ -7,3 +8,4 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
 });
 
 await initializeI18n('zh-CN');
+initReactI18next.init(i18n);

@@ -27,7 +27,7 @@ export function AssetGroupSelector({
 
   return (
     <div className="space-y-1">
-      <label className="text-sm font-medium text-zinc-300">Asset Group</label>
+      <label className="text-sm font-medium text-zinc-300">{t('settings.provider.assetGroupLabel')}</label>
       <div className="flex items-center gap-2">
         {groups.length > 0 ? (
           <div className="relative flex-1">

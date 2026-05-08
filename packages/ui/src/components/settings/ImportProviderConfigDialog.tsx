@@ -102,12 +102,12 @@ export function ImportProviderConfigDialog({ isOpen, onClose }: ImportProviderCo
     setError('');
     setLoading(true);
 
-    try {
-      const adapter = await getPlatformAdapter();
-      const selected = await adapter.fs.selectFile({
-        multiple: false,
-        filters: [{ name: 'OpenDirector Provider', extensions: ['odprovider'] }],
-      });
+      try {
+        const adapter = await getPlatformAdapter();
+        const selected = await adapter.fs.selectFile({
+          multiple: false,
+          filters: [{ name: t('common.fileFilters.provider'), extensions: ['odprovider'] }],
+        });
 
       if (!selected || Array.isArray(selected)) {
         setLoading(false);

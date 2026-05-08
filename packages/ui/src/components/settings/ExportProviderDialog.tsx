@@ -69,7 +69,7 @@ export function ExportProviderDialog({ isOpen, onClose }: ExportProviderDialogPr
       const adapter = await getPlatformAdapter();
       const filePath = await adapter.fs.saveFile(
         `opendirector-providers-${Date.now()}.odprovider`,
-        [{ name: 'OpenDirector Provider', extensions: ['odprovider'] }],
+        [{ name: t('common.fileFilters.provider'), extensions: ['odprovider'] }],
       );
 
       if (!filePath) {

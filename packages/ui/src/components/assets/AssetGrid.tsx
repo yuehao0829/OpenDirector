@@ -14,6 +14,7 @@ import type { Asset } from '@opendirector/core/types/asset';
 import { getUploadReadyProviders } from '@opendirector/core/types/provider-system';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
 import { clsx } from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { twMerge } from 'tailwind-merge';
 import { Video, ImageIcon, Music, Trash2, AlertTriangle, Upload, Loader2, Check, AlertCircle } from 'lucide-react';
 import { useWaveformCanvas } from '../../hooks/useWaveformCanvas';
@@ -60,6 +61,7 @@ export function AssetGrid({
   onAssetDelete,
   onAssetUploadRequest,
 }: AssetGridProps) {
+  const { t } = useTranslation();
   // Use unified selection store to determine selected state
   const secondaryFocus = useSelectionStore((s) => s.secondaryFocus);
   const selectedAssetIds = useMemo(
@@ -134,8 +136,8 @@ export function AssetGrid({
     <div className="h-full flex flex-col" data-testid="asset-grid">
       {assets.length === 0 ? (
         <div className="flex-1 text-center text-zinc-500 pt-20">
-          <p>暂无资源</p>
-          <p className="text-xs mt-1">导入资源开始使用</p>
+          <p>{t('assetPanel.empty.noAssets')}</p>
+          <p className="text-xs mt-1">{t('assetPanel.empty.importHint')}</p>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-1.5">
@@ -182,7 +184,9 @@ export function AssetGrid({
                 {offlineIds.has(asset.id) && (
                   <div className="absolute inset-0 bg-zinc-900/70 flex flex-col items-center justify-center gap-1 pointer-events-none">
                     <AlertTriangle className="w-5 h-5 text-amber-400" />
-                    <span className="text-amber-400 text-[10px]">媒体离线</span>
+                    <span className="text-amber-400 text-[10px]">
+                      {t('assetPanel.status.mediaOffline')}
+                    </span>
                   </div>
                 )}
                 {selectedAssetIdSet.has(asset.id) && (
@@ -207,7 +211,7 @@ export function AssetGrid({
                       onAssetUploadRequest(asset);
                     }}
                     className="absolute bottom-1 right-1 p-1 rounded-full bg-black/50 text-zinc-400 hover:text-blue-400 transition-colors"
-                    title="上传到云端"
+                    title={t('assetPanel.status.uploadToCloud')}
                   >
                     <Upload className="w-3 h-3" />
                   </button>

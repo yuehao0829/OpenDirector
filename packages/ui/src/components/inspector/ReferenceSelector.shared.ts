@@ -1,12 +1,25 @@
 import type { ImageRole, Reference } from '@opendirector/core/types/asset';
 
-export const ASSET_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频' } as const;
+export function getAssetTypeLabel(
+  type: 'image' | 'video' | 'audio',
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  return t(`common.${type}`);
+}
 
-export const IMAGE_ROLE_LABELS: Record<ImageRole, string> = {
-  reference_image: '参考图',
-  first_frame: '首帧',
-  last_frame: '尾帧',
-} as const;
+export function getImageRoleLabel(
+  role: ImageRole,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  switch (role) {
+    case 'reference_image':
+      return t('inspector.referenceRoles.referenceImage');
+    case 'first_frame':
+      return t('inspector.referenceRoles.firstFrame');
+    case 'last_frame':
+      return t('inspector.referenceRoles.lastFrame');
+  }
+}
 
 export interface GroupedReference {
   type: 'image' | 'video' | 'audio';

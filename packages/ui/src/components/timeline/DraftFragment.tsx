@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { DraftFragment as DraftFragmentType } from '@opendirector/core/types/timeline';
 import { clsx } from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { TRACK_HEADER_WIDTH, TRACK_HEIGHT, TRACKS_AREA_OFFSET } from './constants';
 import { parseAssetDragData, isDragCompatibleWithTrack, buildReferencesFromDragData } from './drag-types';
 
@@ -9,12 +10,10 @@ const DRAFT_THEME = {
   video: {
     border: 'border-amber-400 bg-amber-400/20',
     text: 'text-amber-400',
-    label: '视频容器 - 输入提示词或拖入素材',
   },
   audio: {
     border: 'border-blue-400 bg-blue-400/20',
     text: 'text-blue-400',
-    label: '音频容器 - 输入提示词或拖入素材',
   },
 } as const;
 
@@ -28,6 +27,7 @@ interface DraftFragmentProps {
 }
 
 export function DraftFragment({ draft, zoom, scrollX, visualY }: DraftFragmentProps) {
+  const { t } = useTranslation();
   const tracks = useTimelineStore((s) => s.tracks);
   const confirmDraftFragment = useTimelineStore((s) => s.confirmDraftFragment);
 
@@ -40,6 +40,10 @@ export function DraftFragment({ draft, zoom, scrollX, visualY }: DraftFragmentPr
   const left = (draft.start / 1000) * zoom;
   const width = (draft.duration / 1000) * zoom;
   const trackType = tracks[trackIndex].type;
+  const draftLabel =
+    trackType === 'video'
+      ? t('timeline.draft.videoContainer')
+      : t('timeline.draft.audioContainer');
 
   // Handle drag over for drop
   const handleDragOver = (e: React.DragEvent) => {
@@ -105,7 +109,7 @@ export function DraftFragment({ draft, zoom, scrollX, visualY }: DraftFragmentPr
     >
       <div className="flex items-center justify-center h-full">
         <span className={clsx('text-xs', isDragOver ? 'text-green-500' : DRAFT_THEME[trackType].text)}>
-          {isDragOver ? '释放以创建容器' : DRAFT_THEME[trackType].label}
+          {isDragOver ? t('timeline.draft.releaseToCreate') : draftLabel}
         </span>
       </div>
     </div>

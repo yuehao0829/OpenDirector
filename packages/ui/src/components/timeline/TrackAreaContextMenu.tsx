@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { ClipboardPaste, Plus } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useContextMenuClose } from '../../hooks/useContextMenuClose';
 
 interface TrackAreaContextMenuProps {
@@ -12,6 +13,7 @@ interface TrackAreaContextMenuProps {
 }
 
 export function TrackAreaContextMenu({ x, y, trackId, rightClickTime, onClose }: TrackAreaContextMenuProps) {
+  const { t } = useTranslation();
   const clipboard = useTimelineStore((s) => s.clipboard);
   const setPasteIndicator = useTimelineStore((s) => s.setPasteIndicator);
   const pasteFromClipboard = useTimelineStore((s) => s.pasteFromClipboard);
@@ -50,7 +52,7 @@ export function TrackAreaContextMenu({ x, y, trackId, rightClickTime, onClose }:
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
         <ClipboardPaste size={14} />
-        <span>粘贴</span>
+        <span>{t('timeline.contextMenu.paste')}</span>
       </button>
       <div className="border-t border-zinc-700 my-1" />
       <button
@@ -58,7 +60,7 @@ export function TrackAreaContextMenu({ x, y, trackId, rightClickTime, onClose }:
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Plus size={14} />
-        <span>新建 Fragment</span>
+        <span>{t('timeline.contextMenu.newFragment')}</span>
       </button>
     </div>
   );

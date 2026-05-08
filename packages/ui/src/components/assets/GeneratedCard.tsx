@@ -8,6 +8,7 @@ import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import { computeContinuousProgress } from '@opendirector/core/utils/duration';
 import { formatDuration } from '@opendirector/core/utils/time';
 import { clsx } from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { twMerge } from 'tailwind-merge';
 import { Trash2, CheckCircle, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import { buildAssetDragData } from '../timeline/drag-types';
@@ -92,6 +93,7 @@ interface GeneratedCardProps {
 }
 
 export function GeneratedCard({ generation }: GeneratedCardProps) {
+  const { t } = useTranslation();
   const [isDragging, setIsDragging] = useState(false);
   const selectAsset = useSelectionStore((s) => s.selectAsset);
   const clearSecondaryFocus = useSelectionStore((s) => s.clearSecondaryFocus);
@@ -223,7 +225,12 @@ export function GeneratedCard({ generation }: GeneratedCardProps) {
 
       <div className="flex-shrink-0 text-xs text-zinc-400 w-20 text-center space-y-0.5">
         {segmentInfo && isActive && (
-          <p className="text-blue-400">段 {segmentInfo.current}/{segmentInfo.total}</p>
+          <p className="text-blue-400">
+            {t('assetPanel.status.segment', {
+              current: segmentInfo.current,
+              total: segmentInfo.total,
+            })}
+          </p>
         )}
         <p className="truncate">{formatDuration(asset?.duration)}</p>
         <p className="text-zinc-500 truncate">{modelLine1}</p>
@@ -236,7 +243,7 @@ export function GeneratedCard({ generation }: GeneratedCardProps) {
           <button
             className="p-1 text-zinc-400 hover:text-red-400 transition-colors"
             onClick={handleDelete}
-            title="删除"
+            title={t('common.delete')}
             data-testid="delete-generation"
           >
             <Trash2 size={14} />

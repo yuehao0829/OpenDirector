@@ -5,10 +5,11 @@
  */
 
 import { clsx } from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { twMerge } from 'tailwind-merge';
 import type { AssetType } from '@opendirector/core/types/persistence';
 import { CloudUpload } from 'lucide-react';
-import { FILE_CATEGORIES } from './constants';
+import { getFileCategories } from './constants';
 
 export type FileCategory = 'all' | AssetType;
 
@@ -21,10 +22,13 @@ interface FileCategoryTabsProps {
 }
 
 export function FileCategoryTabs({ category, onCategoryChange, showUploadedOnly, onShowUploadedOnlyChange, hasUploadedAssets }: FileCategoryTabsProps) {
+  const { t } = useTranslation();
+  const fileCategories = getFileCategories(t);
+
   return (
     <div className="flex items-center justify-between px-1.5 py-1 border-b border-zinc-800">
       <div className="flex gap-1">
-        {FILE_CATEGORIES.map((cat) => (
+        {fileCategories.map((cat) => (
           <button
             key={cat.value}
             className={twMerge(
@@ -56,7 +60,7 @@ export function FileCategoryTabs({ category, onCategoryChange, showUploadedOnly,
           data-testid="filter-uploaded-only"
         >
           <CloudUpload className="w-3 h-3" />
-          版权库
+          {t('assetPanel.status.copyrightLibrary')}
         </button>
       )}
     </div>

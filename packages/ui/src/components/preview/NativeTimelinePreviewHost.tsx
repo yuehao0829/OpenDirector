@@ -4,6 +4,7 @@ import type {
   PreviewDiagnostics,
   PreviewSessionState,
 } from '@opendirector/core/types/media-preview';
+import { useTranslation } from 'react-i18next';
 
 interface NativeTimelinePreviewHostProps {
   enabled: boolean;
@@ -16,6 +17,7 @@ interface NativeTimelinePreviewHostProps {
 function summarizeNativePreviewError(
   error: string | null,
   diagnostics: PreviewDiagnostics | null,
+  translate: (key: string, options?: Record<string, unknown>) => string,
 ): string | null {
   if (!error) {
     return null;
@@ -23,12 +25,12 @@ function summarizeNativePreviewError(
 
   if (diagnostics?.nativeSurfacePlatformStatus === 'unsupported') {
     const reason = diagnostics.nativeSurfacePlatformReason || error;
-    return `当前平台不支持原生时间线预览：${reason}`;
+    return translate('preview.nativeErrors.unsupported', { reason });
   }
 
   if (diagnostics && diagnostics.runtime.gstreamerReady === false) {
     const reason = diagnostics.runtime.gstreamerReason || error;
-    return `GStreamer 预览运行时不可用：${reason}`;
+    return translate('preview.nativeErrors.runtimeUnavailable', { reason });
   }
 
   if (
@@ -38,9 +40,9 @@ function summarizeNativePreviewError(
   ) {
     const sinkType = diagnostics?.configuredVideoSinkType;
     if (sinkType) {
-      return `原生预览宿主已创建，但视频 sink (${sinkType}) 绑定失败：${error}`;
+      return translate('preview.nativeErrors.sinkBindWithType', { sinkType, error });
     }
-    return `原生预览宿主已创建，但视频 sink 绑定失败：${error}`;
+    return translate('preview.nativeErrors.sinkBind', { error });
   }
 
   if (
@@ -49,11 +51,11 @@ function summarizeNativePreviewError(
     error.includes('Failed to apply native preview viewport') ||
     error.includes('Failed to update native preview surface visibility')
   ) {
-    return `原生预览宿主创建或布局失败：${error}`;
+    return translate('preview.nativeErrors.hostLayoutFailed', { error });
   }
 
   if (error.includes('Failed to initialize preview backend')) {
-    return `原生预览后端初始化失败：${error}`;
+    return translate('preview.nativeErrors.backendInitFailed', { error });
   }
 
   return error;
@@ -66,12 +68,13 @@ export function NativeTimelinePreviewHost({
   onErrorChange,
   onStateChange,
 }: NativeTimelinePreviewHostProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const preview = useNativeTimelinePreview({
     enabled,
     containerRef,
   });
-  const summarizedError = summarizeNativePreviewError(preview.error, preview.diagnostics);
+  const summarizedError = summarizeNativePreviewError(preview.error, preview.diagnostics, t);
 
   useEffect(() => {
     onTransportControlChange?.(preview.transportControlled);

@@ -6,6 +6,7 @@ import { findSnapPoint } from '@opendirector/core/utils/snap';
 import { pixelToTime } from '@opendirector/core/utils/timeline';
 import { clsx } from 'clsx';
 import { Image, Plus, Layers } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { TRACK_HEADER_WIDTH, SCENE_TRACK_HEIGHT } from './constants';
 
 interface SceneTrackProps {
@@ -20,6 +21,7 @@ const MIN_SCENE_DURATION = 1000; // 1 second minimum
 const DRAG_THRESHOLD = 3; // Minimum pixels to move before considering it a drag
 
 export function SceneTrack({ width, zoom, scrollX, viewportWidth }: SceneTrackProps) {
+  const { t } = useTranslation();
   const scenes = useTimelineStore((s) => s.scenes);
   const toolMode = useTimelineStore((s) => s.toolMode);
   const splitScene = useTimelineStore((s) => s.splitScene);
@@ -353,7 +355,7 @@ export function SceneTrack({ width, zoom, scrollX, viewportWidth }: SceneTrackPr
       >
         {scenes.length === 0 ? (
           <div className="flex items-center justify-center h-full text-xs text-zinc-600">
-            暂无场景
+            {t('timeline.sceneTrack.empty')}
           </div>
         ) : (
           scenes.map((scene) => {
@@ -384,7 +386,10 @@ export function SceneTrack({ width, zoom, scrollX, viewportWidth }: SceneTrackPr
                 onDragOver={(e) => handleDragOver(e, scene.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, scene)}
-                title={`${scene.name} (${scene.referenceIds.length}/2 参考图)`}
+                title={t('timeline.sceneTrack.title', {
+                  name: scene.name,
+                  count: scene.referenceIds.length,
+                })}
               >
                 {/* Left resize handle */}
                 <div

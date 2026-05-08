@@ -7,6 +7,7 @@ import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import { BUILTIN_TYPE_IDS } from '@opendirector/core/types/provider-system';
 import { formatTime } from '@opendirector/core/utils/time';
 import { Check, Loader2, Minus, X, Clock, RefreshCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Panel } from '../layout/Panel';
 
 function useTick(active: boolean) {
@@ -27,6 +28,7 @@ function resolveProviderName(instanceId: string, fallback?: string): string {
 }
 
 export function TaskOverview() {
+  const { t } = useTranslation();
   const generations = useCurrentProjectGenerations();
   const instances = useProviderInstanceStore((s) => s.instances);
   const fragments = useTimelineStore((s) => s.fragments);
@@ -99,25 +101,36 @@ export function TaskOverview() {
     return { total, completed, active, cancelled, failed, expired, byModel };
   }, [generations]);
 
+  const statusIcons = useMemo(
+    () => [
+      { key: 'completed' as const, color: 'text-green-400', title: t('inspector.taskOverview.status.completed'), Icon: Check, spin: false },
+      { key: 'active' as const, color: 'text-blue-400', title: t('inspector.taskOverview.status.active'), Icon: Loader2, spin: true },
+      { key: 'cancelled' as const, color: 'text-zinc-400', title: t('inspector.taskOverview.status.cancelled'), Icon: Minus, spin: false },
+      { key: 'failed' as const, color: 'text-red-400', title: t('inspector.taskOverview.status.failed'), Icon: X, spin: false },
+      { key: 'expired' as const, color: 'text-amber-400', title: t('inspector.taskOverview.status.expired'), Icon: Clock, spin: false },
+    ],
+    [t],
+  );
+
   return (
     <div className="h-full overflow-y-auto p-3 space-y-3" data-testid="task-overview">
       {/* Active tasks */}
       <Panel
-        title="进行中的任务"
+        title={t('inspector.taskOverview.activeTasks')}
         defaultCollapsed={false}
         headerRight={activeGenerations.length > 0 ? (
           <button
             onClick={handleRefresh}
             disabled={refreshing}
             className="p-1 rounded hover:bg-zinc-700/60 text-zinc-400 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            title="刷新服务器状态"
+            title={t('inspector.taskOverview.refreshServerStatus')}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
         ) : undefined}
       >
         {activeGenerations.length === 0 ? (
-          <p className="text-sm text-zinc-500">暂无进行中的任务</p>
+          <p className="text-sm text-zinc-500">{t('inspector.taskOverview.noActiveTasks')}</p>
         ) : (
           <div className="space-y-3">
             {activeGenerations.map((g) => {
@@ -168,49 +181,49 @@ export function TaskOverview() {
       </Panel>
 
       {/* Statistics */}
-      <Panel title="生成统计" defaultCollapsed={false}>
+      <Panel title={t('inspector.taskOverview.generationStats')} defaultCollapsed={false}>
         <div className="grid grid-cols-5 gap-2">
-          <StatCard label="总计" value={stats.total} />
-          <StatCard label="已完成" value={stats.completed} color="text-green-400" />
-          <StatCard label="进行中" value={stats.active} color="text-blue-400" />
-          <StatCard label="已取消" value={stats.cancelled} color="text-zinc-400" />
-          <StatCard label="失败" value={stats.failed} color="text-red-400" />
+          <StatCard label={t('inspector.taskOverview.total')} value={stats.total} />
+          <StatCard label={t('inspector.taskOverview.completed')} value={stats.completed} color="text-green-400" />
+          <StatCard label={t('inspector.taskOverview.active')} value={stats.active} color="text-blue-400" />
+          <StatCard label={t('inspector.taskOverview.cancelled')} value={stats.cancelled} color="text-zinc-400" />
+          <StatCard label={t('inspector.taskOverview.failed')} value={stats.failed} color="text-red-400" />
         </div>
 
         {stats.byModel.size > 0 && (
-          <div className="mt-3 space-y-1.5">
-            {Array.from(stats.byModel.entries()).map(([modelName, counts]) => (
-                <div
-                  key={modelName}
-                  className="flex items-center justify-between text-xs py-1 px-2 bg-zinc-800/50 rounded"
-                >
-                  <span className="text-zinc-300 truncate">
-                    {counts.displayName}
-                  </span>
-                  <span className="text-zinc-500 shrink-0 ml-2 flex items-center gap-1.5">
-                    {STATUS_ICONS.map(({ key, color, title, Icon, spin }) => {
-                      const val = counts[key];
-                      if (!val) return null;
-                      return (
-                        <span key={key} className={`flex items-center gap-0.5 ${color}`} title={title}>
-                          <Icon className={`w-3 h-3${spin ? ' animate-spin' : ''}`} />
-                          {val}
-                        </span>
-                      );
-                    })}
-                    <span className="text-zinc-600">/ {counts.total}</span>
-                  </span>
-                </div>
-              ),
-            )}
-          </div>
-        )}
+            <div className="mt-3 space-y-1.5">
+              {Array.from(stats.byModel.entries()).map(([modelName, counts]) => (
+                  <div
+                    key={modelName}
+                    className="flex items-center justify-between text-xs py-1 px-2 bg-zinc-800/50 rounded"
+                  >
+                    <span className="text-zinc-300 truncate">
+                      {counts.displayName}
+                    </span>
+                    <span className="text-zinc-500 shrink-0 ml-2 flex items-center gap-1.5">
+                      {statusIcons.map(({ key, color, title, Icon, spin }) => {
+                        const val = counts[key];
+                        if (!val) return null;
+                        return (
+                          <span key={key} className={`flex items-center gap-0.5 ${color}`} title={title}>
+                            <Icon className={`w-3 h-3${spin ? ' animate-spin' : ''}`} />
+                            {val}
+                          </span>
+                        );
+                      })}
+                      <span className="text-zinc-600">/ {counts.total}</span>
+                    </span>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
       </Panel>
 
       {/* Configured providers */}
-      <Panel title="已配置的提供商" defaultCollapsed={false}>
+      <Panel title={t('inspector.taskOverview.configuredProviders')} defaultCollapsed={false}>
         {instances.length === 0 ? (
-          <p className="text-sm text-zinc-500">暂无配置的提供商</p>
+          <p className="text-sm text-zinc-500">{t('inspector.taskOverview.noConfiguredProviders')}</p>
         ) : (
           <div className="space-y-1.5">
             {instances.map((inst) => {
@@ -273,11 +286,3 @@ function SubStatus({ label, ok }: { label: string; ok: boolean }) {
     </span>
   );
 }
-
-const STATUS_ICONS = [
-  { key: 'completed' as const, color: 'text-green-400', title: '已完成', Icon: Check, spin: false },
-  { key: 'active' as const, color: 'text-blue-400', title: '进行中', Icon: Loader2, spin: true },
-  { key: 'cancelled' as const, color: 'text-zinc-400', title: '已取消', Icon: Minus, spin: false },
-  { key: 'failed' as const, color: 'text-red-400', title: '失败', Icon: X, spin: false },
-  { key: 'expired' as const, color: 'text-amber-400', title: '已过期', Icon: Clock, spin: false },
-];

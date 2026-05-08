@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
+import { t } from '@opendirector/core/i18n';
 import type { Asset, Reference } from '@opendirector/core/types/asset';
-import { ASSET_TYPE_LABELS, groupReferences } from '../ReferenceSelector.shared';
+import { getAssetTypeLabel, groupReferences } from '../ReferenceSelector.shared';
 
 export interface MentionItem {
   reference: Reference;
@@ -8,13 +9,15 @@ export interface MentionItem {
   label: string;
 }
 
+const ASSET_TYPE_KEYS = ['image', 'video', 'audio'] as const;
+
 export function getReferenceLabels(references: Reference[]): Map<string, string> {
   const labels = new Map<string, string>();
   const groups = groupReferences(references);
 
   for (const group of groups) {
     group.refs.forEach((reference, index) => {
-      labels.set(reference.id, `[${ASSET_TYPE_LABELS[group.type]}${index + 1}]`);
+      labels.set(reference.id, `[${getAssetTypeLabel(group.type, t)}${index + 1}]`);
     });
   }
 
@@ -22,7 +25,7 @@ export function getReferenceLabels(references: Reference[]): Map<string, string>
 }
 
 export function getReferenceLabel(reference: Reference, references: Reference[]): string {
-  return getReferenceLabels(references).get(reference.id) ?? ASSET_TYPE_LABELS[reference.type];
+  return getReferenceLabels(references).get(reference.id) ?? getAssetTypeLabel(reference.type, t);
 }
 
 export function buildMentionItems(references: Reference[], assets: Asset[]): MentionItem[] {
@@ -44,7 +47,7 @@ export function buildMentionItems(references: Reference[], assets: Asset[]): Men
     .map((reference) => ({
       reference,
       asset: assetMap.get(reference.assetId),
-      label: labels.get(reference.id) ?? ASSET_TYPE_LABELS[reference.type],
+      label: labels.get(reference.id) ?? getAssetTypeLabel(reference.type, t),
     }));
 }
 
@@ -52,10 +55,14 @@ export function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export const REFERENCE_LABEL_REGEX = new RegExp(
-  `\\[(${Object.values(ASSET_TYPE_LABELS).join('|')})(\\d+)\\]`,
-  'g',
-);
+let _cachedRegex: RegExp | null = null;
+
+function getReferenceLabelRegex(): RegExp {
+  if (_cachedRegex) return _cachedRegex;
+  const labels = ASSET_TYPE_KEYS.map((type) => escapeRegex(getAssetTypeLabel(type, t)));
+  _cachedRegex = new RegExp(`\\[(${labels.join('|')})(\\d+)\\]`, 'g');
+  return _cachedRegex;
+}
 
 export function parsePromptLabels<T>(
   text: string,
@@ -63,7 +70,7 @@ export function parsePromptLabels<T>(
   renderLabel: (label: string, info: T, key: number) => ReactNode,
   renderText: (text: string, key: number) => ReactNode,
 ): ReactNode[] {
-  const regex = new RegExp(REFERENCE_LABEL_REGEX.source, REFERENCE_LABEL_REGEX.flags);
+  const regex = getReferenceLabelRegex();
   const parts: ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;

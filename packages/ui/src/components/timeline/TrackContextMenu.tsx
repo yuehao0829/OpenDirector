@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { Plus, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useContextMenuClose } from '../../hooks/useContextMenuClose';
 
 interface TrackContextMenuProps {
@@ -11,6 +12,7 @@ interface TrackContextMenuProps {
 }
 
 export function TrackContextMenu({ x, y, trackId, onClose }: TrackContextMenuProps) {
+  const { t } = useTranslation();
   const tracks = useTimelineStore((s) => s.tracks);
   const insertTrackAfter = useTimelineStore((s) => s.insertTrackAfter);
   const deleteTrackWithOrderReindex = useTimelineStore((s) => s.deleteTrackWithOrderReindex);
@@ -52,7 +54,7 @@ export function TrackContextMenu({ x, y, trackId, onClose }: TrackContextMenuPro
         className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
       >
         <Plus size={14} />
-        <span>新建轨道</span>
+        <span>{t('timeline.contextMenu.newTrack')}</span>
       </button>
       {canDelete && (
         <button
@@ -60,7 +62,7 @@ export function TrackContextMenu({ x, y, trackId, onClose }: TrackContextMenuPro
           className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-400 hover:bg-zinc-700 transition-colors"
         >
           <Trash2 size={14} />
-          <span>删除轨道</span>
+          <span>{t('timeline.contextMenu.deleteTrack')}</span>
         </button>
       )}
     </div>

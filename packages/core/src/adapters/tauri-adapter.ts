@@ -17,6 +17,7 @@ import { getFileExtension } from '../utils/common';
 import { textToArrayBuffer } from '../utils/encoding';
 import { invoke } from '../utils/tauri-invoke';
 import { generateId } from '../utils/id';
+import { t } from '../i18n';
 
 // Row types returned from Rust commands (camelCase, booleans already converted)
 interface AssetRow {
@@ -563,7 +564,7 @@ class TauriFileSystemAdapter implements FileSystemAdapter {
     const { save } = await import('@tauri-apps/plugin-dialog');
     return save({
       defaultPath,
-      filters: filters ?? [{ name: 'OpenDirector Project', extensions: ['odp'] }],
+      filters: filters ?? [{ name: t('common.fileFilters.project'), extensions: ['odp'] }],
     });
   }
 

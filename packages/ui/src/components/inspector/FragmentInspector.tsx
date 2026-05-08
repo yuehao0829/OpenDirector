@@ -25,6 +25,7 @@ import {
   genSecondsToFragmentMs,
   isContinuousMode,
 } from '@opendirector/core/utils/duration';
+import { useTranslation } from 'react-i18next';
 import { PromptBuilder } from './PromptBuilder';
 import { TaskOverview } from './TaskOverview';
 import { InspectorHeader } from './InspectorHeader';
@@ -33,7 +34,12 @@ import { Panel } from '../layout/Panel';
 import { Button } from '../common/Button';
 import { X } from 'lucide-react';
 import { ReferenceSelector, AssetThumbnail } from './ReferenceSelector';
-import { groupReferences, ASSET_TYPE_LABELS, IMAGE_ROLE_LABELS, type GroupedReference } from './ReferenceSelector.shared';
+import {
+  groupReferences,
+  getAssetTypeLabel,
+  getImageRoleLabel,
+  type GroupedReference,
+} from './ReferenceSelector.shared';
 import { getReferenceLabels, parsePromptLabels } from './prompt-editor';
 import { PlaybackSourceSelector } from './PlaybackSourceSelector';
 import { makeCompositeKey } from './compositeKey';
@@ -45,11 +51,12 @@ const isMusicSuppressed = (p: Pick<GenerationParamsValue, 'enableAudio' | 'enabl
 function buildEffectivePrompt(
   basePrompt: string,
   genParams: Pick<GenerationParamsValue, 'enableAudio' | 'enableMusic' | 'enableSubtitle'>,
+  translate: (key: string, options?: Record<string, unknown>) => string,
 ): string {
   const hints: string[] = [];
-  if (isMusicSuppressed(genParams)) hints.push('不要音乐');
-  if (!genParams.enableSubtitle) hints.push('不要字幕');
-  return hints.length > 0 ? basePrompt + '\n' + hints.join('，') : basePrompt;
+  if (isMusicSuppressed(genParams)) hints.push(translate('inspector.promptHints.noMusic'));
+  if (!genParams.enableSubtitle) hints.push(translate('inspector.promptHints.noSubtitle'));
+  return hints.length > 0 ? basePrompt + '\n' + hints.join('\n') : basePrompt;
 }
 
 function hasSameGenerationParamsValue(
@@ -82,6 +89,7 @@ function toParamDefaults(v: GenerationParamsValue): GenerationParamDefaults {
 }
 
 export function FragmentInspector() {
+  const { t } = useTranslation();
   const primaryType = useSelectionStore((s) => s.primaryType);
   const primaryFocusId = useSelectionStore((s) => s.primaryFocusId);
   const fragments = useTimelineStore((s) => s.fragments);
@@ -372,7 +380,7 @@ export function FragmentInspector() {
       <div className="p-4 space-y-4" data-testid="draft-inspector">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-blue-400">
-            {isDraftAudio ? '创建音频片段' : '创建新片段'}
+            {isDraftAudio ? t('inspector.actions.createAudioFragment') : t('inspector.actions.createFragment')}
           </span>
           <button
             onClick={handleCancelDraft}
@@ -383,7 +391,7 @@ export function FragmentInspector() {
         </div>
 
         <div className="text-sm text-zinc-400">
-          时长: {(draftFragment.duration / 1000).toFixed(1)}s
+          {t('inspector.labels.duration')}: {(draftFragment.duration / 1000).toFixed(1)}s
         </div>
 
         {isDraftAudio ? (
@@ -391,7 +399,7 @@ export function FragmentInspector() {
             type="text"
             value={draftPrompt}
             onChange={(e) => handlePromptChange(e.target.value)}
-            placeholder="输入音频描述..."
+            placeholder={t('inspector.placeholders.audioDescription')}
             className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             autoFocus
           />
@@ -405,7 +413,7 @@ export function FragmentInspector() {
         )}
 
         <p className="text-xs text-zinc-500">
-          输入提示词后点击其他区域将自动创建 · Ctrl+Enter 快速创建
+          {t('inspector.draftHint')}
         </p>
 
         <div className="flex gap-2">
@@ -414,13 +422,13 @@ export function FragmentInspector() {
             className="flex-1"
             onClick={handleCreateDraft}
           >
-            创建片段
+            {t('inspector.actions.createFragment')}
           </Button>
           <Button
             variant="ghost"
             onClick={handleCancelDraft}
           >
-            取消
+            {t('common.cancel')}
           </Button>
         </div>
       </div>
@@ -464,7 +472,7 @@ export function FragmentInspector() {
         : undefined;
 
     getGenerationService().submitTask(selectedFragment.id, effectiveInstanceId, effectiveModelId, {
-      prompt: buildEffectivePrompt(selectedFragment.prompt, genParams),
+      prompt: buildEffectivePrompt(selectedFragment.prompt, genParams, t),
       references: selectedFragment.references,
       duration: genDuration,
       aspectRatio: genParams.aspectRatio,
@@ -574,6 +582,7 @@ function EditModeContent({
   assets: Asset[];
   trackType: 'video' | 'audio';
 }) {
+  const { t } = useTranslation();
   const isAudio = trackType === 'audio';
 
   return (
@@ -600,7 +609,7 @@ function EditModeContent({
       )}
 
       {!isAudio && (
-        <Panel title="提示词">
+        <Panel title={t('inspector.labels.prompt')}>
           <PromptBuilder
             prompt={fragment.prompt}
             onPromptChange={(prompt) => updateFragment(fragment.id, { prompt })}
@@ -614,7 +623,7 @@ function EditModeContent({
       )}
 
       {!isAudio && (
-        <Panel title="参考资源">
+        <Panel title={t('inspector.labels.referenceAssets')}>
           <ReferenceSelector
             references={fragment.references}
             assets={assets}
@@ -625,7 +634,7 @@ function EditModeContent({
         </Panel>
       )}
 
-      <Panel title="播放源">
+      <Panel title={t('inspector.labels.playbackSource')}>
         <PlaybackSourceSelector
           fragmentId={fragment.id}
           sourceAssetId={fragment.sourceAssetId}
@@ -657,6 +666,7 @@ function PreviewModeContent({
   trackType: 'video' | 'audio';
   firstFrameAsReference?: boolean;
 }) {
+  const { t } = useTranslation();
   const labelToRef = useMemo(() => {
     const refs = fragment.references ?? [];
     if (refs.length === 0) return new Map<string, { ref: Reference; asset: Asset }>();
@@ -678,7 +688,7 @@ function PreviewModeContent({
       enableAudio: genParams.enableAudio,
       enableMusic: genParams.enableMusic,
       enableSubtitle: genParams.enableSubtitle,
-    });
+    }, t);
 
     return parsePromptLabels(
       effectivePrompt,
@@ -702,6 +712,7 @@ function PreviewModeContent({
     genParams.enableAudio,
     genParams.enableMusic,
     genParams.enableSubtitle,
+    t,
   ]);
 
   const isAudio = trackType === 'audio';
@@ -718,40 +729,46 @@ function PreviewModeContent({
     <div className="p-3 space-y-3">
       {!isAudio && (
         <div className="p-2 bg-zinc-800/50 rounded text-xs text-zinc-400">
-          <span className="font-medium text-zinc-300">参数</span>
+          <span className="font-medium text-zinc-300">{t('inspector.labels.params')}</span>
           <span className="ml-2">{genParams.resolution} · {genParams.aspectRatio} · {genParams.duration}s</span>
-          {genParams.enableAudio && <span className="ml-1">· 音频 开</span>}
-          {genParams.enableMusic && <span className="ml-1">· 音乐 开</span>}
-          {genParams.enableSubtitle && <span className="ml-1">· 字幕 开</span>}
-          {genParams.enableWatermark && <span className="ml-1">· 水印 开</span>}
-          {genParams.enableWebSearch && <span className="ml-1">· 联网搜索</span>}
+          {genParams.enableAudio && <span className="ml-1">· {t('inspector.previewSummary.audioOn')}</span>}
+          {genParams.enableMusic && <span className="ml-1">· {t('inspector.previewSummary.musicOn')}</span>}
+          {genParams.enableSubtitle && <span className="ml-1">· {t('inspector.previewSummary.subtitleOn')}</span>}
+          {genParams.enableWatermark && <span className="ml-1">· {t('inspector.previewSummary.watermarkOn')}</span>}
+          {genParams.enableWebSearch && <span className="ml-1">· {t('inspector.previewSummary.webSearchOn')}</span>}
         </div>
       )}
 
       {!isAudio && (isMusicSuppressed(genParams) || !genParams.enableSubtitle || firstFrameAsReference) && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-xs text-amber-400/80">
-          {isMusicSuppressed(genParams) && <div>音乐已关闭：将在提示词末尾添加「不要音乐」提示，效果取决于模型理解</div>}
-          {!genParams.enableSubtitle && <div>字幕已关闭：将在提示词末尾添加「不要字幕」提示，效果取决于模型理解</div>}
-          {firstFrameAsReference && <div>首帧已转为参考图片模式：将在提示词中添加「[图片N]为首帧」提示，效果取决于模型理解</div>}
+          {isMusicSuppressed(genParams) && <div>{t('inspector.promptHints.musicDisabled')}</div>}
+          {!genParams.enableSubtitle && <div>{t('inspector.promptHints.subtitleDisabled')}</div>}
+          {firstFrameAsReference && (
+            <div>
+              {t('inspector.promptHints.firstFrameAsReference', {
+                hint: t('generation.prompt.firstFrameHint', { index: 'N' }),
+              })}
+            </div>
+          )}
         </div>
       )}
 
       {/* Prompt preview */}
-      <Panel title="提示词">
+      <Panel title={t('inspector.labels.prompt')}>
         <div className="text-sm text-zinc-300 whitespace-pre-wrap min-h-[2rem]">
-          {promptElements || <span className="text-zinc-600 italic">（空）</span>}
+          {promptElements || <span className="text-zinc-600 italic">{t('inspector.labels.emptyPrompt')}</span>}
         </div>
       </Panel>
 
       {/* Scene references (merged) */}
       {sceneRefAssets.length > 0 && (
-        <Panel title={`场景参考 (${sceneRefAssets.length})`}>
+        <Panel title={t('inspector.labels.sceneReferences', { count: sceneRefAssets.length })}>
           <div className="space-y-1">
             {sceneRefAssets.map((asset) => (
               <div key={asset.id} className="flex items-center gap-2 p-1.5 bg-zinc-800/50 rounded">
                 <AssetThumbnail type={asset.type} thumbnailUrl={asset.thumbnailUrl} />
                 <span className="text-sm text-zinc-300 truncate">{asset.name}</span>
-                <span className="text-xs text-zinc-500 bg-zinc-700/50 px-1.5 py-0.5 rounded">场景</span>
+                <span className="text-xs text-zinc-500 bg-zinc-700/50 px-1.5 py-0.5 rounded">{t('inspector.labels.sceneTag')}</span>
               </div>
             ))}
           </div>
@@ -760,7 +777,7 @@ function PreviewModeContent({
 
       {/* Grouped references preview */}
       {grouped.map((group) => (
-        <Panel key={group.type} title={`${ASSET_TYPE_LABELS[group.type]} (${group.refs.length})`}>
+        <Panel key={group.type} title={`${getAssetTypeLabel(group.type, t)} (${group.refs.length})`}>
           <div className="space-y-1">
             {group.refs.map((ref) => {
               const asset = getAssetById(ref.assetId);
@@ -772,7 +789,9 @@ function PreviewModeContent({
                   <AssetThumbnail type={group.type} thumbnailUrl={asset?.thumbnailUrl} />
                   <span className="text-sm text-zinc-300 truncate">{asset?.name ?? ref.assetId}</span>
                   {showRoleLabel && (
-                    <span className="text-xs text-zinc-400 bg-zinc-700 px-1.5 py-0.5 rounded">{IMAGE_ROLE_LABELS[role as ImageRole]}</span>
+                    <span className="text-xs text-zinc-400 bg-zinc-700 px-1.5 py-0.5 rounded">
+                      {getImageRoleLabel(role as ImageRole, t)}
+                    </span>
                   )}
                 </div>
               );
@@ -783,7 +802,7 @@ function PreviewModeContent({
 
       {/* Source asset */}
       {sourceAsset && (
-        <Panel title="播放源">
+        <Panel title={t('inspector.labels.playbackSource')}>
           <div className="flex items-center gap-2 p-1.5 bg-zinc-800/50 rounded">
             <AssetThumbnail type={sourceAsset.type} thumbnailUrl={sourceAsset.thumbnailUrl} />
             <span className="text-sm text-zinc-300 truncate">{sourceAsset.name}</span>

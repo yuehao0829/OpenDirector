@@ -528,11 +528,11 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
             <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             <CredentialFormField
-              label="API Key"
+              label={t('settings.provider.apiKeyLabel')}
               fieldKey="apiKey"
               value={credentials.apiKey ?? ''}
               onChange={handleCredentialChange}
-              placeholder="API Key"
+              placeholder={t('settings.provider.apiKeyPlaceholder')}
               required
             />
           </div>

@@ -3,6 +3,7 @@ import type { TrimRange } from '@opendirector/core/types/asset';
 import { clamp } from '@opendirector/core/utils/common';
 import { formatTimecode, formatTimecodeCentiseconds } from '@opendirector/core/utils/time';
 import { Check, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 const MIN_INTERVAL_MS = 2000;
 
@@ -33,6 +34,7 @@ export function PlaybackControls({
   isApplying,
   applyDisabled,
 }: PlaybackControlsProps) {
+  const { t } = useTranslation();
   const progressRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
   const dragStartRef = useRef({ mouseX: 0, startMs: 0, endMs: 0 });
@@ -193,10 +195,10 @@ export function PlaybackControls({
           }`}
           disabled={applyDisabled || isApplying}
           onClick={onApply}
-          title={applyDisabled ? '调整裁剪框或截取范围后启用' : ''}
+          title={applyDisabled ? t('preview.applyHint') : ''}
         >
           {isApplying ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-          {isApplying ? '处理中...' : '应用'}
+          {isApplying ? t('preview.applying') : t('common.apply')}
         </button>
       )}
     </div>

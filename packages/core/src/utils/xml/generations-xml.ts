@@ -6,6 +6,7 @@
  */
 
 import type { XmlElement } from './types';
+import { t } from '../../i18n';
 import { parseXml, getChildElements, getChildElement, getElementText } from './parser';
 import { serializeXml, createElement, textElement } from './serializer';
 import type { GenerationReference, GenerationStatus } from '../../types/generation';
@@ -98,7 +99,9 @@ export function recordToGeneration(record: GenerationRecord, projectId: string):
     outputType: record.outputType,
     resultAssetId: record.resultAssetId,
     status: isTransient ? 'recovering' : record.status,
-    errorMessage: record.error || (isTransient ? '任务状态未知，正在检查服务器状态…' : undefined),
+    errorMessage:
+      record.error
+      || (isTransient ? t('generation.task.unknownStatusCheckingServer') : undefined),
     providerTaskId: record.providerTaskId,
     continuousMode: record.continuousMode,
     continuousPlan: record.continuousPlan,

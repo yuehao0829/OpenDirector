@@ -1,5 +1,6 @@
 import { clsx } from 'clsx';
 import { ChevronDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { makeCompositeKey } from './compositeKey';
 
 interface ModelOption {
@@ -38,6 +39,7 @@ export function InspectorHeader({
   trackType = 'video',
   segmentProgress,
 }: InspectorHeaderProps) {
+  const { t } = useTranslation();
   const isAudio = trackType === 'audio';
 
   return (
@@ -45,12 +47,12 @@ export function InspectorHeader({
       {!isAudio && (
         <div className="flex gap-1">
           <TabButton
-            label="编辑"
+            label={t('inspector.tabs.edit')}
             active={activeTab === 'edit'}
             onClick={() => onTabChange('edit')}
           />
           <TabButton
-            label="预览"
+            label={t('inspector.tabs.preview')}
             active={activeTab === 'preview'}
             onClick={() => onTabChange('preview')}
           />
@@ -76,15 +78,21 @@ export function InspectorHeader({
           >
             {isGenerating
               ? segmentProgress
-                ? `生成中 ${segmentProgress.current}/${segmentProgress.total} — ${segmentProgress.percent}%`
-                : '生成中...'
-              : hasGenerated ? '再次生成' : '生成'}
+                ? t('inspector.actions.generatingProgress', {
+                    current: segmentProgress.current,
+                    total: segmentProgress.total,
+                    percent: segmentProgress.percent,
+                  })
+                : t('inspector.actions.generating')
+              : hasGenerated
+                ? t('inspector.actions.regenerate')
+                : t('inspector.actions.generate')}
           </button>
         </div>
       )}
 
       {isAudio && (
-        <span className="text-sm font-medium text-blue-400">音频片段</span>
+        <span className="text-sm font-medium text-blue-400">{t('inspector.labels.audioFragment')}</span>
       )}
     </div>
   );
@@ -101,6 +109,7 @@ function ModelSelector({
   onModelChange: (modelId: string, instanceId: string) => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const model = models.find((m) => makeCompositeKey(m.instanceId, m.modelId) === e.target.value);
     if (model) onModelChange(model.modelId, model.instanceId);
@@ -118,7 +127,7 @@ function ModelSelector({
       >
         {!selectedCompositeKey && (
           <option value="" disabled>
-            模型
+            {t('inspector.labels.model')}
           </option>
         )}
         {models.map((m) => (

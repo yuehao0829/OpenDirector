@@ -360,7 +360,7 @@ async fn run_full_upload(
                 AssetEvent::Failed {
                     asset_id: asset_id.clone(),
                     remote_asset_id: String::new(),
-                    error: "未配置 Asset Group，请在设置中选择或创建一个 Asset Group".to_string(),
+                    error: "Asset Group is not configured. Select or create one in Settings.".to_string(),
                     project_path: project_path.clone(),
                 },
             );

@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { Asset, Reference } from '@opendirector/core/types/asset';
+import { useTranslation } from 'react-i18next';
 import { MentionPopup, getReferenceLabels, buildMentionItems, escapeRegex } from './prompt-editor';
 
 const PROMPT_TEXTAREA_MIN_HEIGHT = 144;
@@ -28,6 +29,7 @@ export function PromptBuilder({
   assets = [],
   autoFocus = false,
 }: PromptBuilderProps) {
+  const { t } = useTranslation();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
@@ -234,7 +236,7 @@ export function PromptBuilder({
           onFocus={syncSelection}
           onKeyUp={syncSelection}
           onSelect={syncSelection}
-          placeholder="描述你想要生成的内容..."
+          placeholder={t('inspector.placeholders.prompt')}
           className="w-full min-h-36 overflow-hidden px-3 py-2 text-sm text-zinc-100 bg-zinc-800 border border-zinc-700 rounded-lg placeholder-zinc-500 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
           data-testid="prompt-input"
         />
@@ -283,14 +285,14 @@ export function PromptBuilder({
           onClick={() => setShowAdvanced(!showAdvanced)}
         >
           {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          高级选项
+          {t('inspector.promptBuilder.advancedOptions')}
         </button>
       )}
 
       {showAdvanced && showWebSearch && (
         <div className="p-3 bg-zinc-800 rounded-lg">
           <ToggleRow
-            label="联网搜索"
+            label={t('inspector.promptBuilder.webSearch')}
             checked={enableWebSearch}
             onChange={onWebSearchChange ?? (() => {})}
           />

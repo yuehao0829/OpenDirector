@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useCurrentProjectGenerations } from '@opendirector/core/stores/generationStore';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
+import { useTranslation } from 'react-i18next';
 import { GeneratedCard } from './GeneratedCard';
 import { TimeGroupSidebar } from './TimeGroupSidebar';
 import type { DayGroup, HourGroup } from './TimeGroupSidebar';
@@ -16,6 +17,7 @@ function parseDateKey(key: string): [number, number, number] {
 }
 
 export function GeneratedPanel() {
+  const { t } = useTranslation();
   const generations = useCurrentProjectGenerations();
   const searchQuery = useAssetStore((s) => s.searchQuery);
   const fileCategory = useAssetStore((s) => s.fileCategory);
@@ -60,7 +62,7 @@ export function GeneratedPanel() {
     const result: DayGroup[] = [];
     for (const [dateKey, hourMap] of dayMap) {
       const isToday = dateKey === todayKey;
-      const label = isToday ? '今天' : dateKey.slice(5);
+      const label = isToday ? t('assetPanel.status.today') : dateKey.slice(5);
 
       const hours: HourGroup[] = [];
       let totalCount = 0;
@@ -82,7 +84,7 @@ export function GeneratedPanel() {
 
     result.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
     return result;
-  }, [categoryFilteredGenerations]);
+  }, [categoryFilteredGenerations, t]);
 
   const dayKeySet = useMemo(() => new Set(dayGroups.map((d) => d.dateKey)), [dayGroups]);
   const allGroupKeys = useMemo(() => {
@@ -162,8 +164,8 @@ export function GeneratedPanel() {
   if (generations.length === 0) {
     return (
       <div className="text-center text-zinc-500 pt-20">
-        <p>暂无生成内容</p>
-        <p className="text-xs mt-1">在 Timeline 中创建容器开始生成</p>
+        <p>{t('assetPanel.empty.noGenerated')}</p>
+        <p className="text-xs mt-1">{t('assetPanel.empty.noGeneratedHint')}</p>
       </div>
     );
   }
@@ -172,7 +174,7 @@ export function GeneratedPanel() {
     return (
       <div className="h-full flex flex-col">
         <div className="flex-1 overflow-y-auto">
-          {renderCardList('暂无生成内容')}
+          {renderCardList(t('assetPanel.empty.noGenerated'))}
         </div>
       </div>
     );
@@ -188,7 +190,7 @@ export function GeneratedPanel() {
         />
       </div>
       <div className="flex-1 overflow-y-auto">
-        {renderCardList('暂无匹配的生成内容')}
+        {renderCardList(t('assetPanel.empty.noMatchingGenerated'))}
       </div>
     </div>
   );
