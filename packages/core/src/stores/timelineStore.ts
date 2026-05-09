@@ -11,7 +11,11 @@ let nativePreviewStepFrameHandler: NativePreviewStepFrameHandler | null = null;
 // Zustand `playhead` is synced at low frequency (~10fps) for UI display only.
 let _playheadRef = 0;
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, ZOOM_SLIDER_STEPS } from '../constants/timeline';
-import { calculateTimelineDuration, safeMax } from '../utils/timeline';
+import { calculateTimelineDuration, safeMax, timeToPixel } from '../utils/timeline';
+
+const LOG_ZOOM_MIN = Math.log(ZOOM_MIN);
+const LOG_ZOOM_MAX = Math.log(ZOOM_MAX);
+const LOG_ZOOM_RANGE = LOG_ZOOM_MAX - LOG_ZOOM_MIN;
 import { storeEvents } from './store-events';
 import { useSelectionStore } from './selectionStore';
 import { useSettingsStore } from './settingsStore';
@@ -98,6 +102,7 @@ interface TimelineActions {
   setNativePreviewTransportControlled: (controlled: boolean) => void;
 
   // Zoom & Scroll
+  adjustScrollForZoom: (oldZoom: number, newZoom: number) => number;
   setZoom: (zoom: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -751,34 +756,47 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       set({ nativePreviewTransportControlled: controlled }),
 
     // Zoom & Scroll
-    setZoom: (zoom) => set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)) }),
 
-    zoomIn: () => set((state) => ({
-      zoom: Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP)
-    })),
+    /** Adjust scroll.x so the playhead stays at the same viewport position after zoom change. */
+    adjustScrollForZoom: (oldZoom, newZoom) => {
+      const state = get();
+      const newScrollX = timeToPixel(state.playhead, newZoom - oldZoom) + state.scroll.x;
+      return Math.max(0, newScrollX);
+    },
 
-    zoomOut: () => set((state) => ({
-      zoom: Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP)
-    })),
+    setZoom: (zoom) => {
+      const state = get();
+      const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
+      if (clamped === state.zoom) return;
+      set({ zoom: clamped, scroll: { x: state.adjustScrollForZoom(state.zoom, clamped), y: state.scroll.y } });
+    },
+
+    zoomIn: () => {
+      const state = get();
+      if (state.zoom >= ZOOM_MAX) return;
+      const newZoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP);
+      set({ zoom: newZoom, scroll: { x: state.adjustScrollForZoom(state.zoom, newZoom), y: state.scroll.y } });
+    },
+
+    zoomOut: () => {
+      const state = get();
+      if (state.zoom <= ZOOM_MIN) return;
+      const newZoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP);
+      set({ zoom: newZoom, scroll: { x: state.adjustScrollForZoom(state.zoom, newZoom), y: state.scroll.y } });
+    },
 
     setZoomFromSlider: (value) => {
-      // Convert slider value (0-100) to zoom (logarithmic scale)
-      // Slider 0 = ZOOM_MIN, Slider 100 = ZOOM_MAX
+      const state = get();
       const normalized = value / ZOOM_SLIDER_STEPS;
-      const logMin = Math.log(ZOOM_MIN);
-      const logMax = Math.log(ZOOM_MAX);
-      const logZoom = logMin + normalized * (logMax - logMin);
-      const zoom = Math.exp(logZoom);
-      return set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)) });
+      const logZoom = LOG_ZOOM_MIN + normalized * LOG_ZOOM_RANGE;
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.exp(logZoom)));
+      if (newZoom === state.zoom) return;
+      set({ zoom: newZoom, scroll: { x: state.adjustScrollForZoom(state.zoom, newZoom), y: state.scroll.y } });
     },
 
     getZoomSliderValue: () => {
       const state = get();
-      // Convert zoom to slider value (logarithmic scale)
-      const logMin = Math.log(ZOOM_MIN);
-      const logMax = Math.log(ZOOM_MAX);
-      const logZoom = Math.log(state.zoom);
-      const normalized = (logZoom - logMin) / (logMax - logMin);
+      const normalized = (Math.log(state.zoom) - LOG_ZOOM_MIN) / LOG_ZOOM_RANGE;
       return Math.round(normalized * ZOOM_SLIDER_STEPS);
     },
 
