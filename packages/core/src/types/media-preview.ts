@@ -86,6 +86,11 @@ export interface PreviewSessionPositionEvent {
   rate: number;
 }
 
+export interface PreviewSessionFrameTimestampEvent {
+  sessionId: string;
+  positionMs: number;
+}
+
 export interface PreviewSessionStateEvent {
   sessionId: string;
   state: PreviewSessionState;
@@ -167,4 +172,5 @@ export type PreviewSessionEvent =
   | { type: 'position'; payload: PreviewSessionPositionEvent }
   | { type: 'state'; payload: PreviewSessionStateEvent }
   | { type: 'error'; payload: PreviewSessionErrorEvent }
-  | { type: 'metrics'; payload: PreviewSessionMetricsEvent };
+  | { type: 'metrics'; payload: PreviewSessionMetricsEvent }
+  | { type: 'frameTimestamp'; payload: PreviewSessionFrameTimestampEvent };

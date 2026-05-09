@@ -1081,6 +1081,16 @@ export function useNativeTimelinePreview({
         case 'metrics':
           refreshDiagnosticsRef.current?.('event');
           break;
+        case 'frameTimestamp': {
+          const syncAt = performance.now();
+          nativeBackendPositionRef.current = {
+            positionMs: event.payload.positionMs,
+            updatedAt: syncAt,
+            rate: nativeBackendPositionRef.current.rate,
+          };
+          setPositionMs(event.payload.positionMs);
+          break;
+        }
         default:
           break;
       }

@@ -3,8 +3,9 @@ import type { Project } from '../types/project';
 import type { Fragment, Track } from '../types/timeline';
 import type {
   PreviewDiagnostics,
-  PreviewSessionEvent,
   PreviewSessionErrorEvent,
+  PreviewSessionEvent,
+  PreviewSessionFrameTimestampEvent,
   PreviewSessionInfo,
   PreviewSessionMetricsEvent,
   PreviewSessionPositionEvent,
@@ -22,6 +23,7 @@ const PREVIEW_POSITION_EVENT = 'media-preview://position';
 const PREVIEW_STATE_EVENT = 'media-preview://state';
 const PREVIEW_ERROR_EVENT = 'media-preview://error';
 const PREVIEW_METRICS_EVENT = 'media-preview://metrics';
+const PREVIEW_FRAME_TIMESTAMP_EVENT = 'media-preview://frame-timestamp';
 const FEATURE_FLAG_STORAGE_KEY = 'opendirector.nativeTimelinePreview';
 const DEBUG_PRESENT_SURFACE_STORAGE_KEY = 'opendirector.nativeTimelinePreview.debugPresentSurface';
 
@@ -280,6 +282,14 @@ export class PreviewSessionController {
           this.emit({ type: 'metrics', payload });
         }
       }),
+      tauriBridge.listen<PreviewSessionFrameTimestampEvent>(
+        PREVIEW_FRAME_TIMESTAMP_EVENT,
+        (payload) => {
+          if (payload.sessionId === sessionId) {
+            this.emit({ type: 'frameTimestamp', payload });
+          }
+        },
+      ),
     ]);
 
     this.unlisten = listeners;

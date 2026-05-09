@@ -1,12 +1,13 @@
+use std::sync::mpsc;
 use std::time::Instant;
 
 use tauri::{AppHandle, Emitter};
 
 use crate::media::ges::preview_timeline_builder::{build_preview_timeline, GesPreviewTimeline};
 use crate::media::model::{
-    PreviewDiagnostics, PreviewRuntimeDiagnostics, PreviewSessionErrorEvent, PreviewSessionInfo,
-    PreviewSessionPositionEvent, PreviewSessionState, PreviewSessionStateEvent, PreviewViewport,
-    TimelinePreviewSnapshot,
+    PreviewDiagnostics, PreviewRuntimeDiagnostics, PreviewSessionErrorEvent, PreviewSessionFrameTimestampEvent,
+    PreviewSessionInfo, PreviewSessionPositionEvent, PreviewSessionState, PreviewSessionStateEvent,
+    PreviewViewport, TimelinePreviewSnapshot,
 };
 use crate::media::runtime::initialize;
 
@@ -20,6 +21,8 @@ const POSITION_EVENT: &str = "media-preview://position";
 const STATE_EVENT: &str = "media-preview://state";
 const ERROR_EVENT: &str = "media-preview://error";
 const METRICS_EVENT: &str = "media-preview://metrics";
+const FRAME_TIMESTAMP_EVENT: &str = "media-preview://frame-timestamp";
+const FRAME_TIMESTAMP_STALENESS_THRESHOLD_MS: u128 = 200;
 const CONSECUTIVE_SEEK_WINDOW_MS: f64 = 200.0;
 const EMPTY_TIMELINE_VIRTUAL_DURATION_MS: f64 = 60_000.0;
 
@@ -48,6 +51,9 @@ pub struct PreviewSession {
     pub last_error: Option<String>,
     pub metrics: SessionMetrics,
     pub preview_player: Option<GstreamerPreviewPlayer>,
+    frame_timestamp_receiver: Option<mpsc::Receiver<f64>>,
+    last_frame_timestamp_ms: f64,
+    last_frame_timestamp_at: Option<Instant>,
     last_seek_completed_at: Option<Instant>,
     virtual_play_started_at: Option<Instant>,
     virtual_play_base_position_ms: f64,
@@ -72,6 +78,9 @@ impl PreviewSession {
             last_error: None,
             metrics: SessionMetrics::default(),
             preview_player: None,
+            frame_timestamp_receiver: None,
+            last_frame_timestamp_ms: 0.0,
+            last_frame_timestamp_at: None,
             last_seek_completed_at: None,
             virtual_play_started_at: None,
             virtual_play_base_position_ms: 0.0,
@@ -422,11 +431,16 @@ impl PreviewSession {
         self.position_ms = clamp_position(self.position_ms, next_duration_ms);
 
         if prepared_timeline.clips.is_empty() {
+            self.frame_timestamp_receiver = None;
+            self.last_frame_timestamp_at = None;
             if let Err(error) = self.replace_preview_player(None) {
                 return Err(self
                     .fail_operation("Failed to reset preview backend for empty timeline", error));
             }
         } else {
+            let (sender, receiver) = mpsc::sync_channel::<f64>(1);
+            self.frame_timestamp_receiver = Some(receiver);
+
             let preview_player = match GstreamerPreviewPlayer::new_pending(&prepared_timeline) {
                 Ok(player) => player,
                 Err(error) => {
@@ -436,6 +450,8 @@ impl PreviewSession {
             if let Err(error) = self
                 .replace_preview_player_with_pending(preview_player, existing_preview_resume_state)
             {
+                self.frame_timestamp_receiver = None;
+                self.last_frame_timestamp_at = None;
                 self.position_ms = previous_position_ms;
                 self.virtual_play_started_at = previous_virtual_play_started_at;
                 self.virtual_play_base_position_ms = previous_virtual_play_base_position_ms;
@@ -447,6 +463,10 @@ impl PreviewSession {
                     self.state = previous_state;
                 }
                 return Err(message);
+            }
+
+            if let Some(player) = self.preview_player.as_mut() {
+                player.install_frame_timestamp_probe(sender);
             }
         }
 
@@ -531,6 +551,7 @@ impl PreviewSession {
             return Err("Cannot play before timeline is attached".to_string());
         }
 
+        self.reset_frame_timestamps();
         self.sync_playback_position();
         let duration_ms = self.effective_duration_ms();
         self.position_ms = clamp_position(time_ms, duration_ms);
@@ -777,6 +798,43 @@ impl PreviewSession {
         .map_err(|error| error.to_string())
     }
 
+    fn drain_frame_timestamps(&mut self) -> bool {
+        let Some(receiver) = self.frame_timestamp_receiver.as_ref() else {
+            return false;
+        };
+        let mut latest_ts: Option<f64> = None;
+        while let Ok(ts) = receiver.try_recv() {
+            latest_ts = Some(ts);
+        }
+        if let Some(ts) = latest_ts {
+            self.last_frame_timestamp_ms = ts;
+            self.last_frame_timestamp_at = Some(Instant::now());
+        }
+        if let Some(last_at) = self.last_frame_timestamp_at {
+            if last_at.elapsed().as_millis() < FRAME_TIMESTAMP_STALENESS_THRESHOLD_MS {
+                let duration_ms = self.duration_ms();
+                self.position_ms = clamp_position(self.last_frame_timestamp_ms, duration_ms);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn reset_frame_timestamps(&mut self) {
+        self.last_frame_timestamp_at = None;
+    }
+
+    pub fn emit_frame_timestamp(&self, app: &AppHandle) -> Result<(), String> {
+        app.emit(
+            FRAME_TIMESTAMP_EVENT,
+            PreviewSessionFrameTimestampEvent {
+                session_id: self.session_id.clone(),
+                position_ms: self.position_ms,
+            },
+        )
+            .map_err(|error| error.to_string())
+    }
+
     fn duration_ms(&self) -> f64 {
         self.timeline
             .as_ref()
@@ -921,11 +979,26 @@ impl PreviewSession {
             }
         }
 
-        self.sync_playback_position();
+        let playing = matches!(self.state, PreviewSessionState::Playing);
+        let has_player = self.preview_player.is_some();
 
-        if self.position_ms != previous_position_ms {
-            tick.position_changed = true;
+        if playing && has_player {
+            if self.drain_frame_timestamps() {
+                tick.position_source_is_frame_timestamp = true;
+                tick.position_changed = true;
+            } else {
+                self.sync_playback_position();
+                if self.position_ms != previous_position_ms {
+                    tick.position_changed = true;
+                }
+            }
+        } else {
+            self.sync_playback_position();
+            if self.position_ms != previous_position_ms {
+                tick.position_changed = true;
+            }
         }
+
         if self.state != previous_state {
             tick.state_changed = true;
             tick.position_changed = true;
@@ -1207,6 +1280,7 @@ pub struct SessionTick {
     pub position_changed: bool,
     pub state_changed: bool,
     pub error_emitted: bool,
+    pub position_source_is_frame_timestamp: bool,
 }
 
 #[cfg(test)]

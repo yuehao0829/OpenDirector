@@ -248,6 +248,13 @@ pub struct PreviewSessionPositionEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PreviewSessionFrameTimestampEvent {
+    pub session_id: String,
+    pub position_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewSessionStateEvent {
     pub session_id: String,
     pub state: PreviewSessionState,

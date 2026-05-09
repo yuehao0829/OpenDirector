@@ -384,7 +384,11 @@ fn spawn_position_pump(app_handle: AppHandle, state: Arc<Mutex<PreviewManagerSta
                 match session.tick() {
                     Ok(tick) => {
                         if tick.position_changed {
-                            let _ = session.emit_position(&app_handle);
+                            if tick.position_source_is_frame_timestamp {
+                                let _ = session.emit_frame_timestamp(&app_handle);
+                            } else {
+                                let _ = session.emit_position(&app_handle);
+                            }
                         }
                         if tick.state_changed {
                             let _ = session.emit_state(&app_handle, None);

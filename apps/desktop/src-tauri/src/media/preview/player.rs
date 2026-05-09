@@ -94,6 +94,7 @@ mod imp {
         video_sink: Option<gst::Element>,
         surface_window_handle: Option<usize>,
         duration_ms: f64,
+        frame_timestamp_probe: Option<(gst::Pad, gst::PadProbeId)>,
     }
 
     // SAFETY:
@@ -132,6 +133,7 @@ mod imp {
                 video_sink,
                 surface_window_handle: None,
                 duration_ms: sanitize_duration_ms(prepared_timeline.duration_ms),
+                frame_timestamp_probe: None,
             })
         }
 
@@ -158,6 +160,30 @@ mod imp {
             }
             self.surface_window_handle = surface_window_handle;
             Ok(())
+        }
+
+        pub fn install_frame_timestamp_probe(
+            &mut self,
+            sender: std::sync::mpsc::SyncSender<f64>,
+        ) {
+            let Some(video_sink) = self.video_sink.as_ref() else {
+                return;
+            };
+            let Some(sink_pad) = video_sink.static_pad("sink") else {
+                return;
+            };
+            let Some(probe_id) = sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+                if let Some(buffer) = info.buffer() {
+                    if let Some(pts) = buffer.pts() {
+                        let position_ms = clock_time_to_ms(pts);
+                        let _ = sender.try_send(position_ms);
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            }) else {
+                return;
+            };
+            self.frame_timestamp_probe = Some((sink_pad, probe_id));
         }
 
         pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<(), String> {
@@ -228,6 +254,9 @@ mod imp {
         }
 
         pub fn shutdown(&mut self) -> Result<(), String> {
+            if let Some((pad, probe_id)) = self.frame_timestamp_probe.take() {
+                pad.remove_probe(probe_id);
+            }
             self.pipeline
                 .set_state(gst::State::Null)
                 .map_err(|error| format!("failed to stop preview pipeline: {error}"))?;
@@ -484,6 +513,7 @@ mod imp {
         rate: f64,
         playing: bool,
         surface_window_handle: Option<usize>,
+        frame_timestamp_probe: Option<()>,
     }
 
     impl GstreamerPreviewPlayer {
@@ -494,6 +524,7 @@ mod imp {
                 rate: 1.0,
                 playing: false,
                 surface_window_handle: None,
+                frame_timestamp_probe: None,
             })
         }
 
@@ -514,6 +545,8 @@ mod imp {
             self.surface_window_handle = surface_window_handle;
             Ok(())
         }
+
+        pub fn install_frame_timestamp_probe(&mut self, _sender: std::sync::mpsc::SyncSender<f64>) {}
 
         pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<(), String> {
             self.position_ms = clamp_seek_position_ms(position_ms, self.duration_ms);
