@@ -1,0 +1,6 @@
+* text=auto
+
+# Rust / Tauri files must use LF — autocrlf causes spurious diffs on Windows
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+*.rs text eol=lf
