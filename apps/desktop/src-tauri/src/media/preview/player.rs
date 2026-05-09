@@ -124,7 +124,7 @@ mod imp {
                 format!("failed to attach preview timeline to pipeline: {error}")
             })?;
             pipeline
-                .set_mode(preview_mode(prepared_timeline))
+                .set_mode(preview_mode())
                 .map_err(|error| format!("failed to set preview pipeline mode: {error}"))?;
 
             Ok(Self {
@@ -416,19 +416,8 @@ mod imp {
         }
     }
 
-    fn preview_mode(prepared_timeline: &GesPreviewTimeline) -> ges::PipelineFlags {
-        let mut flags = ges::PipelineFlags::empty();
-        if prepared_timeline.has_audio {
-            flags |= ges::PipelineFlags::AUDIO_PREVIEW;
-        }
-        if prepared_timeline.has_video {
-            flags |= ges::PipelineFlags::VIDEO_PREVIEW;
-        }
-        if flags.is_empty() {
-            ges::PipelineFlags::FULL_PREVIEW
-        } else {
-            flags
-        }
+    fn preview_mode() -> ges::PipelineFlags {
+        ges::PipelineFlags::FULL_PREVIEW
     }
 
     fn create_video_sink() -> Result<gst::Element, String> {
