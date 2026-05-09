@@ -27,9 +27,7 @@ import {
   type NativePlaybackSample,
 } from './nativePlaybackClock';
 import {
-  shouldIgnoreBackwardNativePlayingClockRebase,
   shouldIgnoreStaleNativePlayingPosition,
-  shouldRebasePlayingClockToNative,
   shouldSyncPausedNativePlayhead,
 } from './nativeTimelinePreviewSync';
 
@@ -187,6 +185,9 @@ export function useNativeTimelinePreview({
     generation: 0,
   });
   const nativeTransportCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Backend position samples are not trusted for rebasing the playback clock
+  // while playing — D3D11 video sink (Windows) can report oscillating positions
+  // around GES clip boundaries, causing bidirectional playhead snap/jitter.
   const nativeBackendPositionRef = useRef<NativePlaybackSample>({
     positionMs: 0,
     updatedAt: 0,
@@ -933,7 +934,6 @@ export function useNativeTimelinePreview({
             setPositionMs(nextPositionMs);
           }
 
-          const timelineState = useTimelineStore.getState();
           if (!event.payload.isPlaying) {
             if (ignorePendingTargetSample) {
               break;
@@ -949,14 +949,6 @@ export function useNativeTimelinePreview({
             }
           } else if (ignorePlayingSample) {
             break;
-          } else if (
-            shouldRebasePlayingClockToNative({
-              nativePositionMs: nextPositionMs,
-              currentPlayheadRefMs: timelineState.getPlayheadRef(),
-              thresholdMs: NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS,
-            })
-          ) {
-            rebaseNativePlaybackClock(nextPositionMs, syncAt, nextRate);
           } else {
             const currentRate = nativePlaybackClockRef.current.rate > 0 ? nativePlaybackClockRef.current.rate : 1;
             if (Math.abs(currentRate - nextRate) > 0.000_001) {
@@ -1011,6 +1003,7 @@ export function useNativeTimelinePreview({
           if (!ignorePendingTargetSample) {
             setPositionMs(event.payload.positionMs);
             clearPendingNativeTargetIfSettled(event.payload.positionMs, syncAt);
+
             nativeBackendPositionRef.current = {
               positionMs: event.payload.positionMs,
               updatedAt: syncAt,
@@ -1030,29 +1023,15 @@ export function useNativeTimelinePreview({
               if (ignorePlayingSample) {
                 break;
               }
-              if (
-                shouldRebasePlayingClockToNative({
-                  nativePositionMs: event.payload.positionMs,
-                  currentPlayheadRefMs: timelineState.getPlayheadRef(),
-                  thresholdMs: NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS,
-                })
-              ) {
+              const currentRate = nativePlaybackClockRef.current.rate > 0 ? nativePlaybackClockRef.current.rate : 1;
+              if (Math.abs(currentRate - nextRate) > 0.000_001) {
                 rebaseNativePlaybackClock(
-                  event.payload.positionMs,
+                  projectNativePlaybackClockPosition(syncAt),
                   syncAt,
                   nextRate,
                 );
               } else {
-                const currentRate = nativePlaybackClockRef.current.rate > 0 ? nativePlaybackClockRef.current.rate : 1;
-                if (Math.abs(currentRate - nextRate) > 0.000_001) {
-                  rebaseNativePlaybackClock(
-                    projectNativePlaybackClockPosition(syncAt),
-                    syncAt,
-                    nextRate,
-                  );
-                } else {
-                  nativePlaybackClockRef.current.rate = nextRate;
-                }
+                nativePlaybackClockRef.current.rate = nextRate;
               }
             } else {
               if (ignorePendingTargetSample) {
@@ -1463,43 +1442,7 @@ export function useNativeTimelinePreview({
       const clock = nativePlaybackClockRef.current;
       const rate = clock.rate > 0 ? clock.rate : 1;
       let nextPositionMs = clock.basePositionMs + (frameTime - clock.baseUpdatedAt) * rate;
-      const backendSync = nativeBackendPositionRef.current;
-      const projectedBackendPositionMs = projectNativePlaybackPosition(backendSync, frameTime);
-      const pendingTarget = pendingNativeTargetRef.current;
-      const pendingTransportIntent = pendingTransportIntentRef.current;
       const shouldFreezePlayhead = shouldFreezePlayheadForPendingPause();
-      const shouldIgnoreBackwardBackendClamp = shouldIgnoreBackwardNativePlayingClockRebase({
-        nativePositionMs: projectedBackendPositionMs,
-        currentPlayheadRefMs: nextPositionMs,
-        pendingTargetMs: pendingTarget?.targetMs ?? null,
-        pendingTargetRequestedAt: pendingTarget?.requestedAt ?? null,
-        pendingTransportTargetMs: pendingTransportIntent?.targetMs ?? null,
-        pendingTransportRequestedAt: pendingTransportIntent?.requestedAt ?? null,
-        now: frameTime,
-        thresholdMs: NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS,
-        maxPendingMs: PENDING_NATIVE_TARGET_MAX_AGE_MS,
-        maxPendingTransportIntentMs: PENDING_TRANSPORT_INTENT_MAX_AGE_MS,
-      });
-
-      // Native transport currently reports positions at ~10fps. During playback,
-      // use those samples as a clock anchor, then advance locally at 60fps so the
-      // timeline line does not inherit backend polling jitter or boundary jumps.
-      // Compare against the sample projected to `frameTime`, otherwise a healthy
-      // 10fps native pump looks one polling interval behind and drags the UI.
-      // Keep this clamp backward-only: allowing RAF to chase forward samples
-      // reintroduces snap/jitter around fragment boundaries.
-      if (
-        !shouldIgnoreBackwardBackendClamp &&
-        backendSync.updatedAt > 0 &&
-        projectedBackendPositionMs < nextPositionMs - 80
-      ) {
-        rebaseNativePlaybackClock(
-          projectedBackendPositionMs,
-          frameTime,
-          backendSync.rate,
-        );
-        nextPositionMs = projectedBackendPositionMs;
-      }
 
       nextPositionMs = Math.max(0, nextPositionMs);
 

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  shouldIgnoreBackwardNativePlayingClockRebase,
   shouldIgnoreStaleNativePlayingPosition,
-  shouldRebasePlayingClockToNative,
   shouldSyncPausedNativePlayhead,
 } from './nativeTimelinePreviewSync';
 
@@ -209,67 +207,4 @@ describe('shouldSyncPausedNativePlayhead', () => {
     ).toBe(false);
   });
 
-  it('rebases the playback clock when the native sample is ahead of the UI', () => {
-    expect(
-      shouldRebasePlayingClockToNative({
-        nativePositionMs: 18_980,
-        currentPlayheadRefMs: 7_937,
-        thresholdMs: 250,
-      }),
-    ).toBe(true);
   });
-
-  it('rebases the playback clock when the native sample falls clearly behind the UI', () => {
-    expect(
-      shouldRebasePlayingClockToNative({
-        nativePositionMs: 7_937,
-        currentPlayheadRefMs: 18_980,
-        thresholdMs: 250,
-      }),
-    ).toBe(true);
-  });
-
-  it('does not rebase the playback clock for small native drift', () => {
-    expect(
-      shouldRebasePlayingClockToNative({
-        nativePositionMs: 19_080,
-        currentPlayheadRefMs: 18_960,
-        thresholdMs: 250,
-      }),
-    ).toBe(false);
-  });
-
-  it('ignores backward playback clock rebases while a newer local seek target is still pending', () => {
-    expect(
-      shouldIgnoreBackwardNativePlayingClockRebase({
-        nativePositionMs: 8_340,
-        currentPlayheadRefMs: 18_740,
-        pendingTargetMs: 18_740,
-        pendingTargetRequestedAt: 1_000,
-        pendingTransportTargetMs: 18_740,
-        pendingTransportRequestedAt: 1_020,
-        now: 1_080,
-        thresholdMs: 250,
-        maxPendingMs: 2_000,
-        maxPendingTransportIntentMs: 1_500,
-      }),
-    ).toBe(true);
-  });
-
-  it('accepts backward playback clock rebases after the pending local target expires', () => {
-    expect(
-      shouldIgnoreBackwardNativePlayingClockRebase({
-        nativePositionMs: 8_340,
-        currentPlayheadRefMs: 18_740,
-        pendingTargetMs: 18_740,
-        pendingTargetRequestedAt: 1_000,
-        pendingTransportTargetMs: 18_740,
-        pendingTransportRequestedAt: 1_020,
-        now: 4_000,
-        thresholdMs: 250,
-        maxPendingMs: 2_000,
-        maxPendingTransportIntentMs: 1_500,
-      }),
-    ).toBe(false);
-  });
-});

@@ -51,7 +51,6 @@ const previewControllerState = vi.hoisted(() => {
   class MockPreviewSessionController {
     readonly id: string;
     private listeners = new Set<(event: PreviewEvent) => void>();
-    private desiredSurfacePresenting = false;
     private sessionInfo: {
       sessionId: string;
       windowLabel: string;
@@ -98,7 +97,6 @@ const previewControllerState = vi.hoisted(() => {
     }
 
     async create(windowLabel = 'main') {
-      this.desiredSurfacePresenting = false;
       this.sessionInfo = {
         sessionId: this.id,
         windowLabel,
@@ -143,7 +141,6 @@ const previewControllerState = vi.hoisted(() => {
       });
 
       if (!previewControllerState.deferAttach) {
-        this.desiredSurfacePresenting = false;
         this.sessionInfo = {
           ...this.sessionInfo,
           nativeSurfaceAttached: true,
@@ -169,8 +166,7 @@ const previewControllerState = vi.hoisted(() => {
           throw new Error('session not created');
         }
 
-        this.desiredSurfacePresenting = false;
-        this.sessionInfo = {
+                this.sessionInfo = {
           ...this.sessionInfo,
           nativeSurfaceAttached: true,
         };
@@ -218,8 +214,7 @@ const previewControllerState = vi.hoisted(() => {
       presenting: boolean,
       surfaceSyncRevision?: number | null,
     ): Promise<void> {
-      this.desiredSurfacePresenting = presenting;
-      previewControllerState.surfaceSetupCalls.push({
+            previewControllerState.surfaceSetupCalls.push({
         controller: this,
         kind: 'present',
         presenting,

@@ -23,3 +23,4 @@ export function projectNativePlaybackPosition(
   const rate = Number.isFinite(sample.rate) && sample.rate > 0 ? sample.rate : 1;
   return Math.max(0, basePositionMs + (effectiveTargetTime - sampleUpdatedAt) * rate);
 }
+

@@ -26,10 +26,11 @@ const timelineState = vi.hoisted(() => ({
         start: 0,
         duration: 1_000,
         prompt: 'Fragment one',
-        references: [],
-        status: 'draft',
+        references: [] as never[],
+        status: 'draft' as const,
         createdAt: new Date('2026-04-30T00:00:00.000Z'),
         updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+        providerSelection: undefined as { instanceId: string; modelId: string } | undefined,
       },
       {
         id: 'fragment-2',
@@ -37,10 +38,11 @@ const timelineState = vi.hoisted(() => ({
         start: 1_000,
         duration: 2_000,
         prompt: 'Focused fragment',
-        references: [],
-        status: 'draft',
+        references: [] as never[],
+        status: 'draft' as const,
         createdAt: new Date('2026-04-30T00:00:00.000Z'),
         updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+        providerSelection: undefined as { instanceId: string; modelId: string } | undefined,
       },
     ],
     tracks: [{ id: 'track-1', type: 'video', order: 0 }],
@@ -62,10 +64,12 @@ const assetStoreState = vi.hoisted(() => ({
   },
 }));
 
+type MockProviderInstance = { instanceId: string; typeId: string; displayName: string; enabled: boolean; config: Record<string, unknown>; createdAt: string; updatedAt: string };
+
 const providerInstanceStoreState = vi.hoisted(() => ({
   current: {
-    instances: [],
-    get: vi.fn(() => null),
+    instances: [] as MockProviderInstance[],
+    get: vi.fn<[string], MockProviderInstance | null>(() => null),
   },
 }));
 
@@ -205,9 +209,10 @@ describe('FragmentInspector', () => {
         duration: 1_000,
         prompt: 'Fragment one',
         references: [],
-        status: 'draft',
+        status: 'draft' as const,
         createdAt: new Date('2026-04-30T00:00:00.000Z'),
         updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+        providerSelection: undefined,
       },
       {
         id: 'fragment-2',
@@ -216,9 +221,10 @@ describe('FragmentInspector', () => {
         duration: 2_000,
         prompt: 'Focused fragment',
         references: [],
-        status: 'draft',
+        status: 'draft' as const,
         createdAt: new Date('2026-04-30T00:00:00.000Z'),
         updatedAt: new Date('2026-04-30T00:00:00.000Z'),
+        providerSelection: undefined,
       },
     ];
     timelineState.current.updateFragment.mockReset();

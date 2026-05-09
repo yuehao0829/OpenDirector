@@ -19,25 +19,6 @@ interface ShouldIgnoreStaleNativePlayingPositionOptions {
   maxPendingMs: number;
 }
 
-interface ShouldRebasePlayingClockToNativeOptions {
-  nativePositionMs: number;
-  currentPlayheadRefMs: number;
-  thresholdMs: number;
-}
-
-interface ShouldIgnoreBackwardNativePlayingClockRebaseOptions {
-  nativePositionMs: number;
-  currentPlayheadRefMs: number;
-  pendingTargetMs: number | null;
-  pendingTargetRequestedAt: number | null;
-  pendingTransportTargetMs: number | null;
-  pendingTransportRequestedAt: number | null;
-  now: number;
-  thresholdMs: number;
-  maxPendingMs: number;
-  maxPendingTransportIntentMs: number;
-}
-
 /**
  * Accept paused/idle native positions when they either match the editor's
  * current playhead or match the playhead clamped into the current timeline
@@ -130,74 +111,3 @@ export function shouldIgnoreStaleNativePlayingPosition({
   );
 }
 
-/**
- * Rebase the local playback clock whenever a direct native transport sample and
- * the editor's authoritative playhead drift apart beyond the accepted
- * threshold. Event-driven samples are authoritative enough to correct both
- * leading and lagging drift; the animation loop applies its own stricter
- * backward-only guard to avoid visual jitter near clip boundaries.
- */
-export function shouldRebasePlayingClockToNative({
-  nativePositionMs,
-  currentPlayheadRefMs,
-  thresholdMs,
-}: ShouldRebasePlayingClockToNativeOptions): boolean {
-  const clampedNativePositionMs = Math.max(0, nativePositionMs);
-  const clampedCurrentPlayheadRefMs = Math.max(0, currentPlayheadRefMs);
-  return Math.abs(clampedNativePositionMs - clampedCurrentPlayheadRefMs) > thresholdMs;
-}
-
-/**
- * While a newer local seek / transport target is still pending, the backend may
- * continue to report an older playing position for a short window. Ignore those
- * backward rebases so the UI does not snap back to the stale backend clock
- * before the native transport finishes catching up.
- */
-export function shouldIgnoreBackwardNativePlayingClockRebase({
-  nativePositionMs,
-  currentPlayheadRefMs,
-  pendingTargetMs,
-  pendingTargetRequestedAt,
-  pendingTransportTargetMs,
-  pendingTransportRequestedAt,
-  now,
-  thresholdMs,
-  maxPendingMs,
-  maxPendingTransportIntentMs,
-}: ShouldIgnoreBackwardNativePlayingClockRebaseOptions): boolean {
-  const clampedNativePositionMs = Math.max(0, nativePositionMs);
-  const clampedCurrentPlayheadRefMs = Math.max(0, currentPlayheadRefMs);
-
-  if (clampedNativePositionMs >= clampedCurrentPlayheadRefMs - thresholdMs) {
-    return false;
-  }
-
-  const hasFreshProtectedTarget = (
-    targetMs: number | null,
-    requestedAt: number | null,
-    maxAgeMs: number,
-  ) => {
-    if (targetMs === null || requestedAt === null) {
-      return false;
-    }
-
-    if (now - requestedAt > maxAgeMs) {
-      return false;
-    }
-
-    const clampedTargetMs = Math.max(0, targetMs);
-    return (
-      clampedTargetMs >= clampedCurrentPlayheadRefMs - thresholdMs &&
-      clampedTargetMs > clampedNativePositionMs + thresholdMs
-    );
-  };
-
-  return (
-    hasFreshProtectedTarget(pendingTargetMs, pendingTargetRequestedAt, maxPendingMs) ||
-    hasFreshProtectedTarget(
-      pendingTransportTargetMs,
-      pendingTransportRequestedAt,
-      maxPendingTransportIntentMs,
-    )
-  );
-}

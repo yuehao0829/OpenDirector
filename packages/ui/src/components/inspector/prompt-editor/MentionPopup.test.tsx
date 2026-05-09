@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Asset, Reference } from '@opendirector/core/types/asset';
 
-import { MentionPopup, type MentionItem } from './MentionPopup';
+import { MentionPopup } from './MentionPopup';
+import type { MentionItem } from './mentionUtils';
 
 function createAsset(id: string, type: Asset['type'], name = id): Asset {
   const mimeType = type === 'image' ? 'image/png' : type === 'video' ? 'video/mp4' : 'audio/mpeg';
