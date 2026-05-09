@@ -15,7 +15,7 @@ import {
   type XmemlExportAsset,
   type XmemlImportResult,
 } from '../utils/xml/xmeml-serializer';
-import type { Project, Asset } from '../types';
+import type { Project, Asset, Fragment } from '../types';
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
@@ -27,20 +27,80 @@ export interface XmemlExportParams {
 
 /**
  * Build XmemlExportOptions from a Project snapshot.
- * Shared by both exportXmeml and exportXmemlToFile.
+ * Probes audio metadata for video assets to determine if they have embedded audio tracks.
  */
-function buildExportOptions(
+async function buildExportOptions(
   project: Project,
+  fsAdapter: FileSystemAdapter,
   assetPathResolver: (asset: Asset) => string,
-): XmemlExportOptions {
+): Promise<XmemlExportOptions> {
   const { settings, fragments, assets, tracks } = project;
   const fps = settings.fps;
 
-  const exportableFragments = fragments.filter(f => f.sourceAssetId);
-  const referencedAssetIds = new Set(exportableFragments.map(f => f.sourceAssetId!));
+  const exportableFragments: Fragment[] = [];
+  const referencedAssetIds = new Set<string>();
+  const assetNameMap = new Map<string, string>();
+  const assetPathCache = new Map<string, string>();
+  const assetById = new Map(assets.map(a => [a.id, a]));
 
-  // Build name lookup map for O(1) access
-  const assetNameMap = new Map(assets.map(a => [a.id, a.name]));
+  for (const asset of assets) {
+    assetNameMap.set(asset.id, asset.name);
+  }
+
+  for (const frag of fragments) {
+    if (!frag.sourceAssetId) continue;
+    exportableFragments.push(frag);
+    referencedAssetIds.add(frag.sourceAssetId);
+  }
+
+  for (const assetId of referencedAssetIds) {
+    const asset = assetById.get(assetId);
+    if (asset) {
+      assetPathCache.set(assetId, assetPathResolver(asset));
+    }
+  }
+
+  // Probe audio metadata for referenced video assets that haven't been hydrated
+  const audioProbeResults = new Map<string, { audioChannels?: number; sampleRate?: number }>();
+
+  const assetsToProbe = assets.filter(
+    a => referencedAssetIds.has(a.id) && a.type !== 'audio' && !a.mediaMetadataHydrated,
+  );
+
+  await Promise.all(assetsToProbe.map(async (asset) => {
+    const mediaPath = assetPathCache.get(asset.id);
+    if (!mediaPath) return;
+
+    try {
+      const metadata = await fsAdapter.getMediaMetadata(mediaPath);
+      const channels = metadata.audioChannels ?? 0;
+      if (channels > 0) {
+        audioProbeResults.set(asset.id, {
+          audioChannels: channels,
+          sampleRate: metadata.sampleRate,
+        });
+      }
+    } catch {
+      // probe failed — treat as no audio
+    }
+  }));
+
+  function assetHasAudio(asset: Asset): boolean {
+    if (asset.type === 'audio') return true;
+    const probe = audioProbeResults.get(asset.id);
+    if (probe) return probe.audioChannels !== undefined && probe.audioChannels > 0;
+    return (asset.audioChannels ?? 0) > 0;
+  }
+
+  function resolveAssetAudioChannels(asset: Asset): number | undefined {
+    if (asset.type === 'audio') return asset.audioChannels;
+    return audioProbeResults.get(asset.id)?.audioChannels ?? asset.audioChannels;
+  }
+
+  function resolveAssetSampleRate(asset: Asset): number | undefined {
+    if (asset.type === 'audio') return asset.sampleRate;
+    return audioProbeResults.get(asset.id)?.sampleRate ?? asset.sampleRate;
+  }
 
   const exportAssets: XmemlExportAsset[] = [];
   let fileIndex = 0;
@@ -59,11 +119,14 @@ function buildExportOptions(
     exportAssets.push({
       id: fileId,
       name: asset.name,
-      filePath: assetPathResolver(asset),
+      filePath: assetPathCache.get(asset.id)!,
       duration: asset.duration || 0,
-      type: asset.type === 'audio' ? 'audio' as const : 'video' as const,
+      type: asset.type === 'audio' ? 'audio' : 'video',
+      hasAudio: assetHasAudio(asset),
       width: asset.width,
       height: asset.height,
+      audioChannels: resolveAssetAudioChannels(asset),
+      sampleRate: resolveAssetSampleRate(asset),
     });
   }
 
@@ -71,9 +134,19 @@ function buildExportOptions(
   const trackOrderMap = new Map(tracks.map(t => [t.id, t.order]));
 
   let clipIndex = 0;
-  const exportFragments: XmemlExportFragment[] = exportableFragments.map(frag => {
+  const exportFragments: XmemlExportFragment[] = [];
+  const linkedAudioFragments: XmemlExportFragment[] = [];
+
+  // Allocate linked audio track indices starting after existing audio tracks
+  const maxAudioOrder = tracks
+    .filter(t => t.type === 'audio')
+    .reduce((max, t) => Math.max(max, t.order), -1);
+  let linkedAudioTrackSeed = maxAudioOrder + 1;
+  const videoTrackAudioIndices = new Map<number, number>();
+
+  for (const frag of exportableFragments) {
     const fileId = assetIdToFileId.get(frag.sourceAssetId!) || frag.sourceAssetId!;
-    return {
+    const exportFrag: XmemlExportFragment = {
       id: `clip-${++clipIndex}`,
       start: frag.start,
       duration: frag.duration,
@@ -84,7 +157,32 @@ function buildExportOptions(
       trackType: trackTypeMap.get(frag.trackId) || 'video',
       trackIndex: trackOrderMap.get(frag.trackId) ?? 0,
     };
-  });
+    exportFragments.push(exportFrag);
+
+    // Premiere Pro requires separate clipitems in the <audio> section to play audio;
+    // clipitems in the <video> section are video-only regardless of the <file> media.
+    if (exportFrag.trackType !== 'video') continue;
+    const sourceAsset = assetById.get(frag.sourceAssetId!);
+    if (!sourceAsset || !assetHasAudio(sourceAsset)) continue;
+
+    if (!videoTrackAudioIndices.has(exportFrag.trackIndex)) {
+      videoTrackAudioIndices.set(exportFrag.trackIndex, linkedAudioTrackSeed++);
+    }
+
+    linkedAudioFragments.push({
+      id: `clip-${++clipIndex}`,
+      start: exportFrag.start,
+      duration: exportFrag.duration,
+      trimStart: exportFrag.trimStart,
+      sourceDuration: exportFrag.sourceDuration,
+      sourceAssetId: exportFrag.sourceAssetId,
+      name: exportFrag.name,
+      trackType: 'audio',
+      trackIndex: videoTrackAudioIndices.get(exportFrag.trackIndex)!,
+    });
+  }
+
+  exportFragments.push(...linkedAudioFragments);
 
   return {
     projectName: project.name,
@@ -110,7 +208,7 @@ function serializeToBuffer(options: XmemlExportOptions): ArrayBuffer {
  * Export a project as XMEML file to the project folder.
  */
 export async function exportXmeml(params: XmemlExportParams): Promise<void> {
-  const options = buildExportOptions(params.project, params.assetPathResolver);
+  const options = await buildExportOptions(params.project, params.fsAdapter, params.assetPathResolver);
   const buffer = serializeToBuffer(options);
   await params.fsAdapter.writeFile(params.project.folderPath || '', buffer);
 }
@@ -122,7 +220,7 @@ export async function exportXmemlToFile(
   params: XmemlExportParams,
   filePath: string,
 ): Promise<void> {
-  const options = buildExportOptions(params.project, params.assetPathResolver);
+  const options = await buildExportOptions(params.project, params.fsAdapter, params.assetPathResolver);
   const buffer = serializeToBuffer(options);
   await params.fsAdapter.writeFile(filePath, buffer);
 }

@@ -33,8 +33,11 @@ export interface XmemlExportAsset {
   filePath: string;              // absolute local path for pathurl encoding
   duration: number;              // milliseconds
   type: 'video' | 'audio';
+  hasAudio: boolean;             // true when a video asset has embedded audio
   width?: number;
   height?: number;
+  audioChannels?: number;
+  sampleRate?: number;
 }
 
 export interface XmemlExportFragment {
@@ -107,6 +110,9 @@ export interface XmemlImportFragment {
 
 const DEFAULT_WIDTH = DEFAULT_PROJECT_SETTINGS.resolution.width;
 const DEFAULT_HEIGHT = DEFAULT_PROJECT_SETTINGS.resolution.height;
+const DEFAULT_AUDIO_DEPTH = 16;
+const DEFAULT_AUDIO_SAMPLE_RATE = 48000;
+const DEFAULT_AUDIO_CHANNELS = 2;
 
 /** XMEML encodes booleans as TRUE/FALSE strings. */
 function xmemlBool(value: boolean): string {
@@ -253,10 +259,10 @@ function buildVideoFormat(width: number, height: number, rate: XmemlRate): XmlEl
     .build();
 }
 
-function buildAudioSampleCharacteristics(): XmlElement {
+function buildAudioSampleCharacteristics(sampleRate?: number): XmlElement {
   return createElement('samplecharacteristics')
-    .child(textElement('depth', '16'))
-    .child(textElement('samplerate', '48000'))
+    .child(textElement('depth', String(DEFAULT_AUDIO_DEPTH)))
+    .child(textElement('samplerate', String(sampleRate ?? DEFAULT_AUDIO_SAMPLE_RATE)))
     .build();
 }
 
@@ -288,45 +294,50 @@ function buildAudioOutputs(): XmlElement {
     .build();
 }
 
+function buildAudioMediaElement(asset: XmemlExportAsset, durationFrames: number): XmlElement {
+  const channels = asset.audioChannels ?? DEFAULT_AUDIO_CHANNELS;
+  const layout = channels === 1 ? 'mono' : 'stereo';
+  return createElement('audio')
+    .child(textElement('duration', String(durationFrames)))
+    .child(buildAudioSampleCharacteristics(asset.sampleRate))
+    .child(textElement('channelcount', String(channels)))
+    .child(textElement('layout', layout))
+    .build();
+}
+
 function buildFileElement(asset: XmemlExportAsset, rate: XmemlRate, fps: number): XmlElement {
   const durationFrames = asset.duration > 0 ? msToFrames(asset.duration, fps) : 0;
+  const durationStr = String(durationFrames);
 
   const fileEl = createElement('file', { id: asset.id })
     .child(textElement('name', asset.name))
     .child(textElement('pathurl', localPathToPathurl(asset.filePath)))
     .child(buildRateElement(rate))
-    .child(textElement('duration', String(durationFrames)));
+    .child(textElement('duration', durationStr));
+
+  const mediaEl = createElement('media');
 
   if (asset.type === 'video') {
-    fileEl.child(
-      createElement('media')
+    mediaEl.child(
+      createElement('video')
+        .child(textElement('duration', durationStr))
         .child(
-          createElement('video')
-            .child(textElement('duration', String(durationFrames)))
-            .child(
-              createElement('samplecharacteristics')
-                .child(textElement('width', String(asset.width || DEFAULT_WIDTH)))
-                .child(textElement('height', String(asset.height || DEFAULT_HEIGHT)))
-                .build()
-            )
+          createElement('samplecharacteristics')
+            .child(textElement('width', String(asset.width || DEFAULT_WIDTH)))
+            .child(textElement('height', String(asset.height || DEFAULT_HEIGHT)))
             .build()
         )
         .build()
     );
+
+    if (asset.hasAudio) {
+      mediaEl.child(buildAudioMediaElement(asset, durationFrames));
+    }
   } else {
-    fileEl.child(
-      createElement('media')
-        .child(
-          createElement('audio')
-            .child(textElement('duration', String(durationFrames)))
-            .child(buildAudioSampleCharacteristics())
-            .child(textElement('channelcount', '2'))
-            .child(textElement('layout', 'stereo'))
-            .build()
-        )
-        .build()
-    );
+    mediaEl.child(buildAudioMediaElement(asset, durationFrames));
   }
+
+  fileEl.child(mediaEl.build());
 
   return fileEl.build();
 }
