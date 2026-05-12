@@ -595,7 +595,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          download() { gh run download "$MAIN_CI_RUN_ID" --name "$1" --dir "$2" || true; }
+          download() { gh run download "$MAIN_CI_RUN_ID" --repo ${{ github.repository }} --name "$1" --dir "$2" || true; }
           download macos-dmg-arm  artifacts/macos-arm  &
           download macos-dmg-intel artifacts/macos-intel &
           download windows-nsis    artifacts/windows    &
