@@ -211,7 +211,10 @@ mod imp {
                 &self.pipeline,
                 "prepare preview pipeline for seek",
             )?;
-            self.seek_internal(position_ms, 1.0)
+            self.seek_internal(position_ms, 1.0)?;
+            #[cfg(target_os = "macos")]
+            expose_video_sink(self.video_sink.as_ref());
+            Ok(())
         }
 
         pub fn query_position_ms(&self) -> f64 {
@@ -443,6 +446,15 @@ mod imp {
             gst::ElementFactory::make("autovideosink")
                 .build()
                 .map_err(|error| format!("failed to create autovideosink: {error}"))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn expose_video_sink(video_sink: Option<&gst::Element>) {
+        if let Some(sink) = video_sink {
+            if let Some(overlay) = sink.dynamic_cast_ref::<gst_video::VideoOverlay>() {
+                overlay.expose();
+            }
         }
     }
 
