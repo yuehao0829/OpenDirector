@@ -922,7 +922,7 @@ async function ensureDesktopDevServer() {
     prepareProcessLogFile(viteLogPaths.out);
     prepareProcessLogFile(viteLogPaths.err);
 
-    startDetachedProcess(viteInvocation, {
+    startDetachedNodeProcess(viteInvocation, {
       cwd: desktopDir,
       env,
       logPaths: viteLogPaths,
@@ -1344,14 +1344,6 @@ function canAccessFile(filePath) {
   }
 }
 
-function startDetachedProcess(invocation, options) {
-  if (process.platform === 'win32') {
-    return startDetachedWindowsProcess(invocation, options);
-  }
-
-  return startDetachedNodeProcess(invocation, options);
-}
-
 function startDetachedNodeProcess(invocation, options) {
   mkdirSync(path.dirname(options.logPaths.out), { recursive: true });
   const stdoutFd = openSync(options.logPaths.out, 'a');
@@ -1377,48 +1369,6 @@ function startDetachedNodeProcess(invocation, options) {
     closeSync(stdoutFd);
     closeSync(stderrFd);
   }
-}
-
-function startDetachedWindowsProcess(invocation, options) {
-  const command = [
-    `$process = Start-Process -FilePath ${toPowerShellString(invocation.command)} ` +
-      `-ArgumentList @(${invocation.args.map(toPowerShellString).join(', ')}) ` +
-      `-WorkingDirectory ${toPowerShellString(options.cwd)} ` +
-      '-WindowStyle Hidden -PassThru;',
-    '$process.Id',
-  ].join(' ');
-
-  const result = spawnSync(
-    'powershell',
-    ['-NoProfile', '-NonInteractive', '-Command', command],
-    {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: 'pipe',
-      encoding: 'utf8',
-      windowsHide: true,
-    },
-  );
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  if (result.status !== 0) {
-    const details = [result.stderr, result.stdout]
-      .map((value) => value.trim())
-      .filter(Boolean)
-      .join('\n');
-
-    throw new Error(
-      details
-        ? `Failed to start hidden Vite process on Windows.\n${details}`
-        : 'Failed to start hidden Vite process on Windows.',
-    );
-  }
-
-  const pid = Number.parseInt(result.stdout.trim(), 10);
-  return { pid: Number.isFinite(pid) ? pid : null };
 }
 
 function normalizeForwardedCliArgs(argv) {
@@ -1477,10 +1427,6 @@ function tailLog(content, maxLines = 30, maxChars = 4000) {
 function prepareProcessLogFile(filePath) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, '');
-}
-
-function toPowerShellString(value) {
-  return `'${String(value).replaceAll('\'', '\'\'')}'`;
 }
 
 function buildTauriDevConfigOverride() {
