@@ -1,5 +1,4 @@
 import type { SnapLine as SnapLineType } from '@opendirector/core/types/timeline';
-import { TRACK_HEADER_WIDTH } from './constants';
 
 interface SnapLineProps {
   snapLine: SnapLineType;
@@ -14,7 +13,7 @@ interface SnapLineProps {
  * - Scene edge: cyan
  */
 export function SnapLine({ snapLine, zoom }: SnapLineProps) {
-  const left = (snapLine.time / 1000) * zoom + TRACK_HEADER_WIDTH;
+  const left = (snapLine.time / 1000) * zoom;
 
   const lineColors = {
     playhead: 'bg-red-500',

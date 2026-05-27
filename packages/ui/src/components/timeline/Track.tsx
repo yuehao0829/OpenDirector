@@ -12,8 +12,7 @@ import { findFragmentAt, getAvailableDuration, pixelToTime, timeToPixel } from '
 import { findSnapPoint } from '@opendirector/core/utils/snap';
 import { Fragment as FragmentComponent } from './Fragment';
 import { clsx } from 'clsx';
-import { Video, Music } from 'lucide-react';
-import { TRACK_HEADER_WIDTH, TRACK_HEIGHT } from './constants';
+import { TRACK_HEIGHT } from './constants';
 import { parseAssetDragData, isDragCompatibleWithTrack, buildReferencesFromDragData, resolveDroppedFragmentDuration } from './drag-types';
 
 interface TrackProps {
@@ -24,10 +23,9 @@ interface TrackProps {
   scrollX: number;
   viewportWidth?: number;
   onFragmentDragStart?: (e: React.MouseEvent, fragment: FragmentType) => void;
-  onTrackContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, onFragmentDragStart, onTrackContextMenu }: TrackProps) {
+export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, onFragmentDragStart }: TrackProps) {
   const toolMode = useTimelineStore((s) => s.toolMode);
   const splitFragment = useTimelineStore((s) => s.splitFragment);
   const addFragment = useTimelineStore((s) => s.addFragment);
@@ -178,17 +176,6 @@ export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, o
     razor: 'crosshair',
   } as const;
 
-  // Render track icon based on type
-  const renderTrackIcon = () => {
-    switch (track.type) {
-      case 'audio':
-        return <Music size={14} className="text-green-400" />;
-      case 'video':
-      default:
-        return <Video size={14} className="text-zinc-400" />;
-    }
-  };
-
   // Outer width = timelineWidth + viewportWidth, ensures no truncation when scrolling to the end
   const outerWidth = width + (viewportWidth ?? 0);
   const contentWidth = Math.max(width, scrollX + (viewportWidth ?? 0) + 100);
@@ -201,22 +188,7 @@ export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, o
       data-track-id={track.id}
       data-track-type={track.type}
     >
-      {/* Track Header - fixed, does not scroll */}
-      <div
-        className="absolute left-0 top-0 bottom-0 bg-zinc-900 border-r border-zinc-800 z-10"
-        style={{ width: TRACK_HEADER_WIDTH }}
-        onContextMenu={onTrackContextMenu ? (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onTrackContextMenu(e);
-        } : undefined}
-      >
-        <div className="flex items-center justify-center h-full">
-          {renderTrackIcon()}
-        </div>
-      </div>
-
-      {/* Track Content - positioned to align with SceneTrack content */}
+      {/* Track Content */}
       <div
         className={clsx(
           'absolute top-0 bottom-0 overflow-hidden',
@@ -225,7 +197,6 @@ export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, o
         )}
         style={{
           width: contentWidth,
-          left: TRACK_HEADER_WIDTH,
           cursor: cursorStyle[toolMode],
         }}
         onClick={toolMode === 'razor' ? handleRazorClick : undefined}

@@ -5,9 +5,9 @@ import type { Scene } from '@opendirector/core/types/timeline';
 import { findSnapPoint } from '@opendirector/core/utils/snap';
 import { pixelToTime } from '@opendirector/core/utils/timeline';
 import { clsx } from 'clsx';
-import { Image, Plus, Layers } from 'lucide-react';
+import { Image, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { TRACK_HEADER_WIDTH, SCENE_TRACK_HEIGHT } from './constants';
+import { SCENE_TRACK_HEIGHT } from './constants';
 
 interface SceneTrackProps {
   width: number;
@@ -214,8 +214,8 @@ export function SceneTrack({ width, zoom, scrollX, viewportWidth }: SceneTrackPr
     const sceneContentRect = e.currentTarget.parentElement?.getBoundingClientRect();
     if (!sceneContentRect) return;
 
-    // The scene content div is positioned at `left: TRACK_HEADER_WIDTH - scrollX`
-    // So the click X relative to the content div is already in content coordinates
+    // The scene content div is positioned at left: 0
+    // Click X relative to the content div is already in content coordinates
     // (scene positions inside the content div are relative to its origin)
     const x = e.clientX - sceneContentRect.left;
     let clickTime = (x / zoom) * 1000;
@@ -336,20 +336,11 @@ export function SceneTrack({ width, zoom, scrollX, viewportWidth }: SceneTrackPr
       style={{ height: SCENE_TRACK_HEIGHT, width: outerWidth }}
       data-testid="scene-track"
     >
-      {/* Track Header */}
-      <div
-        className="absolute left-0 top-0 bottom-0 bg-zinc-900 border-r border-zinc-800 z-10 flex items-center justify-center"
-        style={{ width: TRACK_HEADER_WIDTH }}
-      >
-        <Layers size={14} className="text-cyan-400" />
-      </div>
-
-      {/* Scene Content Area - use left positioning to align with Track content */}
+      {/* Scene Content Area */}
       <div
         className="absolute top-0 bottom-0"
         style={{
           width: contentWidth,
-          left: TRACK_HEADER_WIDTH,
         }}
         onClick={handleContentClick}
       >

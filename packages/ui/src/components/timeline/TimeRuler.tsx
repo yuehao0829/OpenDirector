@@ -1,5 +1,5 @@
 import { formatTime } from '@opendirector/core/utils/time';
-import { TRACK_HEADER_WIDTH, TIME_RULER_HEIGHT } from './constants';
+import { TIME_RULER_HEIGHT } from './constants';
 
 interface TimeRulerProps {
   width: number;
@@ -60,18 +60,11 @@ export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick }: Time
       data-testid="time-ruler"
       onClick={onClick}
     >
-      {/* Track header offset */}
-      <div
-        className="absolute left-0 top-0 bottom-0 bg-zinc-900 border-r border-zinc-800 z-10"
-        style={{ width: TRACK_HEADER_WIDTH }}
-      />
-
       {/* Content container - natural scroll to align with SceneTrack and Track */}
       <div
         className="absolute top-0 h-full"
         style={{
           width: contentWidth,
-          left: TRACK_HEADER_WIDTH,
         }}
       >
         {marks.map((time) => (

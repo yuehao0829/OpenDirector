@@ -494,7 +494,7 @@ export function Fragment({ fragment, zoom, isSelected, onClick, onDragStart }: F
         clsx(
           'absolute top-1 bottom-1 rounded',
           'select-none',
-          isResizing ? 'hover:brightness-110' : 'hover:brightness-110 transition-all',
+          isResizing ? 'hover:brightness-110' : 'hover:brightness-110 transition-colors',
           !isGenerating && 'border',
           !isGenerating && theme.statusColors[fragment.status],
           isGenerating && theme.generatingClass,

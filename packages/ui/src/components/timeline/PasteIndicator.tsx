@@ -1,4 +1,4 @@
-import { TRACK_HEADER_WIDTH, TRACK_HEIGHT, TRACKS_AREA_OFFSET, SCENE_TRACK_HEIGHT } from './constants';
+import { TRACK_HEIGHT, SCENE_TRACK_HEIGHT } from './constants';
 
 interface PasteIndicatorProps {
   /** Position in content coordinates (pixels from content origin) */
@@ -17,17 +17,14 @@ interface PasteIndicatorProps {
 export function PasteIndicator({ x, visualY }: PasteIndicatorProps) {
   const isSceneTrack = visualY === undefined;
 
-  const top = isSceneTrack
-    ? TRACKS_AREA_OFFSET - SCENE_TRACK_HEIGHT
-    : TRACKS_AREA_OFFSET + visualY;
-
+  const top = isSceneTrack ? 0 : visualY;
   const height = isSceneTrack ? SCENE_TRACK_HEIGHT : TRACK_HEIGHT;
 
   return (
     <div
       className="absolute w-0.5 bg-white z-30 pointer-events-none animate-pulse"
       style={{
-        left: x + TRACK_HEADER_WIDTH,
+        left: x,
         top,
         height,
       }}

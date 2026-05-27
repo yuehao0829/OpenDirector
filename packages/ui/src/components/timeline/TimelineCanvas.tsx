@@ -6,7 +6,8 @@ import { findNearestValidGroupDelta, findSnapPointsForDrag } from '@opendirector
 import { pixelToTime } from '@opendirector/core/utils/timeline';
 import { clsx } from 'clsx';
 import { Track } from './Track';
-import { Playhead } from './Playhead';
+import { TrackHeader } from './TrackHeader';
+import { PlayheadHandle, PlayheadLine } from './Playhead';
 import { TimeRuler } from './TimeRuler';
 import { Toolbar } from './Toolbar';
 import { SceneTrack } from './SceneTrack';
@@ -20,6 +21,7 @@ import { TrackAreaContextMenu } from './TrackAreaContextMenu';
 import { SnapLines } from './SnapLine';
 import { useTimelineShortcuts } from '../../hooks/useTimelineShortcuts';
 import { TRACK_HEADER_WIDTH, TRACK_HEIGHT, MAX_TIMELINE_DURATION, TRACKS_AREA_OFFSET, TRACK_DIVIDER_HEIGHT } from './constants';
+import { Layers } from 'lucide-react';
 import './fragment-generating.css';
 
 interface DragSelectionItem {
@@ -56,9 +58,12 @@ type ContextMenuState =
 export function TimelineCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const rulerScrollRef = useRef<HTMLDivElement>(null);
+  const headersScrollRef = useRef<HTMLDivElement>(null);
   const ghostElementRefs = useRef(new Map<string, HTMLDivElement>());
   const fragmentDragPreviewRef = useRef<DragPreviewState | null>(null);
   const activeSnapLinesSignatureRef = useRef('');
+
 
   const tracks = useTimelineStore((s) => s.tracks);
   const fragments = useTimelineStore((s) => s.fragments);
@@ -99,7 +104,7 @@ export function TimelineCanvas() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [fragmentDrag, setFragmentDrag] = useState<DragGhost | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(800); // Default viewport width
+  const [viewportWidth, setViewportWidth] = useState(800);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
   const handleTrackContextMenu = useCallback((e: React.MouseEvent, trackId: string) => {
@@ -109,19 +114,16 @@ export function TimelineCanvas() {
   }, []);
 
   // Separate tracks by type for Jianying-style layout
-  // Video tracks: order increases upward (order=0 at bottom, near divider)
-  // Audio tracks: order increases downward (lowest audio order at top, near divider)
   const { videoTracks, audioTracks } = useMemo(() => {
     const videoTracks = tracks
       .filter((t) => t.type === 'video')
-      .sort((a, b) => b.order - a.order); // Descending: highest order first (top)
+      .sort((a, b) => b.order - a.order);
     const audioTracks = tracks
       .filter((t) => t.type === 'audio')
-      .sort((a, b) => a.order - b.order); // Ascending: lowest order first (top, near divider)
+      .sort((a, b) => a.order - b.order);
     return { videoTracks, audioTracks };
   }, [tracks]);
 
-  // Calculate track position info for index conversion
   const videoTrackCount = videoTracks.length;
   const audioTrackCount = audioTracks.length;
 
@@ -131,19 +133,15 @@ export function TimelineCanvas() {
   );
 
   // Helper: Get visual Y position for a track by trackId
-  // Returns the Y offset from TRACKS_AREA_OFFSET for ghost/indicator positioning
   const getTrackVisualY = useCallback((trackId: string): number => {
     const track = tracks.find((t) => t.id === trackId);
     if (!track) return 0;
 
     if (track.type === 'video') {
-      // Find position in videoTracks array (sorted descending by order)
       const visualIndex = videoTracks.findIndex((t) => t.id === track.id);
       return visualIndex * TRACK_HEIGHT;
     } else if (track.type === 'audio') {
-      // Find position in audioTracks array (sorted ascending by order)
       const visualIndex = audioTracks.findIndex((t) => t.id === track.id);
-      // Audio tracks start after video tracks and divider
       return videoTrackCount * TRACK_HEIGHT + TRACK_DIVIDER_HEIGHT + visualIndex * TRACK_HEIGHT;
     }
     return 0;
@@ -214,21 +212,52 @@ export function TimelineCanvas() {
   // Initialize keyboard shortcuts
   useTimelineShortcuts();
 
+  // Sync ruler and header scroll containers to match the given scroll position
+  const syncAuxScroll = useCallback((scrollLeft: number, scrollTop: number) => {
+    if (rulerScrollRef.current) {
+      rulerScrollRef.current.scrollLeft = scrollLeft;
+    }
+    if (headersScrollRef.current) {
+      headersScrollRef.current.scrollTop = scrollTop;
+    }
+  }, []);
+
+  // Scroll synchronization: content area drives ruler and headers
+  // Guard pattern: compare against store state to avoid re-emitting scroll
+  // values that were just written by useLayoutEffect (scroll events fire
+  // asynchronously after useLayoutEffect, so a simple ref guard can't work).
+  const handleContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const storeScroll = useTimelineStore.getState().scroll;
+
+    syncAuxScroll(target.scrollLeft, target.scrollTop);
+
+    // Skip setScroll if the values match what the store already has
+    // (this happens when useLayoutEffect wrote scrollLeft/scrollTop and
+    // the browser asynchronously dispatches a scroll event for it)
+    if (Math.abs(target.scrollLeft - storeScroll.x) < 1 && Math.abs(target.scrollTop - storeScroll.y) < 1) {
+      return;
+    }
+
+    setScroll(target.scrollLeft, target.scrollTop);
+  }, [setScroll, syncAuxScroll]);
+
   // Sync store scroll state to DOM scroll position
-  // This is needed because setScroll() only updates the store,
-  // but the actual DOM scroll position might be different.
-  useEffect(() => {
+  // Must use useLayoutEffect to avoid a one-frame desync when zoom changes:
+  // zoom + scroll update atomically in Zustand, but DOM scrollLeft is stale
+  // until we write it — useLayoutEffect writes before the browser paints.
+  useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
-    // Only sync if there's a difference to avoid triggering onScroll unnecessarily
     if (container.scrollLeft !== scroll.x || container.scrollTop !== scroll.y) {
       container.scrollLeft = scroll.x;
       container.scrollTop = scroll.y;
+      syncAuxScroll(scroll.x, scroll.y);
     }
-  }, [scroll.x, scroll.y]);
+  }, [scroll.x, scroll.y, syncAuxScroll]);
 
-  // Track viewport width for TimeRuler
+  // Track viewport width from content scroll area
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -245,21 +274,18 @@ export function TimelineCanvas() {
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Playback animation: write playhead ref at 60fps, sync to Zustand at ~10fps.
-  // When the native preview session has taken over transport ownership, Rust
-  // drives playhead timing and pushes position updates back into the store.
+  // Playback animation
   useEffect(() => {
     if (!isPlaying) return;
     if (nativePreviewTransportControlled) {
       return;
     }
 
-    // When no native preview session is active, JS rAF drives playhead updates.
     let lastTime = performance.now();
     let animationId: number;
     let cancelled = false;
     let lastSyncTime = 0;
-    const SYNC_INTERVAL = 100; // ms — sync ref → Zustand at ~10fps for UI
+    const SYNC_INTERVAL = 100;
 
     const animate = (currentTime: number) => {
       if (cancelled) return;
@@ -278,10 +304,8 @@ export function TimelineCanvas() {
         state.setPlayhead(maxDuration);
         state.pause();
       } else {
-        // Write ref immediately (no Zustand update, zero re-renders)
         state.setPlayheadRefOnly(newPlayhead);
 
-        // Low-freq sync to Zustand for UI updates (time code, playhead line, etc.)
         if (currentTime - lastSyncTime >= SYNC_INTERVAL) {
           state.setPlayhead(newPlayhead);
           lastSyncTime = currentTime;
@@ -344,27 +368,18 @@ export function TimelineCanvas() {
       snapLines: [],
     };
     activeSnapLinesSignatureRef.current = '';
-
-    // Selection is handled by Fragment component's handleMouseDown
   }, [fragments, tracks]);
 
   // Find the nearest valid track for the fragment type
-  // Returns Store array index for the fragment type
-  //
-  // Layout:
-  // - Video tracks: rendered top to bottom in descending order (highest order at top)
-  // - TrackDivider: separator between video and audio
-  // - Audio tracks: rendered top to bottom in ascending order (lowest order at top, near divider)
   const findNearestValidTrack = useCallback((clientY: number, trackType: 'video' | 'audio') => {
     const containerRect = scrollContainerRef.current?.getBoundingClientRect();
     if (!containerRect) return -1;
 
     const contentY = clientY - containerRect.top + scroll.y;
-    const relativeY = contentY - TRACKS_AREA_OFFSET;
+    const relativeY = contentY;
 
     if (relativeY < 0) return -1;
 
-    // Calculate boundaries
     const videoAreaHeight = videoTrackCount * TRACK_HEIGHT;
     const dividerTop = videoAreaHeight;
     const dividerBottom = videoAreaHeight + TRACK_DIVIDER_HEIGHT;
@@ -373,7 +388,6 @@ export function TimelineCanvas() {
     let hoveredTrack: { track: typeof tracks[0]; storeIndex: number } | null = null;
 
     if (relativeY < dividerTop) {
-      // Hovering in video tracks area
       const visualIndex = Math.floor(relativeY / TRACK_HEIGHT);
       if (visualIndex >= 0 && visualIndex < videoTrackCount) {
         hoveredTrack = {
@@ -382,7 +396,6 @@ export function TimelineCanvas() {
         };
       }
     } else if (relativeY >= audioAreaStart) {
-      // Hovering in audio tracks area
       const audioRelativeY = relativeY - audioAreaStart;
       const visualIndex = Math.floor(audioRelativeY / TRACK_HEIGHT);
       if (visualIndex >= 0 && visualIndex < audioTrackCount) {
@@ -392,26 +405,21 @@ export function TimelineCanvas() {
         };
       }
     }
-    // Note: hovering on divider (dividerTop <= relativeY < audioAreaStart) returns null
 
-    // If hovering over matching type, use that track
     if (hoveredTrack && hoveredTrack.track.type === trackType) {
       return hoveredTrack.storeIndex;
     }
 
-    // Find the nearest track of the same type
     const sameTypeTracks = tracks
       .map((t, i) => ({ track: t, index: i }))
       .filter(({ track }) => track.type === trackType);
 
     if (sameTypeTracks.length === 0) return -1;
 
-    // If no track is hovered (e.g., on divider or outside), return first of same type
     if (!hoveredTrack) {
       return sameTypeTracks[0].index;
     }
 
-    // Find nearest track of same type by store index distance
     let nearestIndex = sameTypeTracks[0].index;
     let nearestDistance = Math.abs(hoveredTrack.storeIndex - nearestIndex);
 
@@ -575,35 +583,24 @@ export function TimelineCanvas() {
     updateActiveSnapLines([]);
   }, [applyFragmentDragPreview, fragmentDrag, updateActiveSnapLines]);
 
-  // Handle scroll
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    setScroll(e.currentTarget.scrollLeft, e.currentTarget.scrollTop);
-  };
+  // Helper: convert clientX to timeline time from a given scroll container
+  const clientXToTime = useCallback((clientX: number, containerRef: React.RefObject<HTMLDivElement | null>): number => {
+    const el = containerRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const contentX = clientX - rect.left + el.scrollLeft;
+    return pixelToTime(contentX, zoom);
+  }, [zoom]);
 
-  // Handle click to move playhead
+  // Handle click to move playhead (from ruler area)
   const handleTimeRulerClick = (e: React.MouseEvent) => {
-    if (!scrollContainerRef.current) return;
-
-    const rect = scrollContainerRef.current.getBoundingClientRect();
-    // TimeRuler uses natural scroll, so click position is in viewport coordinates.
-    // Need to add scroll.x to convert to content coordinates.
-    const viewportX = e.clientX - rect.left - TRACK_HEADER_WIDTH;
-    const contentX = viewportX + scroll.x;
-    const newTime = (contentX / zoom) * 1000;
+    if (!rulerScrollRef.current) return;
+    const newTime = clientXToTime(e.clientX, rulerScrollRef);
     if (isPlaying) {
       pause();
     }
     setPlayhead(Math.max(0, newTime));
   };
-
-  // Helper: calculate right-click time from clientX
-  const getRightClickTime = useCallback((clientX: number): number => {
-    const rect = scrollContainerRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    const currentScrollX = scrollContainerRef.current?.scrollLeft ?? scroll.x;
-    const contentX = clientX - rect.left - TRACK_HEADER_WIDTH + currentScrollX;
-    return (contentX / zoom) * 1000;
-  }, [zoom, scroll.x]);
 
   // Helper: determine track from Y coordinate
   const getTrackIdAtY = useCallback((clientY: number): string | null => {
@@ -612,7 +609,7 @@ export function TimelineCanvas() {
 
     const currentScrollY = scrollContainerRef.current?.scrollTop ?? scroll.y;
     const contentY = clientY - containerRect.top + currentScrollY;
-    const relativeY = contentY - TRACKS_AREA_OFFSET;
+    const relativeY = contentY;
 
     if (relativeY < 0) return null;
 
@@ -637,7 +634,6 @@ export function TimelineCanvas() {
 
   // Handle right-click context menu
   const handleContextMenu = (e: React.MouseEvent) => {
-    // Always suppress browser default
     e.preventDefault();
 
     const target = e.target as HTMLElement;
@@ -647,12 +643,11 @@ export function TimelineCanvas() {
     if (fragmentEl) {
       const fragmentId = fragmentEl.getAttribute('data-fragment-id');
       if (fragmentId) {
-        // Select the fragment if not already selected (right-click doesn't trigger mousedown)
         const selState = useSelectionStore.getState();
         if (!(selState.primaryType === 'fragment' && selState.primaryIds.includes(fragmentId))) {
           selectFragment(fragmentId);
         }
-        const rightClickTime = getRightClickTime(e.clientX);
+        const rightClickTime = clientXToTime(e.clientX, scrollContainerRef);
         setContextMenu({ type: 'fragment', x: e.clientX, y: e.clientY, fragmentId, rightClickTime });
         return;
       }
@@ -663,11 +658,8 @@ export function TimelineCanvas() {
     if (sceneEl) {
       const sceneId = sceneEl.getAttribute('data-scene');
       if (sceneId) {
-        const selState = useSelectionStore.getState();
-        if (!(selState.primaryType === 'scene' && selState.primaryIds.includes(sceneId))) {
-          selectScene(sceneId);
-        }
-        const rightClickTime = getRightClickTime(e.clientX);
+        handleSceneSelect(sceneId);
+        const rightClickTime = clientXToTime(e.clientX, scrollContainerRef);
         setContextMenu({ type: 'scene', x: e.clientX, y: e.clientY, rightClickTime, sceneId });
         return;
       }
@@ -676,7 +668,7 @@ export function TimelineCanvas() {
     // 3. Check if right-clicked in a track area (not on header)
     const trackId = getTrackIdAtY(e.clientY);
     if (trackId) {
-      const rightClickTime = getRightClickTime(e.clientX);
+      const rightClickTime = clientXToTime(e.clientX, scrollContainerRef);
       setContextMenu({ type: 'trackArea', x: e.clientX, y: e.clientY, rightClickTime, trackId });
       return;
     }
@@ -685,9 +677,51 @@ export function TimelineCanvas() {
     setContextMenu(null);
   };
 
+  // Select scene if not already the primary selection
+  const handleSceneSelect = useCallback((sceneId: string) => {
+    const selState = useSelectionStore.getState();
+    if (!(selState.primaryType === 'scene' && selState.primaryIds.includes(sceneId))) {
+      selectScene(sceneId);
+    }
+  }, [selectScene]);
+
+  // Separate handler because the ruler is in its own scroll container;
+  // clientXToTime must use rulerScrollRef, not the main content container.
+  const handleRulerContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+
+    const target = e.target as HTMLElement;
+    const sceneEl = target.closest('[data-scene]');
+    if (sceneEl) {
+      const sceneId = sceneEl.getAttribute('data-scene');
+      if (sceneId) {
+        handleSceneSelect(sceneId);
+        const rightClickTime = clientXToTime(e.clientX, rulerScrollRef);
+        setContextMenu({ type: 'scene', x: e.clientX, y: e.clientY, rightClickTime, sceneId });
+        return;
+      }
+    }
+
+    setContextMenu(null);
+  };
+
+  // Handle right-click in headers area (for track header context menus)
+  const handleHeadersContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    const trackHeaderEl = target.closest('[data-track-id]');
+    if (trackHeaderEl) {
+      const trackId = trackHeaderEl.getAttribute('data-track-id');
+      if (trackId) {
+        setContextMenu({ type: 'track', x: e.clientX, y: e.clientY, trackId });
+        return;
+      }
+    }
+    setContextMenu(null);
+  }, []);
+
   // Handle mouse down for selection box
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Close context menu on any left-click
     setContextMenu(null);
 
     const isTimeRulerMouseDown =
@@ -702,7 +736,6 @@ export function TimelineCanvas() {
     }
 
     if (draftFragment) {
-      // If user has typed a prompt, auto-create the fragment before clearing
       if (draftPrompt.trim()) {
         confirmDraftFragment(draftPrompt.trim());
       } else {
@@ -712,19 +745,15 @@ export function TimelineCanvas() {
     }
 
     if (toolMode !== 'select') return;
-    if (fragmentDrag) return; // Don't start selection box during fragment drag
+    if (fragmentDrag) return;
 
     const rect = scrollContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // IMPORTANT: Get scroll position directly from DOM, not from React state.
-    // React batches state updates, so scroll.x might be stale when this handler runs
-    // immediately after a scroll event (e.g., user scrolls then clicks without releasing mouse).
-    // Using DOM scrollLeft/scrollTop ensures we always have the current scroll position.
     const currentScrollX = scrollContainerRef.current?.scrollLeft ?? scroll.x;
     const currentScrollY = scrollContainerRef.current?.scrollTop ?? scroll.y;
 
-    const x = e.clientX - rect.left - TRACK_HEADER_WIDTH + currentScrollX;
+    const x = e.clientX - rect.left + currentScrollX;
     const y = e.clientY - rect.top + currentScrollY;
 
     setIsDragging(true);
@@ -739,12 +768,10 @@ export function TimelineCanvas() {
     const rect = scrollContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    // IMPORTANT: Get scroll position directly from DOM, not from React state.
-    // Same reason as handleMouseDown - ensures current scroll position.
     const currentScrollX = scrollContainerRef.current?.scrollLeft ?? scroll.x;
     const currentScrollY = scrollContainerRef.current?.scrollTop ?? scroll.y;
 
-    const x = e.clientX - rect.left - TRACK_HEADER_WIDTH + currentScrollX;
+    const x = e.clientX - rect.left + currentScrollX;
     const y = e.clientY - rect.top + currentScrollY;
 
     updateSelectionBox(x, y);
@@ -752,7 +779,6 @@ export function TimelineCanvas() {
 
   // Handle mouse up for selection box
   const handleMouseUp = (e: React.MouseEvent) => {
-    // Helper function to set paste indicator from click position
     const trySetPasteIndicator = () => {
     if (!clipboard || clipboard.fragments.length === 0) return;
 
@@ -762,42 +788,35 @@ export function TimelineCanvas() {
     const currentScrollX = scrollContainerRef.current?.scrollLeft ?? scroll.x;
     const currentScrollY = scrollContainerRef.current?.scrollTop ?? scroll.y;
 
-    const x = e.clientX - rect.left - TRACK_HEADER_WIDTH + currentScrollX;
+    const x = e.clientX - rect.left + currentScrollX;
     const y = e.clientY - rect.top + currentScrollY;
 
-    // Calculate click time
     const clickTime = (x / zoom) * 1000;
 
-    // Determine track from Y position using grouped layout
-    const relativeY = y - TRACKS_AREA_OFFSET;
+    const relativeY = y;
 
     if (relativeY < 0) return;
 
-    // Calculate boundaries for grouped layout
     const videoAreaHeight = videoTrackCount * TRACK_HEIGHT;
     const audioAreaStart = videoAreaHeight + TRACK_DIVIDER_HEIGHT;
 
     let clickedTrackId: string | null = null;
 
     if (relativeY < videoAreaHeight) {
-      // Clicked in video tracks area
       const visualIndex = Math.floor(relativeY / TRACK_HEIGHT);
       if (visualIndex >= 0 && visualIndex < videoTrackCount) {
         clickedTrackId = videoTracks[visualIndex].id;
       }
     } else if (relativeY >= audioAreaStart) {
-      // Clicked in audio tracks area
       const audioRelativeY = relativeY - audioAreaStart;
       const visualIndex = Math.floor(audioRelativeY / TRACK_HEIGHT);
       if (visualIndex >= 0 && visualIndex < audioTrackCount) {
         clickedTrackId = audioTracks[visualIndex].id;
       }
     }
-    // Note: clicking on divider does nothing
 
     if (!clickedTrackId) return;
 
-    // Check if click is on an existing fragment
     const clickedOnFragment = fragments.some(f => {
       if (f.trackId !== clickedTrackId) return false;
       const fragStart = (f.start / 1000) * zoom;
@@ -805,13 +824,11 @@ export function TimelineCanvas() {
       return x >= fragStart && x <= fragEnd;
     });
 
-    // Allow setting paste indicator if not clicking on an existing fragment
     if (!clickedOnFragment) {
       setPasteIndicator({ time: clickTime, trackId: clickedTrackId });
     }
   };
 
-    // Handle selection box confirmation if dragging occurred with sufficient width
     let selectionConfirmed = false;
     if (isDragging && selectionBox) {
       const minX = Math.min(selectionBox.startX, selectionBox.endX);
@@ -822,23 +839,14 @@ export function TimelineCanvas() {
         confirmSelectionBox();
         selectionConfirmed = true;
       } else {
-        // Small drag - try to set paste indicator
         trySetPasteIndicator();
       }
     } else {
-      // No selection box - just a click, try to set paste indicator
       trySetPasteIndicator();
     }
 
-    // Only clear selections if we didn't just confirm a selection box
-    // AND the click wasn't on a fragment (fragments handle their own selection)
-    // Check if the Event target is a fragment element
     const target = e.target as HTMLElement;
     const clickedOnFragment = target.closest('[data-fragment-id]');
-
-    // Don't clear selection if we're in the middle of a fragment drag
-    // (Fragment is temporarily removed from DOM during drag, so clickedOnFragment will be false)
-    // The global mouseup handler for fragment drag will handle the final selection
     const isFragmentDragInProgress = fragmentDrag !== null;
 
     if (!selectionConfirmed && !clickedOnFragment && !isFragmentDragInProgress) {
@@ -853,27 +861,22 @@ export function TimelineCanvas() {
     initializeDefaults();
   }, [initializeDefaults]);
 
-  // Calculate timeline width based on actual content duration and zoom
-  // Add buffer for editing space, but cap at MAX_TIMELINE_DURATION
-  // Use at least 2 minutes of visible content for usability
-  const minVisibleDuration = 120000; // 2 minutes minimum visible duration
-  const bufferDuration = Math.max(60000, duration * 0.2); // 20% buffer or 1 minute minimum
+  // Calculate timeline dimensions
+  const minVisibleDuration = 120000;
+  const bufferDuration = Math.max(60000, duration * 0.2);
   const contentDuration = Math.max(duration + bufferDuration, minVisibleDuration);
   const timelineDuration = Math.min(contentDuration, MAX_TIMELINE_DURATION);
   const timelineWidth = Math.max(timelineDuration * zoom / 1000 + 200, 2000);
   const playheadX = (playhead / 1000) * zoom;
 
-  // Calculate content height for playhead (time ruler + scene track + video tracks + divider + audio tracks)
-  const contentHeight = TRACKS_AREA_OFFSET + (videoTrackCount + audioTrackCount) * TRACK_HEIGHT + TRACK_DIVIDER_HEIGHT;
+  // Track content height (no ruler/scene offset needed in content area)
+  const trackContentHeight = (videoTrackCount + audioTrackCount) * TRACK_HEIGHT + TRACK_DIVIDER_HEIGHT;
 
-  // Handle mouse leave - only cancel active selection box drag, don't clear existing selections
   const handleMouseLeave = () => {
-    // Only cancel selection box if we're in the middle of dragging one
     if (isDragging && selectionBox) {
       cancelSelectionBox();
       setIsDragging(false);
     }
-    // Don't clear existing fragment/scene selections when mouse leaves
   };
 
   return (
@@ -881,150 +884,201 @@ export function TimelineCanvas() {
       <Toolbar />
 
       <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-auto bg-zinc-950 relative"
+        className="flex-1 relative min-h-0"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `${TRACK_HEADER_WIDTH}px 1fr`,
+          gridTemplateRows: `${TRACKS_AREA_OFFSET}px 1fr`,
+        }}
         data-testid="timeline-canvas"
-        onScroll={handleScroll}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onMouseDown={handleMouseDown}
-        onContextMenu={handleContextMenu}
       >
-        {/* Playhead - positioned in content coordinates, natural scroll */}
-        <Playhead x={playheadX} contentHeight={contentHeight} />
+        {/* Top-left: Corner Block (fixed) */}
+        <div className="bg-zinc-900 border-r border-b border-zinc-800 z-20 flex items-center justify-center min-w-0 min-h-0">
+          <Layers size={14} className="text-cyan-400" />
+        </div>
 
-        {/* Time Ruler */}
-        <TimeRuler
-          width={timelineWidth}
-          zoom={zoom}
-          scrollX={scroll.x}
-          viewportWidth={viewportWidth}
-          onClick={handleTimeRulerClick}
-        />
-
-        {/* Scene Track */}
-        <SceneTrack
-          width={timelineWidth}
-          zoom={zoom}
-          scrollX={scroll.x}
-          viewportWidth={viewportWidth}
-        />
-
-        {/* Tracks Container - scrolls naturally with the scroll container */}
-        {/* Jianying-style layout:
-            - Video tracks: order increases upward (highest order at top)
-            - TrackDivider: visual separator
-            - Audio tracks: order increases downward (lowest order at top, near divider)
-        */}
+        {/* Top-right: Ruler scroll area (horizontal only) */}
         <div
-          ref={containerRef}
-          className="relative"
-          style={{ width: timelineWidth + viewportWidth }}
-          data-testid="tracks-container"
+          ref={rulerScrollRef}
+          className="overflow-x-auto overflow-y-hidden border-b border-zinc-800 min-w-0 min-h-0"
+          style={{ scrollbarWidth: 'none' }}
+          onContextMenu={handleRulerContextMenu}
         >
-          {/* Video Tracks - sorted descending by order (highest at top) */}
-          {videoTracks.map((track) => (
-            <Track
-              key={track.id}
-              track={track}
-              fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
-              zoom={zoom}
+          <div style={{ width: timelineWidth + viewportWidth, position: 'relative' }}>
+            <PlayheadHandle x={playheadX} />
+            <TimeRuler
               width={timelineWidth}
+              zoom={zoom}
               scrollX={scroll.x}
               viewportWidth={viewportWidth}
-              onFragmentDragStart={handleFragmentDragStart}
-              onTrackContextMenu={(e) => handleTrackContextMenu(e, track.id)}
+              onClick={handleTimeRulerClick}
+            />
+            <SceneTrack
+              width={timelineWidth}
+              zoom={zoom}
+              scrollX={scroll.x}
+              viewportWidth={viewportWidth}
+            />
+
+            {/* Scene paste indicator (in ruler area) */}
+            {pasteIndicator && pasteIndicator.trackId === undefined && (
+              <PasteIndicator
+                x={(pasteIndicator.time / 1000) * zoom}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Bottom-left: Headers scroll area (vertical only) */}
+        <div
+          ref={headersScrollRef}
+          className="overflow-y-auto overflow-x-hidden bg-zinc-900 border-r border-zinc-800 min-w-0 min-h-0"
+          style={{ scrollbarWidth: 'none' }}
+          onContextMenu={handleHeadersContextMenu}
+        >
+          {/* Video track headers */}
+          {videoTracks.map((track) => (
+            <TrackHeader
+              key={track.id}
+              track={track}
+              onContextMenu={(e) => handleTrackContextMenu(e, track.id)}
             />
           ))}
-
-          {/* Track Divider - separator between video and audio */}
+          {/* Divider header spacer */}
           {(videoTrackCount > 0 || audioTrackCount > 0) && (
-            <TrackDivider width={timelineWidth} viewportWidth={viewportWidth} />
+            <div className="border-b border-zinc-800" style={{ height: TRACK_DIVIDER_HEIGHT }} />
           )}
-
-          {/* Audio Tracks - sorted ascending by order (lowest at top, near divider) */}
+          {/* Audio track headers */}
           {audioTracks.map((track) => (
-            <Track
+            <TrackHeader
               key={track.id}
               track={track}
-              fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
-              zoom={zoom}
-              width={timelineWidth}
-              scrollX={scroll.x}
-              viewportWidth={viewportWidth}
-              onFragmentDragStart={handleFragmentDragStart}
-              onTrackContextMenu={(e) => handleTrackContextMenu(e, track.id)}
+              onContextMenu={(e) => handleTrackContextMenu(e, track.id)}
             />
           ))}
         </div>
 
-        {/* Drag Ghosts - render in content coordinates */}
-        {fragmentDrag && fragmentDrag.items.map((item) => (
+        {/* Bottom-right: Main content scroll area */}
+        <div
+          ref={scrollContainerRef}
+          className="overflow-auto bg-zinc-950 relative min-w-0 min-h-0"
+          onScroll={handleContentScroll}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+          onMouseDown={handleMouseDown}
+          onContextMenu={handleContextMenu}
+        >
           <div
-            key={item.fragmentId}
-            ref={(element) => {
-              if (element) {
-                ghostElementRefs.current.set(item.fragmentId, element);
-              } else {
-                ghostElementRefs.current.delete(item.fragmentId);
-              }
-            }}
-            className={clsx(
-              'absolute rounded border z-50 pointer-events-none',
-              item.trackType === 'audio'
-                ? 'border-blue-400 bg-blue-900/50'
-                : 'border-amber-400 bg-amber-900/50',
-            )}
-            style={{
-              left: (item.start / 1000) * zoom + TRACK_HEADER_WIDTH,
-              width: Math.max((item.duration / 1000) * zoom, 20),
-              top: TRACKS_AREA_OFFSET + getTrackVisualY(item.trackId) + 2,
-              height: TRACK_HEIGHT - 4,
-            }}
+            ref={containerRef}
+            className="relative"
+            style={{ width: timelineWidth + viewportWidth, minHeight: trackContentHeight }}
+            data-testid="tracks-container"
           >
-            <div className="absolute inset-x-0 top-0 p-1 overflow-hidden pointer-events-none">
-              <p className="text-xs text-white truncate">
-                {item.prompt || 'Empty fragment'}
-              </p>
-            </div>
+            {/* Video Tracks */}
+            {videoTracks.map((track) => (
+              <Track
+                key={track.id}
+                track={track}
+                fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
+                zoom={zoom}
+                width={timelineWidth}
+                scrollX={scroll.x}
+                viewportWidth={viewportWidth}
+                onFragmentDragStart={handleFragmentDragStart}
+              />
+            ))}
+
+            {/* Track Divider */}
+            {(videoTrackCount > 0 || audioTrackCount > 0) && (
+              <TrackDivider width={timelineWidth} viewportWidth={viewportWidth} />
+            )}
+
+            {/* Audio Tracks */}
+            {audioTracks.map((track) => (
+              <Track
+                key={track.id}
+                track={track}
+                fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
+                zoom={zoom}
+                width={timelineWidth}
+                scrollX={scroll.x}
+                viewportWidth={viewportWidth}
+                onFragmentDragStart={handleFragmentDragStart}
+              />
+            ))}
+
+            {/* Playhead line in content area */}
+            <PlayheadLine x={playheadX} contentHeight={trackContentHeight} />
+
+            {/* Drag Ghosts */}
+            {fragmentDrag && fragmentDrag.items.map((item) => (
+              <div
+                key={item.fragmentId}
+                ref={(element) => {
+                  if (element) {
+                    ghostElementRefs.current.set(item.fragmentId, element);
+                  } else {
+                    ghostElementRefs.current.delete(item.fragmentId);
+                  }
+                }}
+                className={clsx(
+                  'absolute rounded border z-50 pointer-events-none',
+                  item.trackType === 'audio'
+                    ? 'border-blue-400 bg-blue-900/50'
+                    : 'border-amber-400 bg-amber-900/50',
+                )}
+                style={{
+                  left: (item.start / 1000) * zoom,
+                  width: Math.max((item.duration / 1000) * zoom, 20),
+                  top: getTrackVisualY(item.trackId) + 2,
+                  height: TRACK_HEIGHT - 4,
+                }}
+              >
+                <div className="absolute inset-x-0 top-0 p-1 overflow-hidden pointer-events-none">
+                  <p className="text-xs text-white truncate">
+                    {item.prompt || 'Empty fragment'}
+                  </p>
+                </div>
+              </div>
+            ))}
+
+            {/* Draft Fragment */}
+            {draftFragment && (
+              <DraftFragment
+                draft={draftFragment}
+                zoom={zoom}
+                scrollX={scroll.x}
+                scrollY={scroll.y}
+                visualY={getTrackVisualY(draftFragment.trackId)}
+              />
+            )}
+
+            {/* Paste Indicator (track only) */}
+            {pasteIndicator && pasteIndicator.trackId !== undefined && (
+              <PasteIndicator
+                x={(pasteIndicator.time / 1000) * zoom}
+                visualY={getTrackVisualY(pasteIndicator.trackId)}
+              />
+            )}
+
+            {/* Selection Box */}
+            {selectionBox && (
+              <div
+                className="absolute pointer-events-none border border-blue-500 border-dashed bg-blue-500/10 z-20"
+                style={{
+                  left: Math.min(selectionBox.startX, selectionBox.endX),
+                  top: Math.min(selectionBox.startY, selectionBox.endY),
+                  width: Math.abs(selectionBox.endX - selectionBox.startX),
+                  height: Math.abs(selectionBox.endY - selectionBox.startY),
+                }}
+              />
+            )}
+
+            {/* Snap Lines */}
+            <SnapLines snapLines={activeSnapLines} zoom={zoom} />
           </div>
-        ))}
-
-        {/* Draft Fragment */}
-        {draftFragment && (
-          <DraftFragment
-            draft={draftFragment}
-            zoom={zoom}
-            scrollX={scroll.x}
-            scrollY={scroll.y}
-            visualY={getTrackVisualY(draftFragment.trackId)}
-          />
-        )}
-
-        {/* Paste Indicator */}
-        {pasteIndicator && (
-          <PasteIndicator
-            x={(pasteIndicator.time / 1000) * zoom}
-            visualY={pasteIndicator.trackId !== undefined ? getTrackVisualY(pasteIndicator.trackId) : undefined}
-          />
-        )}
-
-        {/* Selection Box - render in content coordinates */}
-        {selectionBox && (
-          <div
-            className="absolute pointer-events-none border border-blue-500 border-dashed bg-blue-500/10 z-20"
-            style={{
-              left: TRACK_HEADER_WIDTH + Math.min(selectionBox.startX, selectionBox.endX),
-              top: Math.min(selectionBox.startY, selectionBox.endY),
-              width: Math.abs(selectionBox.endX - selectionBox.startX),
-              height: Math.abs(selectionBox.endY - selectionBox.startY),
-            }}
-          />
-        )}
-
-        {/* Snap Lines - render for visual feedback during drag/resize */}
-        <SnapLines snapLines={activeSnapLines} zoom={zoom} />
+        </div>
       </div>
 
       {/* Context Menus */}
