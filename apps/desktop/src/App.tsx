@@ -265,7 +265,7 @@ function App() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-950 text-white">
+    <div className="h-screen flex flex-col bg-zinc-950 text-white" onContextMenu={(e) => e.preventDefault()}>
       {/* TitleBar - Combined title bar with project name and controls */}
       <TitleBar
         projectName={projectName}
