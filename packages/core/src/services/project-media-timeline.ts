@@ -19,6 +19,7 @@ export interface ProjectMediaTimelineClip {
   startMs: number;
   durationMs: number;
   trimStartMs?: number;
+  muted?: boolean;
   crop?: {
     x: number;
     y: number;
@@ -99,6 +100,7 @@ export function buildProjectMediaTimeline(
       startMs: fragment.start,
       durationMs: fragment.duration,
       trimStartMs: fragment.trimStart ?? undefined,
+      muted: fragment.muted ?? false,
       crop: resolveFragmentCrop(fragment, assetId),
     };
 
@@ -178,7 +180,8 @@ function buildLinkedVideoSourceAudioTimeline(
     .filter((track) => track.type === 'video')
     .filter((track) =>
       fragments.some((fragment) =>
-        fragment.track.id === track.id && assetHasEmbeddedTimelineAudio(fragment.asset),
+        fragment.track.id === track.id && assetHasEmbeddedTimelineAudio(fragment.asset)
+          && !fragment.fragment.muted,
       ),
     );
 
@@ -203,7 +206,8 @@ function buildLinkedVideoSourceAudioTimeline(
   });
 
   const linkedFragments = fragments.filter((fragment) =>
-    fragment.track.type === 'video' && assetHasEmbeddedTimelineAudio(fragment.asset),
+    fragment.track.type === 'video' && assetHasEmbeddedTimelineAudio(fragment.asset)
+      && !fragment.fragment.muted,
   );
   const clips = linkedFragments.map((fragment) => ({
     id: `${LINKED_AUDIO_CLIP_PREFIX}${fragment.fragment.id}`,

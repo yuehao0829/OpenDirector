@@ -377,8 +377,7 @@ fn build_clip_plan(
     layer: usize,
 ) -> MediaResult<GesPreviewClipPlan> {
     let input_path = canonicalize_media_path(&fragment.absolute_path)?;
-    let visible =
-        !(track.track_type == TimelineTrackType::Video && (track.muted || fragment.muted));
+    let visible = !(track.track_type == TimelineTrackType::Video && track.muted);
     let volume = if track.track_type == TimelineTrackType::Audio {
         if track.muted || fragment.muted {
             0.0
@@ -386,7 +385,7 @@ fn build_clip_plan(
             fragment.volume.unwrap_or(1.0)
         }
     } else {
-        1.0
+        fragment.volume.unwrap_or(1.0)
     };
     let modifier_plan = resolve_clip_modifier_plan(
         fragment.id.clone(),

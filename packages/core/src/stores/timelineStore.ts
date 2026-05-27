@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { Track, Fragment, TimelineState, ToolMode, DraftFragment, Scene, Reference, PasteIndicator, SnapLine, GenerationParamDefaults } from '../types';
+import { generateId } from '../utils/id';
 
 export type NativePreviewStepFrameDirection = 1 | -1;
 type NativePreviewStepFrameHandler = (direction: NativePreviewStepFrameDirection) => boolean;
@@ -11,7 +12,8 @@ let nativePreviewStepFrameHandler: NativePreviewStepFrameHandler | null = null;
 // Zustand `playhead` is synced at low frequency (~10fps) for UI display only.
 let _playheadRef = 0;
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, ZOOM_SLIDER_STEPS } from '../constants/timeline';
-import { calculateTimelineDuration, safeMax, timeToPixel } from '../utils/timeline';
+import { calculateTimelineDuration, safeMax, timeToPixel, canPlaceFragment, areFragmentsContiguous, cleanupLinkedAudioOnDelete, unlinkVideoFragment, findLinkedVideoFragment, buildLinkedVideoIndex } from '../utils/timeline';
+import { useAssetStore } from './assetStore';
 
 const LOG_ZOOM_MIN = Math.log(ZOOM_MIN);
 const LOG_ZOOM_MAX = Math.log(ZOOM_MAX);
@@ -86,6 +88,7 @@ interface TimelineActions {
   splitFragment: (id: string, splitTime: number) => void;
   mergeFragments: (ids: string[]) => void;
   createFragment: (trackId: string, startTime: number, duration?: number) => void;
+  separateAudio: (fragmentId: string) => void;
 
   // Playback
   setPlayhead: (time: number) => void;
@@ -460,7 +463,13 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       }
 
       set((state) => {
-        const newFragments = state.fragments.filter((f) => f.id !== id);
+        const fragmentById = new Map(state.fragments.map(f => [f.id, f]));
+        const newFragments = cleanupLinkedAudioOnDelete(
+          state.fragments.filter((f) => f.id !== id),
+          new Set([id]),
+          fragmentById,
+        );
+
         const newDuration = calculateTimelineDuration(newFragments, state.scenes);
 
         return {
@@ -478,7 +487,13 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
 
       const idSet = new Set(ids);
       set((state) => {
-        const newFragments = state.fragments.filter(f => !idSet.has(f.id));
+        const fragmentById = new Map(state.fragments.map(f => [f.id, f]));
+        const newFragments = cleanupLinkedAudioOnDelete(
+          state.fragments.filter(f => !idSet.has(f.id)),
+          idSet,
+          fragmentById,
+        );
+
         const newDuration = calculateTimelineDuration(newFragments, state.scenes);
 
         return {
@@ -492,12 +507,23 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       const fragment = state.fragments.find((f) => f.id === id);
       if (!fragment) return state;
 
-      // Calculate duration based on all fragments after move
-      const newFragments = state.fragments.map((f) =>
-        f.id === id ? { ...f, start: Math.max(0, newStart) } : f
-      );
-      const newDuration = calculateTimelineDuration(newFragments, state.scenes);
+      const clampedStart = Math.max(0, newStart);
+      const delta = clampedStart - fragment.start;
 
+      const linkedVideo = findLinkedVideoFragment(state.fragments, id);
+
+      const newFragments = state.fragments.map((f) => {
+        if (f.id === id) return { ...f, start: clampedStart };
+        if (fragment.linkedAudioFragmentId && f.id === fragment.linkedAudioFragmentId) {
+          return { ...f, start: f.start + delta };
+        }
+        if (linkedVideo && f.id === linkedVideo.id) {
+          return unlinkVideoFragment(f);
+        }
+        return f;
+      });
+
+      const newDuration = calculateTimelineDuration(newFragments, state.scenes);
       return {
         fragments: newFragments,
         scenes: expandLastSceneIfNeeded(state.scenes, newDuration),
@@ -509,22 +535,31 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       const fragment = state.fragments.find((f) => f.id === id);
       if (!fragment) return state;
 
-      // Verify target track exists and has matching type
       const targetTrack = state.tracks.find((t) => t.id === newTrackId);
       if (!targetTrack) return state;
 
       const sourceTrack = state.tracks.find((t) => t.id === fragment.trackId);
       if (!sourceTrack) return state;
 
-      // Only allow moving between tracks of the same type
       if (sourceTrack.type !== targetTrack.type) return state;
 
-      // Calculate duration based on all fragments after move
-      const newFragments = state.fragments.map((f) =>
-        f.id === id ? { ...f, start: Math.max(0, newStart), trackId: newTrackId } : f
-      );
-      const newDuration = calculateTimelineDuration(newFragments, state.scenes);
+      const clampedStart = Math.max(0, newStart);
+      const delta = clampedStart - fragment.start;
 
+      const linkedVideo = findLinkedVideoFragment(state.fragments, id);
+
+      const newFragments = state.fragments.map((f) => {
+        if (f.id === id) return { ...f, start: clampedStart, trackId: newTrackId };
+        if (fragment.linkedAudioFragmentId && f.id === fragment.linkedAudioFragmentId) {
+          return { ...f, start: f.start + delta };
+        }
+        if (linkedVideo && f.id === linkedVideo.id) {
+          return unlinkVideoFragment(f);
+        }
+        return f;
+      });
+
+      const newDuration = calculateTimelineDuration(newFragments, state.scenes);
       return {
         fragments: newFragments,
         scenes: expandLastSceneIfNeeded(state.scenes, newDuration),
@@ -536,24 +571,59 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       if (updates.length === 0) return state;
 
       const updatesById = new Map(updates.map((update) => [update.id, update]));
-      const newFragments = state.fragments.map((fragment) => {
-        const update = updatesById.get(fragment.id);
-        if (!update) return fragment;
+      const fragmentById = new Map(state.fragments.map((f) => [f.id, f]));
+      const linkedDeltaById = new Map<string, number>();
+      const unlinkVideoIds = new Set<string>();
+      const linkedVideoIndex = buildLinkedVideoIndex(state.fragments);
 
-        let nextTrackId = fragment.trackId;
-        if (update.newTrackId && update.newTrackId !== fragment.trackId) {
-          const sourceTrack = state.tracks.find((track) => track.id === fragment.trackId);
-          const targetTrack = state.tracks.find((track) => track.id === update.newTrackId);
-          if (sourceTrack && targetTrack && sourceTrack.type === targetTrack.type) {
-            nextTrackId = update.newTrackId;
-          }
+      for (const update of updates) {
+        const fragment = fragmentById.get(update.id);
+        if (!fragment) continue;
+
+        const delta = Math.max(0, update.newStart) - fragment.start;
+        linkedDeltaById.set(update.id, delta);
+
+        if (fragment.linkedAudioFragmentId && !updatesById.has(fragment.linkedAudioFragmentId)) {
+          linkedDeltaById.set(fragment.linkedAudioFragmentId, delta);
         }
 
-        return {
-          ...fragment,
-          start: Math.max(0, update.newStart),
-          trackId: nextTrackId,
-        };
+        const linkedVideoIds = linkedVideoIndex.get(fragment.id);
+        if (linkedVideoIds) {
+          for (const vid of linkedVideoIds) {
+            if (!updatesById.has(vid)) unlinkVideoIds.add(vid);
+          }
+        }
+      }
+
+      const newFragments = state.fragments.map((fragment) => {
+        if (unlinkVideoIds.has(fragment.id)) {
+          return unlinkVideoFragment(fragment);
+        }
+
+        const update = updatesById.get(fragment.id);
+        if (update) {
+          let nextTrackId = fragment.trackId;
+          if (update.newTrackId && update.newTrackId !== fragment.trackId) {
+            const sourceTrack = state.tracks.find((track) => track.id === fragment.trackId);
+            const targetTrack = state.tracks.find((track) => track.id === update.newTrackId);
+            if (sourceTrack && targetTrack && sourceTrack.type === targetTrack.type) {
+              nextTrackId = update.newTrackId;
+            }
+          }
+
+          return {
+            ...fragment,
+            start: Math.max(0, update.newStart),
+            trackId: nextTrackId,
+          };
+        }
+
+        const delta = linkedDeltaById.get(fragment.id);
+        if (delta !== undefined && delta !== 0) {
+          return { ...fragment, start: Math.max(0, fragment.start + delta) };
+        }
+
+        return fragment;
       });
 
       const newDuration = calculateTimelineDuration(newFragments, state.scenes);
@@ -625,9 +695,10 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
         updatedAt: new Date(),
       };
 
+      const secondId = `${fragment.id}-split-${Date.now()}`;
       const secondFragment: Fragment = {
         ...fragment,
-        id: `${fragment.id}-split-${Date.now()}`,
+        id: secondId,
         start: splitTime,
         duration: fragment.duration - relativeTime,
         trimStart: hasPlaybackSource ? (fragment.trimStart ?? 0) + relativeTime : undefined,
@@ -635,36 +706,66 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
         updatedAt: new Date(),
       };
 
-      return {
-        fragments: [
-          ...state.fragments.filter((f) => f.id !== id),
-          firstFragment,
-          secondFragment,
-        ],
-      };
+      let newFragments = [
+        ...state.fragments.filter((f) => f.id !== id),
+        firstFragment,
+        secondFragment,
+      ];
+
+      if (fragment.muted && fragment.linkedAudioFragmentId) {
+        const linkedAudio = newFragments.find((f) => f.id === fragment.linkedAudioFragmentId);
+        if (linkedAudio) {
+          const audioRelativeTime = splitTime - linkedAudio.start;
+          if (audioRelativeTime > 0 && audioRelativeTime < linkedAudio.duration) {
+            const firstAudio: Fragment = {
+              ...linkedAudio,
+              duration: audioRelativeTime,
+              updatedAt: new Date(),
+            };
+            const secondAudioId = `${linkedAudio.id}-split-${Date.now()}`;
+            const secondAudio: Fragment = {
+              ...linkedAudio,
+              id: secondAudioId,
+              start: splitTime,
+              duration: linkedAudio.duration - audioRelativeTime,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+            newFragments = newFragments
+              .filter((f) => f.id !== linkedAudio.id)
+              .concat(firstAudio, secondAudio);
+            newFragments = newFragments.map((f) => {
+              if (f.id === firstFragment.id) return { ...f, linkedAudioFragmentId: firstAudio.id };
+              if (f.id === secondId) return { ...f, linkedAudioFragmentId: secondAudioId };
+              return f;
+            });
+          }
+        }
+      }
+
+      return { fragments: newFragments };
     }),
 
     mergeFragments: (ids) => set((state) => {
       if (ids.length < 2) return state;
 
+      const idSet = new Set(ids);
       const fragmentsToMerge = state.fragments
-        .filter((f) => ids.includes(f.id))
+        .filter((f) => idSet.has(f.id))
         .sort((a, b) => a.start - b.start);
 
       if (fragmentsToMerge.length !== ids.length) return state;
 
-      // Check if fragments are adjacent or overlapping (no gaps)
-      for (let i = 1; i < fragmentsToMerge.length; i++) {
-        const prevEnd = fragmentsToMerge[i - 1].start + fragmentsToMerge[i - 1].duration;
-        if (prevEnd < fragmentsToMerge[i].start) {
-          return state; // Gap between fragments
-        }
-      }
+      if (!areFragmentsContiguous(fragmentsToMerge)) return state;
 
       const startTime = fragmentsToMerge[0].start;
       const endTime = safeMax(fragmentsToMerge.map((f) => f.start + f.duration));
 
-      const mergedFragment: Fragment = {
+      const linkedAudioIds = fragmentsToMerge
+        .map((f) => f.linkedAudioFragmentId)
+        .filter((id): id is string => !!id);
+
+      const mergedVideo: Fragment = {
         id: fragmentsToMerge[0].id,
         trackId: fragmentsToMerge[0].trackId,
         start: startTime,
@@ -675,15 +776,42 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
         trimStart: fragmentsToMerge[0].trimStart,
         status: 'draft',
         sceneId: fragmentsToMerge[0].sceneId,
+        muted: fragmentsToMerge[0].muted,
+        linkedAudioFragmentId: fragmentsToMerge[0].linkedAudioFragmentId,
         genParams: fragmentsToMerge[0].genParams,
         createdAt: fragmentsToMerge[0].createdAt,
         updatedAt: new Date(),
       };
 
+      // Also merge linked audio fragments if all video fragments are muted and contiguous
+      let audioFragmentsToRemove: Set<string> | null = null;
+      if (linkedAudioIds.length > 0 && fragmentsToMerge.every((f) => f.muted)) {
+        const linkedAudios = state.fragments.filter((f) => idSet.has(f.id) ? false : linkedAudioIds.includes(f.id));
+        if (linkedAudios.length === linkedAudioIds.length && areFragmentsContiguous(linkedAudios)) {
+          audioFragmentsToRemove = new Set(linkedAudioIds);
+          const sortedAudios = [...linkedAudios].sort((a, b) => a.start - b.start);
+          const audioEndTime = safeMax(sortedAudios.map((f) => f.start + f.duration));
+          const mergedAudio: Fragment = {
+            ...sortedAudios[0],
+            duration: audioEndTime - sortedAudios[0].start,
+            prompt: sortedAudios.map((f) => f.prompt).filter(Boolean).join(' '),
+            updatedAt: new Date(),
+          };
+
+          return {
+            fragments: [
+              ...state.fragments.filter((f) => !idSet.has(f.id) && !(audioFragmentsToRemove?.has(f.id))),
+              { ...mergedVideo, linkedAudioFragmentId: sortedAudios[0].id },
+              mergedAudio,
+            ],
+          };
+        }
+      }
+
       return {
         fragments: [
-          ...state.fragments.filter((f) => !ids.includes(f.id)),
-          mergedFragment,
+          ...state.fragments.filter((f) => !idSet.has(f.id)),
+          mergedVideo,
         ],
       };
     }),
@@ -725,6 +853,76 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
         fragments: [...state.fragments, newFragment],
         scenes: expandLastSceneIfNeeded(state.scenes, newDuration),
         duration: newDuration,
+      });
+    },
+
+    separateAudio: (fragmentId) => {
+      const state = get();
+      const fragment = state.fragments.find((f) => f.id === fragmentId);
+      if (!fragment) return;
+
+      const videoTrack = state.tracks.find((t) => t.id === fragment.trackId);
+      if (!videoTrack || videoTrack.type !== 'video') return;
+      if (!fragment.sourceAssetId || fragment.muted) return;
+
+      const asset = useAssetStore.getState().getAssetById(fragment.sourceAssetId);
+      if (!asset || !asset.audioChannels || asset.audioChannels <= 0) return;
+
+      const audioTracks = state.tracks
+        .filter((t) => t.type === 'audio')
+        .sort((a, b) => a.order - b.order);
+
+      const targetTrack = audioTracks.find(t =>
+        canPlaceFragment(state.fragments, fragment.start, fragment.duration, t.id),
+      );
+
+      let targetTrackId: string;
+      let newTrack: Track | null = null;
+
+      if (targetTrack) {
+        targetTrackId = targetTrack.id;
+      } else {
+        const maxAudioOrder = audioTracks.length > 0
+          ? safeMax(audioTracks.map((t) => t.order))
+          : -1;
+        const newOrder = maxAudioOrder + 1;
+        newTrack = {
+          id: generateId(),
+          type: 'audio',
+          name: t('timeline.audioTrack', { index: newOrder + 1 }),
+          muted: false,
+          locked: false,
+          order: newOrder,
+        };
+        targetTrackId = newTrack.id;
+      }
+
+      const audioFragmentId = generateId();
+      const audioFragment: Fragment = {
+        id: audioFragmentId,
+        trackId: targetTrackId,
+        start: fragment.start,
+        duration: fragment.duration,
+        sourceAssetId: fragment.sourceAssetId,
+        trimStart: fragment.trimStart,
+        prompt: fragment.prompt,
+        references: fragment.references.map((r) => ({ ...r })),
+        status: 'completed',
+        sceneId: fragment.sceneId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      set((state) => {
+        const tracks = newTrack ? [...state.tracks, newTrack] : state.tracks;
+        return {
+          tracks,
+          fragments: state.fragments.map((f) =>
+            f.id === fragmentId
+              ? { ...f, muted: true, linkedAudioFragmentId: audioFragmentId, updatedAt: new Date() }
+              : f,
+          ).concat(audioFragment),
+        };
       });
     },
 
@@ -1177,13 +1375,29 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       const baseTrackOrder = baseTrack?.order ?? 0;
       const baseTrackType: 'video' | 'audio' = baseTrack?.type ?? 'video';
 
-      // Deep copy with new IDs
-      const copiedFragments: Fragment[] = selectedFragments.map((f) => ({
-        ...f,
-        id: `fragment-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
+      // Deep copy with new IDs, tracking the mapping for linkedAudioFragmentId remapping
+      const fragmentIdMap = new Map<string, string>();
+      const copiedFragments: Fragment[] = selectedFragments.map((f) => {
+        const newId = `fragment-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        fragmentIdMap.set(f.id, newId);
+        return {
+          ...f,
+          id: newId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      });
+
+      // Remap linkedAudioFragmentId immutably
+      const remappedFragments = copiedFragments.map((f) => {
+        if (!f.linkedAudioFragmentId) return f;
+        const mapped = fragmentIdMap.get(f.linkedAudioFragmentId);
+        if (mapped) {
+          return { ...f, linkedAudioFragmentId: mapped };
+        }
+        // Linked fragment not in clipboard — clear the link
+        return unlinkVideoFragment(f);
+      });
 
       const copiedScenes: Scene[] = selectedScenes.map((s) => ({
         ...s,
@@ -1194,7 +1408,7 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
 
       set({
         clipboard: {
-          fragments: copiedFragments,
+          fragments: remappedFragments,
           scenes: copiedScenes,
           baseTime: baseTime === Infinity ? 0 : baseTime,
           baseTrackOrder: baseTrackOrder,
@@ -1214,7 +1428,14 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
 
       // Then delete selected items
       if (fragmentIds.length > 0) {
-        const newFragments = state.fragments.filter((f) => !fragmentIds.includes(f.id));
+        const idSet = new Set(fragmentIds);
+        const fragmentById = new Map(state.fragments.map(f => [f.id, f]));
+        const newFragments = cleanupLinkedAudioOnDelete(
+          state.fragments.filter((f) => !idSet.has(f.id)),
+          idSet,
+          fragmentById,
+        );
+
         const newDuration = calculateTimelineDuration(newFragments, state.scenes);
 
         storeEvents.emit({ type: 'SELECTION_CLEAR' });

@@ -70,6 +70,7 @@ export function buildProjectTimelineRenderRequest(
       startMs: clip.startMs,
       durationMs: clip.durationMs,
       trimStartMs: clip.trimStartMs,
+      mute: clip.muted || undefined,
       crop: clip.crop,
       transform: clip.transform,
     })),

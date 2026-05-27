@@ -42,6 +42,8 @@ export interface Fragment {
   sourceAssetId?: string;  // 可播放源资源 (最多1个)
   resultAssetId?: string;  // 最近一次生成产出的 asset ID
   trimStart?: number;      // 源素材内的起始偏移 (ms)，仅 sourceAssetId 存在时有意义
+  muted?: boolean;           // 是否静音（音频分离后视频片段设为 true）
+  linkedAudioFragmentId?: string;  // 关联的音频片段 ID（音频分离后指向新创建的音频片段）
   generatedUrl?: string;
   thumbnailUrl?: string;
   providerSelection?: FragmentProviderSelection;

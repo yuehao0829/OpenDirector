@@ -6,6 +6,7 @@ import type { Fragment as FragmentType } from '@opendirector/core/types/timeline
 import { findSnapPoint, wouldCreateOverlap } from '@opendirector/core/utils/snap';
 import { pixelToTime } from '@opendirector/core/utils/timeline';
 import { clsx } from 'clsx';
+import { VolumeX } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { parseAssetDragData, buildReferencesFromDragData } from './drag-types';
 
@@ -476,8 +477,11 @@ export function Fragment({ fragment, zoom, isSelected, onClick, onDragStart }: F
   };
 
   // Thumbnail priority: sourceAsset > generatedUrl > thumbnailUrl > first image reference
+  // Audio tracks should not show video thumbnails
   const sourceAsset = fragment.sourceAssetId ? getAssetById(fragment.sourceAssetId) : null;
-  let thumbnailSrc = sourceAsset?.thumbnailUrl || fragment.generatedUrl || fragment.thumbnailUrl;
+  let thumbnailSrc = currentTrackType === 'audio'
+    ? null
+    : (sourceAsset?.thumbnailUrl || fragment.generatedUrl || fragment.thumbnailUrl);
 
   if (!thumbnailSrc) {
     const firstImageRef = fragment.references.find(ref => ref.type === 'image');
@@ -500,6 +504,7 @@ export function Fragment({ fragment, zoom, isSelected, onClick, onDragStart }: F
           isGenerating && theme.generatingClass,
           isSelected && !isGenerating && theme.selectedRing,
           isDragOver && theme.dragOverRing,
+          fragment.muted && 'opacity-60',
           getCursorClass()
         )
       )}
@@ -543,6 +548,12 @@ export function Fragment({ fragment, zoom, isSelected, onClick, onDragStart }: F
           {fragment.prompt || 'Empty fragment'}
         </p>
       </div>
+
+      {fragment.muted && (
+        <div className="absolute top-1 right-1 pointer-events-none">
+          <VolumeX size={12} className="text-zinc-400" />
+        </div>
+      )}
 
       {/* Duration */}
       <div className="absolute inset-x-0 bottom-0 p-1 pointer-events-none fragment-duration">

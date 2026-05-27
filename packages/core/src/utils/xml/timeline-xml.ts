@@ -48,6 +48,8 @@ export interface TimelineFragment {
   sourceAssetRef?: string;
   resultAssetRef?: string;
   trimStart?: number;
+  muted?: boolean;
+  linkedAudioFragmentRef?: string;
   providerInstanceId?: string;
   providerModelId?: string;
   genParams?: GenerationParamDefaults;
@@ -161,6 +163,14 @@ function createFragmentElement(fragment: TimelineFragment): XmlElement {
 
   if (fragment.trimStart !== undefined && fragment.trimStart > 0) {
     attrs.trimStart = fragment.trimStart;
+  }
+
+  if (fragment.muted) {
+    attrs.muted = fragment.muted;
+  }
+
+  if (fragment.linkedAudioFragmentRef) {
+    attrs.linkedAudioFragmentRef = fragment.linkedAudioFragmentRef;
   }
 
   if (fragment.providerInstanceId) {
@@ -388,6 +398,8 @@ function parseFragmentElement(element: XmlElement): TimelineFragment {
     sourceAssetRef: element.attributes.sourceAssetRef,
     resultAssetRef,
     trimStart: element.attributes.trimStart ? parseInt(element.attributes.trimStart, 10) : undefined,
+    muted: element.attributes.muted === 'true' ? true : undefined,
+    linkedAudioFragmentRef: element.attributes.linkedAudioFragmentRef || undefined,
     providerInstanceId: element.attributes.providerInstanceId || undefined,
     providerModelId: element.attributes.providerModelId || undefined,
     genParams,

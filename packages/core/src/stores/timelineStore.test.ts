@@ -1137,8 +1137,9 @@ describe('timelineStore', () => {
         const store = useTimelineStore.getState();
         // At zoom 50, fragment f1 at start 0, duration 2000 occupies pixels 0-100
         // Fragment f2 at start 1000, duration 2000 occupies pixels 50-150
+        // Content-area Y: track-1=0-80, track-2=80-160
         store.setZoom(50);
-        store.startSelectionBox(0, 100);  // Time ruler 24px + Scene track 24px = 48px, track-1 starts at 48px
+        store.startSelectionBox(0, 80);  // Select within track-2 area
         store.updateSelectionBox(100, 150);
 
         store.confirmSelectionBox();
@@ -1150,26 +1151,27 @@ describe('timelineStore', () => {
         expect(sel.primaryIds.length).toBeGreaterThan(0);
       });
 
-      it('should select scenes that overlap with selection box', () => {
+      it('should not select scenes (handled by SceneTrack component)', () => {
         const store = useTimelineStore.getState();
         store.setZoom(50);
-        // Scene track is at Y: 24-48
-        store.startSelectionBox(0, 24);
-        store.updateSelectionBox(250, 48);
+        // Scene track is in a separate frozen pane, not handled by selection box
+        store.startSelectionBox(0, 0);
+        store.updateSelectionBox(250, 80);
 
         store.confirmSelectionBox();
 
         const sel = useSelectionStore.getState();
-        expect(sel.primaryType).toBe('scene');
-        expect(sel.primaryIds.length).toBeGreaterThan(0);
+        // Selection box only operates on fragments, not scenes
+        expect(sel.primaryType === 'scene').toBe(false);
       });
 
       it('should create draft fragment when selecting empty area', () => {
         const store = useTimelineStore.getState();
         store.setZoom(50);
-        // Select area beyond existing fragments
-        store.startSelectionBox(300, 48);  // Beyond existing fragments
-        store.updateSelectionBox(500, 128);
+        // Content-area Y: track-1=0-80, track-2=80-160
+        // Select area beyond existing fragments, within track-1 (Y=0-80)
+        store.startSelectionBox(300, 0);
+        store.updateSelectionBox(500, 80);
 
         store.confirmSelectionBox();
 

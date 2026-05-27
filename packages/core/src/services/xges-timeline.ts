@@ -31,6 +31,7 @@ export function buildXgesExportTimeline(
       startMs: clip.startMs,
       durationMs: clip.durationMs,
       trimStartMs: clip.trimStartMs,
+      mute: clip.muted || undefined,
       crop: clip.crop,
     })),
   };

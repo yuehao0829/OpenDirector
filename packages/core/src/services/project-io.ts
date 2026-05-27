@@ -252,6 +252,8 @@ export async function loadProjectFiles(
       sourceAssetId: f.sourceAssetRef,
       resultAssetId: f.resultAssetRef,
       trimStart: f.trimStart,
+      muted: f.muted,
+      linkedAudioFragmentId: f.linkedAudioFragmentRef,
       providerSelection: f.providerInstanceId ? {
         instanceId: f.providerInstanceId,
         modelId: f.providerModelId ?? '',
@@ -513,6 +515,8 @@ function buildTimelineFile(project: Project): TimelineFile {
       sourceAssetRef: fragment.sourceAssetId,
       resultAssetRef: fragment.resultAssetId,
       trimStart: fragment.trimStart,
+      muted: fragment.muted,
+      linkedAudioFragmentRef: fragment.linkedAudioFragmentId,
       providerInstanceId: fragment.providerSelection?.instanceId,
       providerModelId: fragment.providerSelection?.modelId,
       genParams: fragment.genParams,

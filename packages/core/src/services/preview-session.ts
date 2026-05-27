@@ -106,7 +106,7 @@ export function buildTimelinePreviewSnapshot(
       startMs: clip.startMs,
       durationMs: clip.durationMs,
       trimStartMs: clip.trimStartMs ?? 0,
-      muted: false,
+      muted: clip.muted ?? false,
       crop: clip.crop,
       transform: clip.transform,
     })),

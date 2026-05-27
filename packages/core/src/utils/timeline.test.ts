@@ -4,7 +4,7 @@ import {
   canPlaceFragment,
   findFragmentAt,
   getFragmentsInRange,
-  areFragmentsAdjacent,
+  areFragmentsContiguous,
   snapToGrid,
   pixelToTime,
   timeToPixel,
@@ -216,13 +216,13 @@ describe('getFragmentsInRange', () => {
   });
 });
 
-describe('areFragmentsAdjacent', () => {
+describe('areFragmentsContiguous', () => {
   it('should return true for empty array', () => {
-    expect(areFragmentsAdjacent([])).toBe(true);
+    expect(areFragmentsContiguous([])).toBe(true);
   });
 
   it('should return true for single fragment', () => {
-    expect(areFragmentsAdjacent([createFragment('f1', 0, 1000)])).toBe(true);
+    expect(areFragmentsContiguous([createFragment('f1', 0, 1000)])).toBe(true);
   });
 
   it('should return true for adjacent fragments', () => {
@@ -231,23 +231,23 @@ describe('areFragmentsAdjacent', () => {
       createFragment('f2', 1000, 500),
       createFragment('f3', 1500, 500),
     ];
-    expect(areFragmentsAdjacent(fragments)).toBe(true);
+    expect(areFragmentsContiguous(fragments)).toBe(true);
   });
 
-  it('should return false for non-adjacent fragments', () => {
+  it('should return false for fragments with gaps', () => {
     const fragments = [
       createFragment('f1', 0, 1000),
-      createFragment('f2', 2000, 1000), // gap of 1000
+      createFragment('f2', 2000, 1000),
     ];
-    expect(areFragmentsAdjacent(fragments)).toBe(false);
+    expect(areFragmentsContiguous(fragments)).toBe(false);
   });
 
-  it('should return false for overlapping fragments', () => {
+  it('should return true for overlapping fragments', () => {
     const fragments = [
       createFragment('f1', 0, 1500),
-      createFragment('f2', 1000, 1000), // overlap
+      createFragment('f2', 1000, 1000),
     ];
-    expect(areFragmentsAdjacent(fragments)).toBe(false);
+    expect(areFragmentsContiguous(fragments)).toBe(true);
   });
 
   it('should handle unsorted fragments', () => {
@@ -256,7 +256,7 @@ describe('areFragmentsAdjacent', () => {
       createFragment('f2', 0, 1000),
       createFragment('f3', 1500, 500),
     ];
-    expect(areFragmentsAdjacent(fragments)).toBe(true);
+    expect(areFragmentsContiguous(fragments)).toBe(true);
   });
 });
 

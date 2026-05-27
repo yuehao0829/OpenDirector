@@ -338,7 +338,9 @@ fn build_clip_args(
         args.extend(crop_args);
     }
 
-    if track.track_type == XgesTrackType::Audio && (track.muted || clip.mute.unwrap_or(false)) {
+    if track.track_type == XgesTrackType::Audio
+        && (track.muted || clip.mute.unwrap_or(false))
+    {
         args.extend(["set-volume".to_string(), "0.0".to_string()]);
     }
 

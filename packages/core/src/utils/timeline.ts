@@ -102,7 +102,7 @@ export function getFragmentsInRange(
 /**
  * Check if fragments are adjacent
  */
-export function areFragmentsAdjacent(
+export function areFragmentsContiguous(
   fragments: Fragment[]
 ): boolean {
   if (fragments.length < 2) return true;
@@ -110,12 +110,60 @@ export function areFragmentsAdjacent(
   const sorted = [...fragments].sort((a, b) => a.start - b.start);
 
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i - 1].start + sorted[i - 1].duration !== sorted[i].start) {
+    if (sorted[i - 1].start + sorted[i - 1].duration < sorted[i].start) {
       return false;
     }
   }
 
   return true;
+}
+
+export function unlinkVideoFragment(f: Fragment): Fragment {
+  return { ...f, muted: false, linkedAudioFragmentId: undefined };
+}
+
+export function findLinkedVideoFragment(fragments: Fragment[], audioFragmentId: string): Fragment | undefined {
+  return fragments.find((f) => f.linkedAudioFragmentId === audioFragmentId);
+}
+
+export function buildLinkedVideoIndex(fragments: Fragment[]): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const f of fragments) {
+    if (f.linkedAudioFragmentId) {
+      let arr = index.get(f.linkedAudioFragmentId);
+      if (!arr) { arr = []; index.set(f.linkedAudioFragmentId, arr); }
+      arr.push(f.id);
+    }
+  }
+  return index;
+}
+
+export function cleanupLinkedAudioOnDelete(
+  fragments: Fragment[],
+  deletedIds: Set<string>,
+  fragmentById: Map<string, Fragment>,
+): Fragment[] {
+  const linkedAudioToDelete = new Set<string>();
+  for (const id of deletedIds) {
+    const fragment = fragmentById.get(id);
+    if (fragment?.muted && fragment.linkedAudioFragmentId && !deletedIds.has(fragment.linkedAudioFragmentId)) {
+      linkedAudioToDelete.add(fragment.linkedAudioFragmentId);
+    }
+  }
+
+  if (linkedAudioToDelete.size === 0 && !fragments.some(f => f.linkedAudioFragmentId && deletedIds.has(f.linkedAudioFragmentId))) {
+    return fragments;
+  }
+
+  return fragments.reduce<Fragment[]>((acc, f) => {
+    if (linkedAudioToDelete.has(f.id)) return acc;
+    if (f.linkedAudioFragmentId && deletedIds.has(f.linkedAudioFragmentId)) {
+      acc.push(unlinkVideoFragment(f));
+    } else {
+      acc.push(f);
+    }
+    return acc;
+  }, []);
 }
 
 /**

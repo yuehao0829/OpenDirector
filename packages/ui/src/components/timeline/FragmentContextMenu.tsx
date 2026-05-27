@@ -1,7 +1,9 @@
 import { useRef, useCallback } from 'react';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
-import { Combine, Scissors, Copy, Trash2, Split } from 'lucide-react';
+import { useAssetStore } from '@opendirector/core/stores/assetStore';
+import { areFragmentsContiguous } from '@opendirector/core/utils/timeline';
+import { Combine, Scissors, Copy, Trash2, Split, VolumeX } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useContextMenuClose } from '../../hooks/useContextMenuClose';
 
@@ -17,11 +19,14 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
   const { t } = useTranslation();
   const selection = useSelectionStore((s) => s.primaryType === 'fragment' ? s.primaryIds : []);
   const fragments = useTimelineStore((s) => s.fragments);
+  const tracks = useTimelineStore((s) => s.tracks);
+  const getAssetById = useAssetStore((s) => s.getAssetById);
   const mergeFragments = useTimelineStore((s) => s.mergeFragments);
   const cutSelection = useTimelineStore((s) => s.cutSelection);
   const copySelection = useTimelineStore((s) => s.copySelection);
-  const deleteFragment = useTimelineStore((s) => s.deleteFragment);
+  const deleteFragments = useTimelineStore((s) => s.deleteFragments);
   const splitFragment = useTimelineStore((s) => s.splitFragment);
+  const separateAudio = useTimelineStore((s) => s.separateAudio);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useContextMenuClose(menuRef, onClose);
@@ -40,14 +45,7 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
     const trackId = selectedFragments[0].trackId;
     if (!selectedFragments.every((f) => f.trackId === trackId)) return false;
 
-    // Check if fragments are adjacent or overlapping
-    for (let i = 1; i < selectedFragments.length; i++) {
-      const prevEnd = selectedFragments[i - 1].start + selectedFragments[i - 1].duration;
-      const currStart = selectedFragments[i].start;
-      if (prevEnd < currStart) return false;
-    }
-
-    return true;
+    return areFragmentsContiguous(selectedFragments);
   }, [selection, fragments]);
 
   const handleMerge = () => {
@@ -66,14 +64,29 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
   };
 
   const handleDelete = () => {
-    for (const id of selection) {
-      deleteFragment(id);
-    }
+    deleteFragments(selection);
     onClose();
   };
 
   const handleSplit = () => {
     splitFragment(fragmentId, rightClickTime);
+    onClose();
+  };
+
+  const canSeparateAudio = (() => {
+    if (selection.length !== 1) return false;
+    const fragment = fragments.find((f) => f.id === fragmentId);
+    if (!fragment) return false;
+    const track = tracks.find((t) => t.id === fragment.trackId);
+    if (!track || track.type !== 'video') return false;
+    if (!fragment.sourceAssetId || fragment.muted) return false;
+    const asset = getAssetById(fragment.sourceAssetId);
+    if (!asset || !asset.audioChannels || asset.audioChannels <= 0) return false;
+    return true;
+  })();
+
+  const handleSeparateAudio = () => {
+    separateAudio(fragmentId);
     onClose();
   };
 
@@ -114,6 +127,15 @@ export function FragmentContextMenu({ x, y, fragmentId, rightClickTime, onClose 
         <span className="flex-1 text-left">{t('timeline.contextMenu.copy')}</span>
         <span className="text-zinc-500 text-xs">Ctrl+C</span>
       </button>
+      {canSeparateAudio && (
+        <button
+          onClick={handleSeparateAudio}
+          className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors"
+        >
+          <VolumeX size={14} />
+          <span>{t('timeline.contextMenu.separateAudio')}</span>
+        </button>
+      )}
       <div className="border-t border-zinc-700 my-1" />
       <button
         onClick={handleDelete}
