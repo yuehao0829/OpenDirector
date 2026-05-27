@@ -40,10 +40,7 @@ export function requestNativePreviewStepFrame(
 }
 
 // Layout constants (synchronized with UI constants)
-// These are used for track position calculations in confirmSelectionBox
 const TRACK_HEIGHT = 80;
-const TIME_RULER_HEIGHT = 24;
-const SCENE_TRACK_HEIGHT = 24;
 const TRACK_DIVIDER_HEIGHT = 4;
 
 function getDefaultGenParams(): GenerationParamDefaults {
@@ -830,125 +827,64 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
       const startTime = (minX / zoom) * 1000;
       const endTime = (maxX / zoom) * 1000;
 
-      // Note: Y coordinates from TimelineCanvas are content coordinates
-      // (already include scroll.y offset). Track positions are also content
-      // coordinates (absolute positions in the scrollable content).
-      // Both use the same coordinate system, so compare directly.
+      // Y coordinates from TimelineCanvas are content-area coordinates
+      // (relative to the scroll container below ruler/scene track, starting at 0).
 
-      // Check if selection overlaps with scene track
-      const sceneTrackTop = TIME_RULER_HEIGHT;
-      const sceneTrackBottom = TIME_RULER_HEIGHT + SCENE_TRACK_HEIGHT;
-
-      // Find fragments that overlap with selection box
       const overlappingFragments: string[] = [];
-      const overlappingScenes: string[] = [];
 
-      // Check scene overlap
-      if (minY < sceneTrackBottom && maxY > sceneTrackTop) {
-        state.scenes.forEach(scene => {
-          const sceneStart = (scene.start / 1000) * zoom;
-          const sceneEnd = ((scene.start + scene.duration) / 1000) * zoom;
-
-          // Check if scene overlaps with selection horizontally
-          if (sceneEnd > minX && sceneStart < maxX) {
-            overlappingScenes.push(scene.id);
-          }
-        });
-      }
-
-      // Check fragment overlap
-      // Need to use visual position (sorted by order) not store index
+      // Sort tracks by visual position and precompute bounds
       const videoTracks = state.tracks
         .filter(t => t.type === 'video')
-        .sort((a, b) => b.order - a.order); // Descending: highest order at top
+        .sort((a, b) => b.order - a.order);
       const audioTracks = state.tracks
         .filter(t => t.type === 'audio')
-        .sort((a, b) => a.order - b.order); // Ascending: lowest order at top (near divider)
+        .sort((a, b) => a.order - b.order);
       const videoAreaHeight = videoTracks.length * TRACK_HEIGHT;
-      const audioAreaStart = TIME_RULER_HEIGHT + SCENE_TRACK_HEIGHT + videoAreaHeight + TRACK_DIVIDER_HEIGHT;
+
+      const trackBounds = new Map<string, { top: number; bottom: number }>();
+      videoTracks.forEach((t, i) => {
+        const top = i * TRACK_HEIGHT;
+        trackBounds.set(t.id, { top, bottom: top + TRACK_HEIGHT });
+      });
+      audioTracks.forEach((t, i) => {
+        const top = videoAreaHeight + TRACK_DIVIDER_HEIGHT + i * TRACK_HEIGHT;
+        trackBounds.set(t.id, { top, bottom: top + TRACK_HEIGHT });
+      });
 
       state.fragments.forEach(fragment => {
-        const track = state.tracks.find(t => t.id === fragment.trackId);
-        if (!track) return;
+        const bounds = trackBounds.get(fragment.trackId);
+        if (!bounds) return;
 
-        // Calculate visual Y position based on track type and order
-        let trackTop: number;
-
-        if (track.type === 'video') {
-          const visualIndex = videoTracks.findIndex(t => t.id === track.id);
-          trackTop = TIME_RULER_HEIGHT + SCENE_TRACK_HEIGHT + visualIndex * TRACK_HEIGHT;
-        } else {
-          const visualIndex = audioTracks.findIndex(t => t.id === track.id);
-          trackTop = audioAreaStart + visualIndex * TRACK_HEIGHT;
-        }
-        const trackBottom = trackTop + TRACK_HEIGHT;
-
-        // Check if fragment's track overlaps with selection vertically
-        if (trackBottom > minY && trackTop < maxY) {
+        if (bounds.bottom > minY && bounds.top < maxY) {
           const fragStart = (fragment.start / 1000) * zoom;
           const fragEnd = ((fragment.start + fragment.duration) / 1000) * zoom;
 
-          // Check if fragment overlaps with selection horizontally
           if (fragEnd > minX && fragStart < maxX) {
             overlappingFragments.push(fragment.id);
           }
         }
       });
 
-      // If there are overlapping fragments or scenes, select them instead of creating draft
       if (overlappingFragments.length > 0) {
         storeEvents.emit({ type: 'SELECTION_SELECT_FRAGMENTS', ids: overlappingFragments });
-        return {
-          selectionBox: null,
-        };
-      }
-
-      if (overlappingScenes.length > 0) {
-        storeEvents.emit({ type: 'SELECTION_SELECT_SCENES', ids: overlappingScenes });
-        return {
-          selectionBox: null,
-        };
+        return { selectionBox: null };
       }
 
       // No overlapping items - determine which track to create fragment on
-      // Find tracks that overlap with selection box (using visual positions)
       const overlappingTracks: { trackId: string; overlapArea: number }[] = [];
 
-      // Check video tracks (sorted by order descending - highest order at top)
-      videoTracks.forEach((track, visualIndex) => {
-        const trackTop = TIME_RULER_HEIGHT + SCENE_TRACK_HEIGHT + visualIndex * TRACK_HEIGHT;
-        const trackBottom = trackTop + TRACK_HEIGHT;
-
-        // Calculate vertical overlap
-        const overlapTop = Math.max(minY, trackTop);
-        const overlapBottom = Math.min(maxY, trackBottom);
+      for (const [trackId, bounds] of trackBounds) {
+        const overlapTop = Math.max(minY, bounds.top);
+        const overlapBottom = Math.min(maxY, bounds.bottom);
         const overlapHeight = Math.max(0, overlapBottom - overlapTop);
 
         if (overlapHeight > 0) {
           overlappingTracks.push({
-            trackId: track.id,
+            trackId,
             overlapArea: overlapHeight * (maxX - minX),
           });
         }
-      });
-
-      // Check audio tracks (sorted by order ascending - lowest order at top, near divider)
-      audioTracks.forEach((track, visualIndex) => {
-        const trackTop = audioAreaStart + visualIndex * TRACK_HEIGHT;
-        const trackBottom = trackTop + TRACK_HEIGHT;
-
-        // Calculate vertical overlap
-        const overlapTop = Math.max(minY, trackTop);
-        const overlapBottom = Math.min(maxY, trackBottom);
-        const overlapHeight = Math.max(0, overlapBottom - overlapTop);
-
-        if (overlapHeight > 0) {
-          overlappingTracks.push({
-            trackId: track.id,
-            overlapArea: overlapHeight * (maxX - minX),
-          });
-        }
-      });
+      }
 
       // Sort by overlap area, pick the track with largest overlap
       overlappingTracks.sort((a, b) => b.overlapArea - a.overlapArea);
