@@ -45,6 +45,8 @@ export interface BuildProjectMediaTimelineOptions {
   includeVideoSourceAudio?: boolean;
   missingMediaPolicy?: 'error' | 'skip';
   emptyTimelinePolicy?: 'error' | 'allow';
+  /** Override project.settings.resolution when provided. */
+  resolution?: { width: number; height: number };
 }
 
 export function buildProjectMediaTimeline(
@@ -150,10 +152,12 @@ export function buildProjectMediaTimeline(
     clips.push(...linkedVideoAudio.clips);
   }
 
+  const resolution = options.resolution ?? project.settings.resolution;
+
   return {
     projectName: project.name,
-    width: project.settings.resolution.width,
-    height: project.settings.resolution.height,
+    width: resolution.width,
+    height: resolution.height,
     fps: project.settings.fps,
     tracks: timelineTracks,
     clips,

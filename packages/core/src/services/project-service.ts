@@ -57,6 +57,8 @@ import { mapAssetSnapshots, setSavedSnapshot } from '../stores/undoManager';
 import { getTempDir } from '../utils/temp-path';
 import { generateId } from '../utils/id';
 import { useProjectStore, getProjectOpenCallbacks } from '../stores/projectStore';
+import { useSettingsStore } from '../stores/settingsStore';
+import { generationResolutionToPixels } from '../types/generation';
 import { t } from '../i18n';
 
 // ============================================================================
@@ -776,6 +778,8 @@ export async function exportTimelineRenderProject(): Promise<void> {
       ? { start: inPoint, end: outPoint }
       : undefined;
 
+    const genParams = useSettingsStore.getState().defaultGenerationParams;
+
     await tauriBridge.mediaApi.render(
       buildProjectTimelineRenderRequest({
         project,
@@ -783,6 +787,7 @@ export async function exportTimelineRenderProject(): Promise<void> {
         outputFormat: resolveTimelineRenderOutputFormat(filePath),
         assetPathResolver: buildProjectAssetPathResolver(project),
         rangeMs,
+        resolution: generationResolutionToPixels(genParams.resolution, genParams.aspectRatio),
       }),
     );
 

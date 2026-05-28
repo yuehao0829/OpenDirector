@@ -36,6 +36,56 @@ export const DEFAULT_GENERATION_PARAMS: GenerationParamDefaults = {
   enableWebSearch: false,
 };
 
+const RESOLUTION_HEIGHTS: Record<string, number> = {
+  '480p': 480,
+  '720p': 720,
+  '1080p': 1080,
+};
+
+const ASPECT_RATIO_NUMBERS: Record<string, [number, number]> = {
+  '16:9': [16, 9],
+  '21:9': [21, 9],
+  '4:3': [4, 3],
+  '1:1': [1, 1],
+  '3:4': [3, 4],
+  '9:16': [9, 16],
+};
+
+/** Round up to the nearest even number (H.264 requires even dimensions). */
+function toEven(n: number): number {
+  return (n + 1) & ~1;
+}
+
+/**
+ * Convert a generation resolution label (e.g. `'1080p'`) and aspect ratio
+ * (e.g. `'16:9'`) to pixel dimensions.  Falls back to 1920×1080 for
+ * unrecognised values or `'adaptive'` ratio.
+ */
+export function generationResolutionToPixels(
+  resolution: string,
+  aspectRatio: string,
+): { width: number; height: number } {
+  const shortSide = RESOLUTION_HEIGHTS[resolution] ?? 1080;
+  const ratio = ASPECT_RATIO_NUMBERS[aspectRatio];
+
+  if (!ratio) {
+    return { width: 1920, height: 1080 };
+  }
+
+  const [rw, rh] = ratio;
+  const landscape = rw >= rh;
+
+  if (landscape) {
+    const height = shortSide;
+    const width = toEven(Math.round((height * rw) / rh));
+    return { width, height };
+  }
+
+  const width = shortSide;
+  const height = toEven(Math.round((width * rh) / rw));
+  return { width, height };
+}
+
 /** Persisted generation parameter defaults (no duration — duration is per-fragment) */
 export interface GenerationParamDefaults {
   resolution: string;

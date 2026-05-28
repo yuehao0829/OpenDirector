@@ -48,6 +48,7 @@ export function buildProjectTimelineRenderRequest(
     missingAssetErrorLabel: 'Timeline render',
     includeVideoSourceAudio: true,
     missingMediaPolicy: 'skip',
+    resolution: options.resolution,
   });
 
   let clips = timeline.clips.map<TimelineRenderClip>((clip) => ({

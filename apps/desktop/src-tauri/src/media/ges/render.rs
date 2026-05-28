@@ -17,6 +17,8 @@ use crate::media::gstreamer::command::{
     canonicalize_media_path, file_uri, run_tool, GstreamerTool,
 };
 
+const H264_ENCODING_PROPERTY: &str = "video/x-h264,bitrate=20000000";
+
 pub fn process_asset(request: &AssetProcessRequest) -> MediaResult<AssetProcessResult> {
     let plan = builder::build_asset_render_plan(request);
     let crop = effects::extract_crop_effect(request);
@@ -64,6 +66,8 @@ pub fn concat_media(request: &MediaConcatRequest) -> MediaResult<MediaConcatResu
     let mut args = vec![
         format!("--outputuri={}", file_uri(&output_path)),
         "--format=video/quicktime:video/x-h264:audio/mpeg,mpegversion=4".to_string(),
+        "--encoding-property".to_string(),
+        H264_ENCODING_PROPERTY.to_string(),
     ];
 
     for input in &plan.input_paths {
@@ -179,6 +183,8 @@ fn build_timeline_render_args(request: &TimelineRenderRequest) -> MediaResult<Ve
 
     if has_video {
         args.extend([
+            "--encoding-property".to_string(),
+            H264_ENCODING_PROPERTY.to_string(),
             "+track".to_string(),
             "video".to_string(),
             format!(
@@ -394,6 +400,13 @@ fn build_timed_asset_render_args(
             output_format_caps(media_type, request.output_format.as_deref(), metadata)
         ),
     ];
+
+    if media_type == "video" {
+        args.extend([
+            "--encoding-property".to_string(),
+            H264_ENCODING_PROPERTY.to_string(),
+        ]);
+    }
 
     let crop_bounds = resolve_timed_asset_crop_bounds(request, metadata);
     let scaled_output_dimensions = resolve_timed_asset_output_dimensions(
