@@ -346,18 +346,20 @@ export function TimelineCanvas() {
     if (!track) return;
 
     const selectionState = useSelectionStore.getState();
-    let dragIds = selectionState.primaryType === 'fragment' && selectionState.primaryIds.includes(fragment.id)
+    const initialDragIds = selectionState.primaryType === 'fragment' && selectionState.primaryIds.includes(fragment.id)
       ? [...selectionState.primaryIds]
       : [fragment.id];
 
     // Include linked audio fragments in drag
     const allFragments = useTimelineStore.getState().fragments;
-    for (const id of [...dragIds]) {
+    const linkedIds: string[] = [];
+    for (const id of initialDragIds) {
       const f = allFragments.find((frag) => frag.id === id);
-      if (f?.linkedAudioFragmentId && !dragIds.includes(f.linkedAudioFragmentId)) {
-        dragIds.push(f.linkedAudioFragmentId);
+      if (f?.linkedAudioFragmentId && !initialDragIds.includes(f.linkedAudioFragmentId)) {
+        linkedIds.push(f.linkedAudioFragmentId);
       }
     }
+    const dragIds = [...initialDragIds, ...linkedIds];
 
     const items: DragSelectionItem[] = dragIds
       .map((id) => {
