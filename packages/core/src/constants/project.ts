@@ -7,7 +7,7 @@ export const DEFAULT_PROJECT_SETTINGS = {
   resolution: { width: 1920, height: 1080 },
 } as const;
 
-export const DEFAULT_FPS = 30;
+export const DEFAULT_FPS = 24;
 export const DEFAULT_PROVIDER = 'seedance';
 export const DEFAULT_ASPECT_RATIO = '16:9';
 

@@ -11,7 +11,7 @@ let nativePreviewStepFrameHandler: NativePreviewStepFrameHandler | null = null;
 // rAF writes here at 60fps without triggering Zustand updates.
 // Zustand `playhead` is synced at low frequency (~10fps) for UI display only.
 let _playheadRef = 0;
-import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, ZOOM_SLIDER_STEPS } from '../constants/timeline';
+import { ZOOM_MIN, ZOOM_MAX, ZOOM_SLIDER_STEPS, ZOOM_STEP_FACTOR } from '../constants/timeline';
 import { calculateTimelineDuration, safeMax, timeToPixel, canPlaceFragment, areFragmentsContiguous, cleanupLinkedAudioOnDelete, unlinkVideoFragment, findLinkedVideoFragment, buildLinkedVideoIndex } from '../utils/timeline';
 import { useAssetStore } from './assetStore';
 
@@ -969,14 +969,14 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
     zoomIn: () => {
       const state = get();
       if (state.zoom >= ZOOM_MAX) return;
-      const newZoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP);
+      const newZoom = Math.min(ZOOM_MAX, Math.round(state.zoom * ZOOM_STEP_FACTOR));
       set({ zoom: newZoom, scroll: { x: state.adjustScrollForZoom(state.zoom, newZoom), y: state.scroll.y } });
     },
 
     zoomOut: () => {
       const state = get();
       if (state.zoom <= ZOOM_MIN) return;
-      const newZoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP);
+      const newZoom = Math.max(ZOOM_MIN, Math.round(state.zoom / ZOOM_STEP_FACTOR));
       set({ zoom: newZoom, scroll: { x: state.adjustScrollForZoom(state.zoom, newZoom), y: state.scroll.y } });
     },
 

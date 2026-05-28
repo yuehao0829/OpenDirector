@@ -9,13 +9,14 @@
 import type { Project } from '../types/project';
 import type { GenerationRecord } from '../utils/xml';
 import { generateId } from '../utils/id';
-import { DEFAULT_PROJECT_SETTINGS, DEFAULT_FPS, DEFAULT_PROVIDER, DEFAULT_ASPECT_RATIO } from '../constants';
+import { DEFAULT_PROJECT_SETTINGS, DEFAULT_PROVIDER, DEFAULT_ASPECT_RATIO } from '../constants';
 import { useTimelineStore } from '../stores/timelineStore';
 import { useAssetStore } from '../stores/assetStore';
 import { useGenerationStore } from '../stores/generationStore';
 import { withoutDirtyTracking } from '../stores/dirty-tracking';
 import { clearHistory, pushBaseSnapshot } from '../stores/undoManager';
 import { useProjectStore } from '../stores/projectStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { createDefaultTracks, createDefaultScene } from './project-defaults';
 
 // Re-export for backward compatibility
@@ -46,7 +47,7 @@ export function hydrateNewProject(opts: {
     scenes: [createDefaultScene()],
     assets: [],
     settings: {
-      fps: DEFAULT_FPS,
+      fps: useSettingsStore.getState().defaultFps,
       resolution: { ...DEFAULT_PROJECT_SETTINGS.resolution },
       defaultProvider: DEFAULT_PROVIDER,
       defaultAspectRatio: DEFAULT_ASPECT_RATIO,

@@ -31,6 +31,7 @@ interface SettingsState {
   toggleSidebar: () => void;
   setAutoSave: (enabled: boolean) => void;
   setAutoSaveInterval: (interval: number) => void;
+  setDefaultFps: (fps: number) => void;
   setDefaultGenerationParams: (params: Partial<GenerationParamDefaults>) => void;
   reset: () => void;
 }
@@ -58,6 +59,7 @@ export const useSettingsStore = create<SettingsState>()(
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setAutoSaveInterval: (interval) => set({ autoSaveInterval: Math.max(5000, interval) }),
+      setDefaultFps: (fps) => set({ defaultFps: fps }),
       setDefaultGenerationParams: (params) =>
         set((state) => ({ defaultGenerationParams: { ...state.defaultGenerationParams, ...params } })),
       reset: () => set(defaultSettings),

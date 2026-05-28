@@ -1,4 +1,5 @@
 import type { Asset, Fragment, Project, Track } from '../../types';
+import { DEFAULT_FPS } from '../../constants';
 import type { MediaExchangeWarning } from '../../types/media-exchange';
 import type {
   OtioClip,
@@ -348,7 +349,7 @@ function toOtioRationalTime(milliseconds: number, fps: number): OtioRationalTime
 
 function normalizeFps(fps: number): number {
   if (!Number.isFinite(fps) || fps <= 0) {
-    return 30;
+    return DEFAULT_FPS;
   }
   return fps;
 }

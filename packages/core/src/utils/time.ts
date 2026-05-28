@@ -1,5 +1,7 @@
+import { DEFAULT_FPS } from '../constants';
+
 /**
- * Format milliseconds to a compact duration string.
+ * Format milliseconds to compact duration string.
  * Sub-60s: "12.5s", 60s+: "2:30", undefined/0: "--"
  */
 export function formatDuration(ms: number | undefined): string {
@@ -41,14 +43,14 @@ export function formatTime(ms: number, showMs = true): string {
 /**
  * Format milliseconds to timecode (HH:MM:SS:FF - hours:minutes:seconds:frames)
  * @param ms - milliseconds
- * @param fps - frames per second (default 30)
+ * @param fps - frames per second (default: DEFAULT_FPS)
  */
-export function formatTimecode(ms: number, fps = 30): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const frames = Math.floor((ms % 1000) / (1000 / fps));
+export function formatTimecode(ms: number, fps = DEFAULT_FPS): string {
+  const totalFrames = Math.round((ms / 1000) * fps);
+  const hours = Math.floor(totalFrames / (fps * 3600));
+  const minutes = Math.floor((totalFrames % (fps * 3600)) / (fps * 60));
+  const seconds = Math.floor((totalFrames % (fps * 60)) / fps);
+  const frames = totalFrames % fps;
 
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
 }
@@ -114,45 +116,16 @@ export function msToFrames(ms: number, fps: number): number {
 }
 
 /**
+ * Normalize fps value: ensure it's a positive finite number, falling back to DEFAULT_FPS.
+ */
+export function getEffectiveFps(fps: number | undefined): number {
+  if (fps === undefined || !Number.isFinite(fps) || fps <= 0) return DEFAULT_FPS;
+  return fps;
+}
+
+/**
  * Snap time to nearest frame
  */
 export function snapToFrame(ms: number, fps: number): number {
   return Math.round((ms / 1000) * fps) * (1000 / fps);
-}
-
-/**
- * Get time ruler marks for a zoom level
- */
-export function getTimeRulerMarks(
-  startTime: number,
-  endTime: number,
-  pixelsPerMs: number
-): { time: number; label: string; major: boolean }[] {
-  const marks: { time: number; label: string; major: boolean }[] = [];
-
-  // Determine interval based on zoom
-  let interval: number;
-  if (pixelsPerMs > 0.1) {
-    interval = 1000; // 1 second
-  } else if (pixelsPerMs > 0.02) {
-    interval = 5000; // 5 seconds
-  } else if (pixelsPerMs > 0.005) {
-    interval = 10000; // 10 seconds
-  } else {
-    interval = 30000; // 30 seconds
-  }
-
-  const startMark = Math.floor(startTime / interval) * interval;
-
-  for (let time = startMark; time <= endTime; time += interval) {
-    if (time >= startTime) {
-      marks.push({
-        time,
-        label: formatTime(time, false),
-        major: time % (interval * 5) === 0,
-      });
-    }
-  }
-
-  return marks;
 }

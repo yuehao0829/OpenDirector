@@ -6,6 +6,7 @@ import { usePreviewStore } from '@opendirector/core/stores/previewStore';
 import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import { storeEvents } from '@opendirector/core/stores/store-events';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
+import { getEffectiveFps, snapToFrame } from '@opendirector/core/utils/time';
 import type { Asset, CropRect, Reference, TrimRange } from '@opendirector/core/types/asset';
 import type { PreviewSessionState } from '@opendirector/core/types/media-preview';
 import { isTauri } from '@opendirector/core/utils/platform';
@@ -77,6 +78,8 @@ export function PreviewPanel() {
   const setPlayhead = useTimelineStore((s) => s.setPlayhead);
 
   const addAsset = useAssetStore((s) => s.addAsset);
+
+  const projectFps = useProjectStore((s) => s.currentProject?.settings.fps);
 
   // Preview store for asset mode
   const previewIsPlaying = usePreviewStore((s) => s.isPlaying);
@@ -227,7 +230,8 @@ export function PreviewPanel() {
         seekCountRef.current += 1;
         setSeekCount(seekCountRef.current);
       } else {
-        setPlayhead(time);
+        const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
+        setPlayhead(snapToFrame(time, fps));
       }
     },
     [isIndependentPlayback, referenceTrimStart, seek, setPlayhead],
@@ -711,6 +715,7 @@ export function PreviewPanel() {
         onApply={handleApply}
         isApplying={isApplying}
         applyDisabled={applyDisabled}
+        fps={projectFps}
       />
     </div>
   );

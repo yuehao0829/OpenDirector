@@ -5,6 +5,8 @@ import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { requestNativePreviewStepFrame, useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { redo, undo } from '@opendirector/core/stores/undoManager';
 import { isAnyModalOpen } from '../components/common/modal-state';
+import { getEffectiveFps } from '@opendirector/core/utils/time';
+import { msToFrames, framesToMs } from '@opendirector/core/utils/time';
 
 export function useTimelineShortcuts() {
   const setToolMode = useTimelineStore((s) => s.setToolMode);
@@ -163,11 +165,10 @@ export function useTimelineShortcuts() {
           const direction = e.key.toLowerCase() === 'arrowright' ? 1 : -1;
           const handledByNativePreview = requestNativePreviewStepFrame(direction);
           if (!handledByNativePreview) {
-            const fps = Math.max(1, useProjectStore.getState().currentProject?.settings.fps ?? 30);
-            const frameDurationMs = 1000 / fps;
-            timelineState.setPlayhead(
-              Math.max(0, timelineState.getPlayheadRef() + frameDurationMs * direction),
-            );
+            const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
+            const currentFrame = msToFrames(timelineState.getPlayheadRef(), fps);
+            const targetFrame = Math.max(0, currentFrame + direction);
+            timelineState.setPlayhead(framesToMs(targetFrame, fps));
           }
           break;
         }

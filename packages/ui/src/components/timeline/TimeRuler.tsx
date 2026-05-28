@@ -1,12 +1,16 @@
-import { formatTime } from '@opendirector/core/utils/time';
+import { formatTime, formatTimecode, getEffectiveFps } from '@opendirector/core/utils/time';
 import { TIME_RULER_HEIGHT } from './constants';
+
+/** Minimum pixel spacing between frame sub-ticks */
+const MIN_PIXELS_PER_FRAME = 4;
 
 interface TimeRulerProps {
   width: number;
   zoom: number;
   scrollX: number;
-  viewportWidth?: number; // Width of the visible viewport area (for proper mark generation)
+  viewportWidth?: number;
   onClick?: (e: React.MouseEvent) => void;
+  fps?: number;
 }
 
 /**
@@ -14,9 +18,6 @@ interface TimeRulerProps {
  * Uses logarithmic scaling for smooth transitions across zoom range.
  */
 function calculateInterval(zoom: number): number {
-  // zoom is pixels per second
-  // At low zoom (showing many hours), use larger intervals
-  // At high zoom (showing seconds), use smaller intervals
   if (zoom >= 100) return 1000;       // 1 second intervals
   if (zoom >= 50) return 2000;        // 2 second intervals
   if (zoom >= 20) return 5000;        // 5 second intervals
@@ -25,32 +26,39 @@ function calculateInterval(zoom: number): number {
   if (zoom >= 2) return 60000;        // 1 minute intervals
   if (zoom >= 1) return 300000;       // 5 minute intervals
   if (zoom >= 0.5) return 600000;     // 10 minute intervals
-  return 1800000;                      // 30 minute intervals (for very zoomed out)
+  return 1800000;                      // 30 minute intervals
 }
 
-export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick }: TimeRulerProps) {
-  // Calculate time marks based on zoom
+export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick, fps }: TimeRulerProps) {
+  const effectiveFps = getEffectiveFps(fps);
   const interval = calculateInterval(zoom);
   const marks: number[] = [];
 
-  // Calculate visible time range in content coordinates
-  // When using transform: translateX(-scrollX), the visible content is from scrollX to scrollX + viewportWidth
-  // If viewportWidth is not provided, fall back to using width (for backward compatibility)
   const visibleWidth = viewportWidth ?? width;
   const startTime = Math.floor(scrollX / zoom) * 1000;
   const endTime = startTime + (visibleWidth / zoom) * 1000;
 
-  // Generate marks for visible range with some buffer
   const startMark = Math.floor(startTime / interval) * interval;
   for (let time = startMark; time <= endTime + interval; time += interval) {
     marks.push(time);
   }
 
-  // Calculate content width: must be at least scrollX + visibleWidth to cover the visible area
-  // Add extra buffer to ensure marks are generated beyond the visible area
-  const contentWidth = Math.max(width, scrollX + visibleWidth + 100);
+  // Frame-level sub-ticks
+  const frameMs = 1000 / effectiveFps;
+  const pixelsPerFrame = zoom / effectiveFps;
+  const showFrameTicks = pixelsPerFrame >= MIN_PIXELS_PER_FRAME;
 
-  // Outer width = timelineWidth + viewportWidth, ensures no truncation when scrolling to the end
+  const frameTicks: number[] = [];
+  if (showFrameTicks) {
+    const frameStart = Math.floor(startTime / frameMs) * frameMs;
+    for (let t = frameStart; t <= endTime + frameMs; t += frameMs) {
+      if (Math.abs(t % interval) > 0.01 && Math.abs(t % interval - interval) > 0.01) {
+        frameTicks.push(t);
+      }
+    }
+  }
+
+  const contentWidth = Math.max(width, scrollX + visibleWidth + 100);
   const outerWidth = width + visibleWidth;
 
   return (
@@ -60,24 +68,33 @@ export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick }: Time
       data-testid="time-ruler"
       onClick={onClick}
     >
-      {/* Content container - natural scroll to align with SceneTrack and Track */}
       <div
         className="absolute top-0 h-full"
         style={{
           width: contentWidth,
         }}
       >
-        {marks.map((time) => (
+        {marks.map((time) => {
+          const x = (time / 1000) * zoom;
+          return (
+            <div
+              key={time}
+              className="absolute top-0 h-full"
+              style={{ left: x }}
+            >
+              <span className="absolute top-0 left-1/2 -translate-x-1/2 text-xs text-zinc-500 whitespace-nowrap">
+                {showFrameTicks ? formatTimecode(time, effectiveFps) : formatTime(time, false)}
+              </span>
+              <div className="absolute bottom-0 left-0 w-px h-2 bg-zinc-700 -translate-x-[0.5px]" />
+            </div>
+          );
+        })}
+        {frameTicks.map((time) => (
           <div
-            key={time}
-            className="absolute top-0 h-full flex flex-col items-center"
+            key={`frame-${time}`}
+            className="absolute bottom-0 w-px h-2 bg-zinc-800"
             style={{ left: (time / 1000) * zoom }}
-          >
-            <span className="text-xs text-zinc-500">
-              {formatTime(time, false)}
-            </span>
-            <div className="w-px h-2 bg-zinc-700" />
-          </div>
+          />
         ))}
       </div>
     </div>

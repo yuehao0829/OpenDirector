@@ -78,7 +78,7 @@ export const resources = {
       },
       settings: {
         nav: { technical: '技术设置', provider: 'Provider', generation: '生成参数' },
-        technical: { title: '技术设置', language: '语言', chinese: '中文', english: 'English' },
+        technical: { title: '技术设置', language: '语言', chinese: '中文', english: 'English', framerate: '帧率' },
         generationDefaults: {
           title: '默认生成参数',
           resolution: '分辨率',
@@ -545,7 +545,7 @@ export const resources = {
       },
       settings: {
         nav: { technical: 'Technical', provider: 'Provider', generation: 'Generation' },
-        technical: { title: 'Technical', language: 'Language', chinese: 'Chinese', english: 'English' },
+        technical: { title: 'Technical', language: 'Language', chinese: 'Chinese', english: 'English', framerate: 'Framerate' },
         generationDefaults: {
           title: 'Default Generation Parameters',
           resolution: 'Resolution',

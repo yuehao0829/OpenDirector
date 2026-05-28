@@ -1,9 +1,12 @@
 import { useRef, useEffect, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
+import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import type { Fragment as FragmentType, SnapLine } from '@opendirector/core/types/timeline';
 import { findNearestValidGroupDelta, findSnapPointsForDrag } from '@opendirector/core/utils/snap';
 import { pixelToTime } from '@opendirector/core/utils/timeline';
+import { getEffectiveFps } from '@opendirector/core/utils/time';
+import { snapToFrame } from '@opendirector/core/utils/time';
 import { clsx } from 'clsx';
 import { Track } from './Track';
 import { TrackHeader } from './TrackHeader';
@@ -102,6 +105,8 @@ export function TimelineCanvas() {
   const clearActiveSnapLines = useTimelineStore((s) => s.clearActiveSnapLines);
   const activeSnapLines = useTimelineStore((s) => s.activeSnapLines);
 
+  const projectFps = useProjectStore((s) => s.currentProject?.settings.fps);
+
   const [isDragging, setIsDragging] = useState(false);
   const [fragmentDrag, setFragmentDrag] = useState<DragGhost | null>(null);
   const [viewportWidth, setViewportWidth] = useState(800);
@@ -131,6 +136,17 @@ export function TimelineCanvas() {
     () => new Set(fragmentDrag?.items.map((item) => item.fragmentId) ?? []),
     [fragmentDrag]
   );
+
+  const fragmentsByTrack = useMemo(() => {
+    const map = new Map<string, FragmentType[]>();
+    for (const f of fragments) {
+      if (draggedFragmentIds.has(f.id)) continue;
+      let arr = map.get(f.trackId);
+      if (!arr) { arr = []; map.set(f.trackId, arr); }
+      arr.push(f);
+    }
+    return map;
+  }, [fragments, draggedFragmentIds]);
 
   // Helper: Get visual Y position for a track by trackId
   const getTrackVisualY = useCallback((trackId: string): number => {
@@ -604,11 +620,13 @@ export function TimelineCanvas() {
   // Handle click to move playhead (from ruler area)
   const handleTimeRulerClick = (e: React.MouseEvent) => {
     if (!rulerScrollRef.current) return;
-    const newTime = clientXToTime(e.clientX, rulerScrollRef);
+    const rawTime = clientXToTime(e.clientX, rulerScrollRef);
+    const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
+    const snappedTime = snapToFrame(Math.max(0, rawTime), fps);
     if (isPlaying) {
       pause();
     }
-    setPlayhead(Math.max(0, newTime));
+    setPlayhead(snappedTime);
   };
 
   // Helper: determine track from Y coordinate
@@ -921,6 +939,7 @@ export function TimelineCanvas() {
               scrollX={scroll.x}
               viewportWidth={viewportWidth}
               onClick={handleTimeRulerClick}
+              fps={projectFps}
             />
             <SceneTrack
               width={timelineWidth}
@@ -989,7 +1008,7 @@ export function TimelineCanvas() {
               <Track
                 key={track.id}
                 track={track}
-                fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
+                fragments={fragmentsByTrack.get(track.id) ?? []}
                 zoom={zoom}
                 width={timelineWidth}
                 scrollX={scroll.x}
@@ -1008,7 +1027,7 @@ export function TimelineCanvas() {
               <Track
                 key={track.id}
                 track={track}
-                fragments={fragments.filter((f) => f.trackId === track.id && !draggedFragmentIds.has(f.id))}
+                fragments={fragmentsByTrack.get(track.id) ?? []}
                 zoom={zoom}
                 width={timelineWidth}
                 scrollX={scroll.x}

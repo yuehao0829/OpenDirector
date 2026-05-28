@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import type { TrimRange } from '@opendirector/core/types/asset';
 import { clamp } from '@opendirector/core/utils/common';
-import { formatTimecode, formatTimecodeCentiseconds } from '@opendirector/core/utils/time';
+import { formatTimecode, formatTimecodeCentiseconds, getEffectiveFps } from '@opendirector/core/utils/time';
 import { Check, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -19,6 +19,7 @@ interface PlaybackControlsProps {
   onApply?: () => void;
   isApplying?: boolean;
   applyDisabled?: boolean;
+  fps?: number;
 }
 
 export function PlaybackControls({
@@ -33,6 +34,7 @@ export function PlaybackControls({
   onApply,
   isApplying,
   applyDisabled,
+  fps,
 }: PlaybackControlsProps) {
   const { t } = useTranslation();
   const progressRef = useRef<HTMLDivElement>(null);
@@ -45,7 +47,8 @@ export function PlaybackControls({
   const trimStartPct = duration > 0 ? (trimStart / duration) * 100 : 0;
   const trimEndPct = duration > 0 ? (trimEnd / duration) * 100 : 100;
 
-  const formatFn = previewType === 'audio' ? formatTimecodeCentiseconds : formatTimecode;
+  const effectiveFps = getEffectiveFps(fps);
+  const formatFn = previewType === 'audio' ? formatTimecodeCentiseconds : (ms: number) => formatTimecode(ms, effectiveFps);
 
   const isRelativeTime = mode === 'reference' && hasTrim;
   const timeDisplay = isRelativeTime

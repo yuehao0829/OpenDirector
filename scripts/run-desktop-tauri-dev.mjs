@@ -102,10 +102,8 @@ const signalExitCodes = {
 let shutdownRequested = false;
 let forceShutdownRequested = false;
 let requestedExitCode = null;
-const restoreConsoleInput = setupWindowsCtrlCInterceptor();
 
 process.once('exit', () => {
-  restoreConsoleInput();
   try {
     unlinkSync(tauriPidFilePath);
   } catch {
@@ -217,51 +215,6 @@ function startTauriDevProcess(invocation, args, options) {
   }
 
   return child;
-}
-
-function setupWindowsCtrlCInterceptor() {
-  if (
-    process.platform !== 'win32' ||
-    !process.stdin.isTTY ||
-    typeof process.stdin.setRawMode !== 'function'
-  ) {
-    return () => {};
-  }
-
-  const wasRawModeEnabled = process.stdin.isRaw === true;
-  if (!wasRawModeEnabled) {
-    process.stdin.setRawMode(true);
-  }
-  process.stdin.resume();
-
-  const handleInput = (chunk) => {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    if (!bytes.includes(0x03)) {
-      return;
-    }
-
-    requestedExitCode = 0;
-
-    if (shutdownRequested) {
-      if (!forceShutdownRequested) {
-        forceShutdownRequested = true;
-        void forceShutdownTauriDevProcess();
-      }
-      return;
-    }
-
-    void shutdownTauriDevProcess('SIGINT');
-  };
-
-  process.stdin.on('data', handleInput);
-
-  return () => {
-    process.stdin.off('data', handleInput);
-
-    if (!wasRawModeEnabled && process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
-  };
 }
 
 function pipeChildOutput(target) {

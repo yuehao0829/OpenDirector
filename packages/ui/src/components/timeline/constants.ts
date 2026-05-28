@@ -1,7 +1,7 @@
 /**
  * Timeline component constants
  *
- * Note: Zoom-related constants (ZOOM_MIN, ZOOM_MAX, ZOOM_DEFAULT, ZOOM_STEP, MAX_TIMELINE_DURATION)
+ * Note: Zoom-related constants (ZOOM_MIN, ZOOM_MAX, ZOOM_DEFAULT, MAX_TIMELINE_DURATION)
  * are defined in @opendirector/core/src/constants/timeline.ts and re-exported here for convenience.
  */
 
@@ -10,7 +10,6 @@ export {
   ZOOM_MIN,
   ZOOM_MAX,
   ZOOM_DEFAULT,
-  ZOOM_STEP,
   MAX_TIMELINE_DURATION,
 } from '@opendirector/core/constants/timeline';
 
