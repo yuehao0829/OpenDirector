@@ -21,6 +21,7 @@ export interface BuildProjectTimelineRenderRequestOptions extends BuildProjectMe
   backend?: MediaBackendId;
   outputPath: string;
   outputFormat?: string;
+  rangeMs?: { start: number; end: number };
 }
 
 export function buildTimelineRenderRequest(
@@ -49,6 +50,40 @@ export function buildProjectTimelineRenderRequest(
     missingMediaPolicy: 'skip',
   });
 
+  let clips = timeline.clips.map<TimelineRenderClip>((clip) => ({
+    id: clip.id,
+    trackId: clip.trackId,
+    assetId: clip.assetId,
+    inputPath: clip.inputPath,
+    startMs: clip.startMs,
+    durationMs: clip.durationMs,
+    trimStartMs: clip.trimStartMs,
+    mute: clip.muted || undefined,
+    crop: clip.crop,
+    transform: clip.transform,
+  }));
+
+  if (options.rangeMs) {
+    const { start: rangeStart, end: rangeEnd } = options.rangeMs;
+
+    clips = clips.reduce<TimelineRenderClip[]>((acc, clip) => {
+      const clipEnd = clip.startMs + clip.durationMs;
+      if (!(clipEnd > rangeStart && clip.startMs < rangeEnd)) return acc;
+
+      const trimmedStartMs = Math.max(clip.startMs, rangeStart);
+      const trimmedEndMs = Math.min(clipEnd, rangeEnd);
+      const trimOffset = trimmedStartMs - clip.startMs;
+
+      acc.push({
+        ...clip,
+        startMs: trimmedStartMs - rangeStart,
+        durationMs: trimmedEndMs - trimmedStartMs,
+        trimStartMs: (clip.trimStartMs ?? 0) + trimOffset,
+      });
+      return acc;
+    }, []);
+  }
+
   return buildTimelineRenderRequest({
     backend: options.backend,
     outputPath: options.outputPath,
@@ -62,17 +97,6 @@ export function buildProjectTimelineRenderRequest(
       muted: track.muted,
       order: track.order,
     })),
-    clips: timeline.clips.map<TimelineRenderClip>((clip) => ({
-      id: clip.id,
-      trackId: clip.trackId,
-      assetId: clip.assetId,
-      inputPath: clip.inputPath,
-      startMs: clip.startMs,
-      durationMs: clip.durationMs,
-      trimStartMs: clip.trimStartMs,
-      mute: clip.muted || undefined,
-      crop: clip.crop,
-      transform: clip.transform,
-    })),
+    clips,
   });
 }

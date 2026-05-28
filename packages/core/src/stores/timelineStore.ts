@@ -152,6 +152,14 @@ interface TimelineActions {
   setSnapEnabled: (enabled: boolean) => void;
   setActiveSnapLines: (lines: SnapLine[]) => void;
   clearActiveSnapLines: () => void;
+
+  // In/Out point range
+  setInPoint: (time: number) => void;
+  setOutPoint: (time: number) => void;
+  clearInPoint: () => void;
+  clearOutPoint: () => void;
+  clearRange: () => void;
+  setInOutRange: (inTime: number, outTime: number) => void;
 }
 
 const initialState: TimelineState = {
@@ -175,6 +183,9 @@ const initialState: TimelineState = {
   snapEnabled: true,
   snapThreshold: 25,
   activeSnapLines: [],
+  // In/Out point range
+  inPoint: null,
+  outPoint: null,
 };
 
 /**
@@ -1696,6 +1707,35 @@ export const useTimelineStore = create<TimelineState & TimelineActions>()(
     setActiveSnapLines: (lines) => set({ activeSnapLines: lines }),
 
     clearActiveSnapLines: () => set({ activeSnapLines: [] }),
+
+    setInPoint: (time) => set((state) => {
+      if (state.inPoint === time) return state;
+      if (state.outPoint !== null && time >= state.outPoint) {
+        return { inPoint: time, outPoint: null };
+      }
+      return { inPoint: time };
+    }),
+
+    setOutPoint: (time) => set((state) => {
+      if (state.outPoint === time) return state;
+      if (state.inPoint !== null && time <= state.inPoint) {
+        return { outPoint: time, inPoint: null };
+      }
+      return { outPoint: time };
+    }),
+
+    clearInPoint: () => set((state) => state.inPoint === null ? state : { inPoint: null }),
+
+    clearOutPoint: () => set((state) => state.outPoint === null ? state : { outPoint: null }),
+
+    clearRange: () => set((state) =>
+      state.inPoint === null && state.outPoint === null ? state : { inPoint: null, outPoint: null }
+    ),
+
+    setInOutRange: (inTime, outTime) => {
+      if (outTime <= inTime) return;
+      set({ inPoint: inTime, outPoint: outTime });
+    },
   }))
 );
 

@@ -115,4 +115,8 @@ export interface TimelineState {
   snapEnabled: boolean;       // Global snap toggle
   snapThreshold: number;      // Snap threshold in pixels
   activeSnapLines: SnapLine[];  // Currently active snap lines for UI display
+
+  // In/Out point range (session state, not persisted in undo/redo)
+  inPoint: number | null;     // In point time (ms), null = not set
+  outPoint: number | null;    // Out point time (ms), null = not set
 }

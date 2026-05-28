@@ -5,8 +5,22 @@ import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { requestNativePreviewStepFrame, useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { redo, undo } from '@opendirector/core/stores/undoManager';
 import { isAnyModalOpen } from '../components/common/modal-state';
-import { getEffectiveFps } from '@opendirector/core/utils/time';
+import { getEffectiveFps, snapToFrame } from '@opendirector/core/utils/time';
 import { msToFrames, framesToMs } from '@opendirector/core/utils/time';
+
+function handleInOutShortcut(point: 'in' | 'out', altKey: boolean) {
+  const state = useTimelineStore.getState();
+  if (altKey) {
+    if (point === 'in') state.clearInPoint();
+    else state.clearOutPoint();
+  } else {
+    const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
+    const playheadTime = state.playhead;
+    const snapped = snapToFrame(playheadTime, fps);
+    if (point === 'in') state.setInPoint(snapped);
+    else state.setOutPoint(snapped);
+  }
+}
 
 export function useTimelineShortcuts() {
   const setToolMode = useTimelineStore((s) => s.setToolMode);
@@ -23,20 +37,17 @@ export function useTimelineShortcuts() {
   const pasteIndicator = useTimelineStore((s) => s.pasteIndicator);
   const toggleSnap = useTimelineStore((s) => s.toggleSnap);
 
-  // Use refs for primary selection state to avoid unnecessary callback rebuilds
   const primaryTypeRef = useRef(useSelectionStore.getState().primaryType);
   const primaryIdsRef = useRef<string[]>(useSelectionStore.getState().primaryIds);
   primaryTypeRef.current = useSelectionStore((s) => s.primaryType);
   primaryIdsRef.current = useSelectionStore((s) => s.primaryIds);
 
-  // Preview store for asset mode playback
   const previewMode = usePreviewStore((s) => s.mode);
   const assetType = usePreviewStore((s) => s.assetType);
   const togglePreviewPlayback = usePreviewStore((s) => s.togglePlayback);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // Ignore if typing in input/textarea
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
@@ -44,7 +55,6 @@ export function useTimelineShortcuts() {
         return;
       }
 
-      // Ignore all shortcuts when any modal is open
       if (isAnyModalOpen()) {
         return;
       }
@@ -56,13 +66,11 @@ export function useTimelineShortcuts() {
           if (isModKey) {
             e.preventDefault();
             if (e.shiftKey) {
-              // Ctrl/Cmd+Shift+Z: Redo
               const result = redo();
               if (result.changed) {
                 useProjectStore.getState().afterUndoRedo(result.currentSnapshot);
               }
             } else {
-              // Ctrl/Cmd+Z: Undo
               const result = undo();
               if (result.changed) {
                 useProjectStore.getState().afterUndoRedo(result.currentSnapshot);
@@ -73,7 +81,6 @@ export function useTimelineShortcuts() {
 
         case 'y':
           if (isModKey) {
-            // Ctrl/Cmd+Y: Redo
             e.preventDefault();
             const result = redo();
             if (result.changed) {
@@ -84,7 +91,6 @@ export function useTimelineShortcuts() {
 
         case 'a':
           if (isModKey) {
-            // Ctrl/Cmd+A: Select all
             e.preventDefault();
             const state = useTimelineStore.getState();
             const allFragmentIds = state.fragments.map(f => f.id);
@@ -103,8 +109,19 @@ export function useTimelineShortcuts() {
           setToolMode('razor');
           break;
 
+        case 'i':
+          if (isModKey) break;
+          e.preventDefault();
+          handleInOutShortcut('in', e.altKey);
+          break;
+
+        case 'o':
+          if (isModKey) break;
+          e.preventDefault();
+          handleInOutShortcut('out', e.altKey);
+          break;
+
         case 'n':
-          // Toggle snap
           e.preventDefault();
           toggleSnap();
           break;
@@ -115,7 +132,6 @@ export function useTimelineShortcuts() {
 
         case 'c':
           if (isModKey) {
-            // Ctrl/Cmd+C: Copy
             e.preventDefault();
             copySelection();
           }
@@ -123,7 +139,6 @@ export function useTimelineShortcuts() {
 
         case 'v':
           if (isModKey) {
-            // Ctrl/Cmd+V: Paste
             e.preventDefault();
             pasteFromClipboard();
           }
@@ -131,7 +146,6 @@ export function useTimelineShortcuts() {
 
         case 'x':
           if (isModKey) {
-            // Ctrl/Cmd+X: Cut
             e.preventDefault();
             cutSelection();
           }
@@ -139,9 +153,7 @@ export function useTimelineShortcuts() {
 
         case ' ':
           e.preventDefault();
-          // Route spacebar to appropriate playback based on preview mode
           if (previewMode === 'asset' || previewMode === 'reference') {
-            // Block play/pause for image assets
             if (assetType !== 'image') {
               togglePreviewPlayback();
             }
@@ -174,7 +186,6 @@ export function useTimelineShortcuts() {
         }
 
         case 'escape':
-          // Cancel current operation
           if (selectionBox) {
             cancelSelectionBox();
           } else if (draftFragment) {
@@ -183,26 +194,28 @@ export function useTimelineShortcuts() {
             useTimelineStore.getState().clearPasteIndicator();
           } else if (primaryIdsRef.current.length > 0) {
             useSelectionStore.getState().clear();
+          } else {
+            const { inPoint, outPoint } = useTimelineStore.getState();
+            if (inPoint !== null || outPoint !== null) {
+              useTimelineStore.getState().clearRange();
+            }
           }
           break;
 
         case '+':
         case '=':
-          // Zoom in with + or = key
           e.preventDefault();
           zoomIn();
           break;
 
         case '-':
         case '_':
-          // Zoom out with - or _ key
           e.preventDefault();
           zoomOut();
           break;
 
         case 'delete':
         case 'backspace':
-          // Delete selected items using batch delete
           e.preventDefault();
           if (primaryTypeRef.current === 'fragment' && primaryIdsRef.current.length > 0) {
             useTimelineStore.getState().deleteFragments(primaryIdsRef.current);

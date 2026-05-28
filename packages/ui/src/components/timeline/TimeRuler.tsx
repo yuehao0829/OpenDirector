@@ -9,7 +9,6 @@ interface TimeRulerProps {
   zoom: number;
   scrollX: number;
   viewportWidth?: number;
-  onClick?: (e: React.MouseEvent) => void;
   fps?: number;
 }
 
@@ -29,7 +28,7 @@ function calculateInterval(zoom: number): number {
   return 1800000;                      // 30 minute intervals
 }
 
-export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick, fps }: TimeRulerProps) {
+export function TimeRuler({ width, zoom, scrollX, viewportWidth, fps }: TimeRulerProps) {
   const effectiveFps = getEffectiveFps(fps);
   const interval = calculateInterval(zoom);
   const marks: number[] = [];
@@ -66,7 +65,6 @@ export function TimeRuler({ width, zoom, scrollX, viewportWidth, onClick, fps }:
       className="bg-zinc-900 border-b border-zinc-800 relative overflow-hidden cursor-pointer"
       style={{ height: TIME_RULER_HEIGHT, width: outerWidth }}
       data-testid="time-ruler"
-      onClick={onClick}
     >
       <div
         className="absolute top-0 h-full"

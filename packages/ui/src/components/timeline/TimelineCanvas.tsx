@@ -3,15 +3,15 @@ import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import type { Fragment as FragmentType, SnapLine } from '@opendirector/core/types/timeline';
-import { findNearestValidGroupDelta, findSnapPointsForDrag } from '@opendirector/core/utils/snap';
+import { findNearestValidGroupDelta, findSnapPointsForDrag, findSnapPoint, pixelDistanceToTime } from '@opendirector/core/utils/snap';
 import { pixelToTime } from '@opendirector/core/utils/timeline';
-import { getEffectiveFps } from '@opendirector/core/utils/time';
-import { snapToFrame } from '@opendirector/core/utils/time';
+import { getEffectiveFps, snapToFrame } from '@opendirector/core/utils/time';
 import { clsx } from 'clsx';
 import { Track } from './Track';
 import { TrackHeader } from './TrackHeader';
 import { PlayheadHandle, PlayheadLine } from './Playhead';
 import { TimeRuler } from './TimeRuler';
+import { InOutRange, InOutDimMask, MARKER_HIT_RADIUS, DRAG_START_THRESHOLD } from './InOutRange';
 import { Toolbar } from './Toolbar';
 import { SceneTrack } from './SceneTrack';
 import { DraftFragment } from './DraftFragment';
@@ -617,17 +617,136 @@ export function TimelineCanvas() {
     return pixelToTime(contentX, zoom);
   }, [zoom]);
 
-  // Handle click to move playhead (from ruler area)
-  const handleTimeRulerClick = (e: React.MouseEvent) => {
-    if (!rulerScrollRef.current) return;
+  // In/Out point ruler drag state
+  type InOutDragMode = 'range-select' | 'marker-drag';
+  const inOutDragRef = useRef<{
+    mode: InOutDragMode;
+    marker: 'in' | 'out' | null;
+    startX: number;
+    startTime: number;
+    started: boolean;  // true once drag distance threshold is exceeded
+  } | null>(null);
+
+  // Helper: find if click is near an in/out marker
+  const findHitMarker = useCallback((clientX: number): 'in' | 'out' | null => {
+    const state = useTimelineStore.getState();
+    const clickTime = clientXToTime(clientX, rulerScrollRef);
+    const hitRadius = pixelDistanceToTime(MARKER_HIT_RADIUS, zoom);
+
+    if (state.inPoint !== null && Math.abs(clickTime - state.inPoint) <= hitRadius) return 'in';
+    if (state.outPoint !== null && Math.abs(clickTime - state.outPoint) <= hitRadius) return 'out';
+    return null;
+  }, [clientXToTime, zoom]);
+
+  // Handle ruler mousedown: starts range selection or marker drag
+  const handleRulerMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only primary button
+    if (e.button !== 0) return;
+
+    const hitMarker = findHitMarker(e.clientX);
     const rawTime = clientXToTime(e.clientX, rulerScrollRef);
-    const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
-    const snappedTime = snapToFrame(Math.max(0, rawTime), fps);
-    if (isPlaying) {
-      pause();
+
+    if (hitMarker) {
+      // Marker drag mode
+      inOutDragRef.current = {
+        mode: 'marker-drag',
+        marker: hitMarker,
+        startX: e.clientX,
+        startTime: rawTime,
+        started: true,
+      };
+    } else {
+      // Range select mode — don't modify in/out yet, wait for drag threshold
+      inOutDragRef.current = {
+        mode: 'range-select',
+        marker: null,
+        startX: e.clientX,
+        startTime: rawTime,
+        started: false,
+      };
     }
-    setPlayhead(snappedTime);
-  };
+
+    e.preventDefault();
+  }, [findHitMarker, clientXToTime]);
+
+  // Helper: snap time to frame boundary and optionally to fragment/scene edges
+  const snapTime = useCallback((rawTime: number): number => {
+    const fps = getEffectiveFps(useProjectStore.getState().currentProject?.settings.fps);
+    let time = snapToFrame(Math.max(0, rawTime), fps);
+    const state = useTimelineStore.getState();
+    if (state.snapEnabled) {
+      const currentZoom = state.zoom;
+      const snapResult = findSnapPoint(time, {
+        playhead: state.getPlayheadRef(),
+        fragments: state.fragments,
+        scenes: state.scenes,
+      }, currentZoom, state.snapThreshold);
+      if (snapResult.snapLines.length > 0) {
+        time = snapResult.time;
+      }
+    }
+    return time;
+  }, []);
+
+  // Global mousemove/mouseup for ruler drag
+  useEffect(() => {
+    const handleRulerMouseMove = (e: MouseEvent) => {
+      const drag = inOutDragRef.current;
+      if (!drag) return;
+
+      const el = rulerScrollRef.current;
+      if (!el) return;
+
+      const rawTime = clientXToTime(e.clientX, { current: el } as React.RefObject<HTMLDivElement | null>);
+      const snappedTime = snapTime(rawTime);
+
+      if (drag.mode === 'marker-drag') {
+        const state = useTimelineStore.getState();
+        if (drag.marker === 'in') {
+          state.setInPoint(snappedTime);
+        } else {
+          state.setOutPoint(snappedTime);
+        }
+        return;
+      }
+
+      // Range select — only start setting in/out after drag threshold
+      if (!drag.started) {
+        if (Math.abs(e.clientX - drag.startX) < DRAG_START_THRESHOLD) return;
+        const startSnapped = snapTime(drag.startTime);
+        useTimelineStore.getState().setInOutRange(startSnapped, snappedTime);
+        drag.started = true;
+        return;
+      }
+
+      // Continue dragging: update out point
+      useTimelineStore.getState().setOutPoint(snappedTime);
+    };
+
+    const handleRulerMouseUp = (e: MouseEvent) => {
+      const drag = inOutDragRef.current;
+      if (!drag) return;
+
+      if (drag.mode === 'range-select' && !drag.started) {
+        const rawTime = clientXToTime(e.clientX, { current: rulerScrollRef.current } as React.RefObject<HTMLDivElement | null>);
+        const snappedTime = snapTime(rawTime);
+        if (isPlaying) {
+          pause();
+        }
+        setPlayhead(snappedTime);
+      }
+
+      inOutDragRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handleRulerMouseMove);
+    window.addEventListener('mouseup', handleRulerMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleRulerMouseMove);
+      window.removeEventListener('mouseup', handleRulerMouseUp);
+    };
+  }, [clientXToTime, snapTime, isPlaying, pause, setPlayhead]);
 
   // Helper: determine track from Y coordinate
   const getTrackIdAtY = useCallback((clientY: number): string | null => {
@@ -754,7 +873,8 @@ export function TimelineCanvas() {
     const isTimeRulerMouseDown =
       e.target instanceof HTMLElement && e.target.closest('[data-testid="time-ruler"]');
 
-    if (isTimeRulerMouseDown && !draftFragment) {
+    // Ruler mousedown is handled by handleRulerMouseDown
+    if (isTimeRulerMouseDown) {
       return;
     }
 
@@ -930,6 +1050,7 @@ export function TimelineCanvas() {
           className="overflow-x-auto overflow-y-hidden border-b border-zinc-800 min-w-0 min-h-0"
           style={{ scrollbarWidth: 'none' }}
           onContextMenu={handleRulerContextMenu}
+          onMouseDown={handleRulerMouseDown}
         >
           <div style={{ width: timelineWidth + viewportWidth, position: 'relative' }}>
             <PlayheadHandle x={playheadX} />
@@ -938,9 +1059,9 @@ export function TimelineCanvas() {
               zoom={zoom}
               scrollX={scroll.x}
               viewportWidth={viewportWidth}
-              onClick={handleTimeRulerClick}
               fps={projectFps}
             />
+            <InOutRange zoom={zoom} />
             <SceneTrack
               width={timelineWidth}
               zoom={zoom}
@@ -1035,6 +1156,9 @@ export function TimelineCanvas() {
                 onFragmentDragStart={handleFragmentDragStart}
               />
             ))}
+
+            {/* In/Out range dimming masks */}
+            <InOutDimMask zoom={zoom} />
 
             {/* Playhead line in content area */}
             <PlayheadLine x={playheadX} contentHeight={trackContentHeight} />

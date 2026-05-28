@@ -771,12 +771,18 @@ export async function exportTimelineRenderProject(): Promise<void> {
 
     project = await ensureProjectVideoSourceAudioMetadata(project);
 
+    const { inPoint, outPoint } = useTimelineStore.getState();
+    const rangeMs = (inPoint !== null && outPoint !== null)
+      ? { start: inPoint, end: outPoint }
+      : undefined;
+
     await tauriBridge.mediaApi.render(
       buildProjectTimelineRenderRequest({
         project,
         outputPath: filePath,
         outputFormat: resolveTimelineRenderOutputFormat(filePath),
         assetPathResolver: buildProjectAssetPathResolver(project),
+        rangeMs,
       }),
     );
 
