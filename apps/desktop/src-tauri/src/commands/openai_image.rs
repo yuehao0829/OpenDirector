@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::provider_key::get_credentials_internal;
-use super::util::{resolve_auth_mode, resolve_auth_query_key, MAX_DOWNLOAD_SIZE};
+use super::util::{AuthMode, resolve_auth_query_key, MAX_DOWNLOAD_SIZE};
 
 const DEFAULT_OPENAI_IMAGE_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 
@@ -66,8 +66,8 @@ async fn generate_image(
 ) -> Result<OpenAiImageGenerationResult, String> {
     let creds = get_credentials_internal(&params.provider_id, &params.password)?;
 
-    let auth_mode = resolve_auth_mode(creds.auth_mode.as_deref());
-    let use_query_auth = auth_mode == "query_param";
+    let auth_mode = creds.auth_mode.unwrap_or_default();
+    let use_query_auth = auth_mode == AuthMode::QueryParam;
 
     let api_key = creds.ark_api_key;
     if api_key.trim().is_empty() {

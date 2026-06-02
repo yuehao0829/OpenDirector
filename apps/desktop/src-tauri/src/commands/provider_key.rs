@@ -2,6 +2,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use super::util::AuthMode;
+
 /// Credentials stored encrypted in local file per provider.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Credentials {
@@ -14,10 +16,8 @@ pub struct Credentials {
     pub region: String,
     pub endpoint_id: Option<String>,
     pub base_url: Option<String>,
-    /// Authentication mode: "bearer" (default) or "query_param".
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auth_mode: Option<String>,
-    /// Query parameter name for API key when auth_mode is "query_param" (default: "ak").
+    pub auth_mode: Option<AuthMode>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auth_query_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,9 +129,9 @@ pub async fn validate_provider_credentials(
         }
     };
 
-    let auth_mode = super::util::resolve_auth_mode(creds.auth_mode.as_deref());
+    let auth_mode = creds.auth_mode.unwrap_or_default();
 
-    if auth_mode == "query_param" {
+    if auth_mode == AuthMode::QueryParam {
         let is_valid = !creds.ark_api_key.trim().is_empty();
         return Ok(CredentialValidation {
             valid: is_valid,

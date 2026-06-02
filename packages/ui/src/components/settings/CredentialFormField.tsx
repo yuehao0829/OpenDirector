@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
+import { Select } from '../common/Select';
 
 interface CredentialFormFieldProps {
   label: string;
@@ -81,15 +82,11 @@ export function CredentialFormField({
         <p className={`${size === 'xs' ? 'text-[11px]' : 'text-xs'} text-zinc-500`}>{description}</p>
       )}
       {isSelect ? (
-        <select
+        <Select
           value={value}
           onChange={(e) => onChange(fieldKey, e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-        >
-          {options?.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
+          options={options ?? []}
+        />
       ) : (
         <div className="relative">
           <input

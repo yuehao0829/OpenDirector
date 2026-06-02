@@ -1,6 +1,7 @@
 import type { AssetGroup } from '@opendirector/core/types/ai-video';
 import { ChevronDown, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Select } from '../common/Select';
 
 interface AssetGroupSelectorProps {
   groups: AssetGroup[];
@@ -31,22 +32,19 @@ export function AssetGroupSelector({
       <div className="flex items-center gap-2">
         {groups.length > 0 ? (
           <div className="relative flex-1">
-            <select
+            <Select
               value={selectedGroupId}
               onChange={(e) => {
                 const gid = e.target.value;
                 const group = groups.find((g) => g.group_id === gid);
                 onGroupChange(gid, group?.name ?? '');
               }}
-              className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded-lg pl-3 pr-8 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="">{t('settings.provider.assetGroupOption')}</option>
-              {groups.map((g) => (
-                <option key={g.group_id} value={g.group_id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: t('settings.provider.assetGroupOption') },
+                ...groups.map((g) => ({ value: g.group_id, label: g.name })),
+              ]}
+              className="appearance-none pl-3 pr-8 cursor-pointer"
+            />
             <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
           </div>
         ) : (

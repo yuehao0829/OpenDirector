@@ -4,20 +4,21 @@ pub(crate) const DEFAULT_REGION: &str = "cn-beijing";
 /// Maximum download size for generated videos (500 MB).
 pub(crate) const MAX_DOWNLOAD_SIZE: u64 = 500 * 1024 * 1024;
 
+/// Authentication mode for API requests.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum AuthMode {
+    #[default]
+    #[serde(rename = "bearer")]
+    Bearer,
+    #[serde(rename = "query_param")]
+    QueryParam,
+}
+
 /// Strip `https://` or `http://` scheme prefix from a URL, returning the host+path portion.
 pub(crate) fn strip_url_scheme(url: &str) -> &str {
     url.strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url)
-}
-
-/// Returns `"query_param"` if explicitly set; defaults to `"bearer"`.
-pub(crate) fn resolve_auth_mode(auth_mode: Option<&str>) -> &str {
-    auth_mode
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.eq_ignore_ascii_case("query_param"))
-        .map(|_| "query_param")
-        .unwrap_or("bearer")
 }
 
 /// Defaults to `"ak"`.

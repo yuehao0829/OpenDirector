@@ -7,6 +7,7 @@ import type { AssetGroup } from '@opendirector/core/types/ai-video';
 import type { CredentialFieldDef, ModelConfigFieldDef } from '@opendirector/core/types/provider-system';
 import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
+import { Select } from '../common/Select';
 import { Button } from '../common/Button';
 import { CredentialFormField } from './CredentialFormField';
 import { AssetGroupSelector } from './AssetGroupSelector';
@@ -368,23 +369,13 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           </div>
         )}
 
-        {/* Vendor selection */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-zinc-300">{t('settings.provider.vendor')}</label>
-          <select
-            value={selectedTypeId}
-            onChange={(e) => handleTypeChange(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white text-sm
-              focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
-            <option value="" disabled>{t('settings.provider.chooseVendor')}</option>
-            {allTypes.map((t) => (
-              <option key={t.typeId} value={t.typeId}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <Select
+          label={t('settings.provider.vendor')}
+          value={selectedTypeId}
+          onChange={(e) => handleTypeChange(e.target.value)}
+          options={allTypes.map((t) => ({ value: t.typeId, label: t.name }))}
+          placeholder={t('settings.provider.chooseVendor')}
+        />
 
         {/* Display name */}
         {selectedType && (
