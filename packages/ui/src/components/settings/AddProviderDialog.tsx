@@ -289,6 +289,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
         } else if (selectedType.typeId === BUILTIN_TYPE_IDS.SEEDANCE || selectedType.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
           const encPassword = await tauriBridge.providerKey.saveApiCredentials(
             instance.instanceId, credentials.apiKey, credentials.base_url,
+            credentials.auth_mode, credentials.auth_query_key,
           );
           useProviderInstanceStore.getState().updateInstance(instance.instanceId, {
             config: { ...config, _encPassword: encPassword, apiKey: '' },
@@ -354,6 +355,9 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
   const tosFields = credFields.filter((f) => f.section === 'tos');
   const assetFields = credFields.filter((f) => f.section === 'asset' && f.type !== 'hidden');
 
+  const basicFields = credFields.filter((f) => !f.advanced);
+  const advancedFields = credFields.filter((f) => f.advanced);
+
   return (
     <Modal isOpen={isOpen} onClose={handleCancel} title={t('settings.provider.addTitle')}>
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
@@ -404,6 +408,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
                     label={field.label}
                     fieldKey={field.key}
                     type={field.type}
+                    options={field.options}
                     value={credentials[field.key] ?? ''}
                     onChange={handleCredentialChange}
                     placeholder={field.placeholder}
@@ -424,6 +429,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
                       label={field.label}
                       fieldKey={field.key}
                       type={field.type}
+                      options={field.options}
                       value={credentials[field.key] ?? ''}
                       onChange={handleCredentialChange}
                       placeholder={field.placeholder}
@@ -445,6 +451,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
                       label={field.label}
                       fieldKey={field.key}
                       type={field.type}
+                      options={field.options}
                       value={credentials[field.key] ?? ''}
                       onChange={handleCredentialChange}
                       placeholder={field.placeholder}
@@ -476,22 +483,45 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
         {/* Non-sectioned declarative credential fields (seedance, etc.) */}
         {selectedType && !hasSections && hasDeclarativeFields && (
-          <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
-            {credFields.map((field) => (
-              <CredentialFormField
-                key={field.key}
-                label={field.label}
-                fieldKey={field.key}
-                type={field.type}
-                value={credentials[field.key] ?? ''}
-                onChange={handleCredentialChange}
-                placeholder={field.placeholder}
-                description={field.description}
-                required={field.required}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
+              <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
+              {basicFields.map((field) => (
+                <CredentialFormField
+                  key={field.key}
+                  label={field.label}
+                  fieldKey={field.key}
+                  type={field.type}
+                  options={field.options}
+                  value={credentials[field.key] ?? ''}
+                  onChange={handleCredentialChange}
+                  placeholder={field.placeholder}
+                  description={field.description}
+                  required={field.required}
+                />
+              ))}
+            </div>
+            {advancedFields.length > 0 && (
+              <Panel title={t('settings.provider.advancedOptions')} defaultCollapsed collapsible>
+                <div className="space-y-3">
+                  {advancedFields.map((field) => (
+                    <CredentialFormField
+                      key={field.key}
+                      label={field.label}
+                      fieldKey={field.key}
+                      type={field.type}
+                      options={field.options}
+                      value={credentials[field.key] ?? ''}
+                      onChange={handleCredentialChange}
+                      placeholder={field.placeholder}
+                      description={field.description}
+                      required={field.required}
+                    />
+                  ))}
+                </div>
+              </Panel>
+            )}
+          </>
         )}
 
         {/* Per-model config fields */}

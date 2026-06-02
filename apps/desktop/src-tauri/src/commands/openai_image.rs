@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::provider_key::get_credentials_internal;
-use super::util::MAX_DOWNLOAD_SIZE;
+use super::util::{resolve_auth_mode, resolve_auth_query_key, MAX_DOWNLOAD_SIZE};
 
 const DEFAULT_OPENAI_IMAGE_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 
@@ -65,11 +65,16 @@ async fn generate_image(
     params: OpenAiImageGenerationParams,
 ) -> Result<OpenAiImageGenerationResult, String> {
     let creds = get_credentials_internal(&params.provider_id, &params.password)?;
-    let endpoint = normalize_images_endpoint(creds.base_url.as_deref())?;
+
+    let auth_mode = resolve_auth_mode(creds.auth_mode.as_deref());
+    let use_query_auth = auth_mode == "query_param";
+
     let api_key = creds.ark_api_key;
     if api_key.trim().is_empty() {
         return Err("OpenAI API key is empty".to_string());
     }
+
+    let endpoint = normalize_images_endpoint(creds.base_url.as_deref())?;
 
     let output_format = params
         .output_format
@@ -95,10 +100,18 @@ async fn generate_image(
         payload["output_compression"] = serde_json::json!(compression);
     }
 
-    let resp = client
-        .post(endpoint)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
+    let mut req = client
+        .post(&endpoint)
+        .header("Content-Type", "application/json");
+
+    if use_query_auth {
+        let query_key = resolve_auth_query_key(creds.auth_query_key.as_deref());
+        req = req.query(&[(query_key, &api_key)]);
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let resp = req
         .json(&payload)
         .send()
         .await
@@ -179,6 +192,7 @@ fn normalize_images_endpoint(raw: Option<&str>) -> Result<String, String> {
     };
 
     let trimmed = with_scheme.trim_end_matches('/');
+
     if trimmed.ends_with("/images/generations") {
         Ok(trimmed.to_string())
     } else {

@@ -618,11 +618,12 @@ export interface ModelFamily {
 export interface CredentialFieldDef {
   key: string;
   label: string;
-  type: 'text' | 'url' | 'password' | 'hidden';
+  type: 'text' | 'url' | 'password' | 'hidden' | 'select';
   required?: boolean;
   placeholder?: string;
   defaultValue?: string;
   description?: string;
+  options?: Array<{ value: string; label: string }>;
   /** true = 放入高级选项折叠区 */
   advanced?: boolean;
   /** Section grouping for provider config UI */

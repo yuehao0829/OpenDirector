@@ -152,6 +152,8 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         if (apiKeyWasMasked) {
           const updates: Record<string, unknown> = {};
           if (config.base_url !== undefined) updates.base_url = config.base_url;
+          if (credentials.auth_mode !== undefined) updates.auth_mode = credentials.auth_mode;
+          if (credentials.auth_query_key !== undefined) updates.auth_query_key = credentials.auth_query_key;
 
           if (Object.keys(updates).length > 0) {
             const newEncPassword = await tauriBridge.providerKey.updateCredentials(
@@ -162,6 +164,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
         } else {
           const newEncPassword = await tauriBridge.providerKey.saveApiCredentials(
               instance.instanceId, credentials.apiKey, config.base_url ?? '',
+              credentials.auth_mode, credentials.auth_query_key,
             );
           config._encPassword = newEncPassword;
           config.apiKey = '';
@@ -247,12 +250,14 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
   const modelFields = typeDef.modelConfigFields ?? [];
   const hasDeclarativeFields = credFields.length > 0 || modelFields.length > 0;
 
-  // Check if the type uses sections (like volcengine)
   const hasSections = credFields.some((f) => f.section);
 
   const commonFields = credFields.filter((f) => f.section === 'common' || (!f.section && f.type !== 'hidden'));
   const tosFields = credFields.filter((f) => f.section === 'tos');
   const assetFields = credFields.filter((f) => f.section === 'asset' && f.type !== 'hidden');
+
+  const basicFields = credFields.filter((f) => !f.advanced);
+  const advancedFields = credFields.filter((f) => f.advanced);
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title={t('settings.provider.editTitle')}>
@@ -282,6 +287,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
                     label={field.label}
                     fieldKey={field.key}
                     type={field.type}
+                    options={field.options}
                     value={credentials[field.key] ?? ''}
                     onChange={handleCredentialChange}
                     masked
@@ -304,6 +310,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
                       label={field.label}
                       fieldKey={field.key}
                       type={field.type}
+                      options={field.options}
                       value={credentials[field.key] ?? ''}
                       onChange={handleCredentialChange}
                       masked
@@ -327,6 +334,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
                       label={field.label}
                       fieldKey={field.key}
                       type={field.type}
+                      options={field.options}
                       value={credentials[field.key] ?? ''}
                       onChange={handleCredentialChange}
                       masked
@@ -359,24 +367,49 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
 
         {/* Non-sectioned declarative credential fields */}
         {!hasSections && hasDeclarativeFields && (
-          <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-            <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
-            {credFields.map((field) => (
-              <CredentialFormField
-                key={field.key}
-                label={field.label}
-                fieldKey={field.key}
-                type={field.type}
-                value={credentials[field.key] ?? ''}
-                onChange={handleCredentialChange}
-                masked
-                configured={hasEncPassword}
-                placeholder={field.placeholder}
-                description={field.description}
-                required={field.required}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
+              <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
+              {basicFields.map((field) => (
+                <CredentialFormField
+                  key={field.key}
+                  label={field.label}
+                  fieldKey={field.key}
+                  type={field.type}
+                  options={field.options}
+                  value={credentials[field.key] ?? ''}
+                  onChange={handleCredentialChange}
+                  masked
+                  configured={hasEncPassword}
+                  placeholder={field.placeholder}
+                  description={field.description}
+                  required={field.required}
+                />
+              ))}
+            </div>
+            {advancedFields.length > 0 && (
+              <Panel title={t('settings.provider.advancedOptions')} defaultCollapsed collapsible>
+                <div className="space-y-3">
+                  {advancedFields.map((field) => (
+                    <CredentialFormField
+                      key={field.key}
+                      label={field.label}
+                      fieldKey={field.key}
+                      type={field.type}
+                      options={field.options}
+                      value={credentials[field.key] ?? ''}
+                      onChange={handleCredentialChange}
+                      masked
+                      configured={hasEncPassword}
+                      placeholder={field.placeholder}
+                      description={field.description}
+                      required={field.required}
+                    />
+                  ))}
+                </div>
+              </Panel>
+            )}
+          </>
         )}
 
         {/* Per-model config fields */}

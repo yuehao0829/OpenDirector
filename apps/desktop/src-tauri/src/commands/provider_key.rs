@@ -14,6 +14,12 @@ pub struct Credentials {
     pub region: String,
     pub endpoint_id: Option<String>,
     pub base_url: Option<String>,
+    /// Authentication mode: "bearer" (default) or "query_param".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auth_mode: Option<String>,
+    /// Query parameter name for API key when auth_mode is "query_param" (default: "ak").
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auth_query_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tos_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,7 +113,7 @@ pub fn delete_provider_credentials(provider_id: String) -> Result<(), String> {
 
 /// Read and decrypt credentials from local file (internal use only).
 
-/// Validate credentials by testing the ARK API Key with a lightweight API call.
+/// Validate credentials by testing the API Key with a lightweight API call.
 #[tauri::command]
 pub async fn validate_provider_credentials(
     provider_id: String,
@@ -122,6 +128,20 @@ pub async fn validate_provider_credentials(
             });
         }
     };
+
+    let auth_mode = super::util::resolve_auth_mode(creds.auth_mode.as_deref());
+
+    if auth_mode == "query_param" {
+        let is_valid = !creds.ark_api_key.trim().is_empty();
+        return Ok(CredentialValidation {
+            valid: is_valid,
+            message: if is_valid {
+                "Credentials saved".to_string()
+            } else {
+                "API key is empty".to_string()
+            },
+        });
+    }
 
     let base_url = creds
         .base_url

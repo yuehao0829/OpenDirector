@@ -11,6 +11,23 @@ pub(crate) fn strip_url_scheme(url: &str) -> &str {
         .unwrap_or(url)
 }
 
+/// Returns `"query_param"` if explicitly set; defaults to `"bearer"`.
+pub(crate) fn resolve_auth_mode(auth_mode: Option<&str>) -> &str {
+    auth_mode
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.eq_ignore_ascii_case("query_param"))
+        .map(|_| "query_param")
+        .unwrap_or("bearer")
+}
+
+/// Defaults to `"ak"`.
+pub(crate) fn resolve_auth_query_key(auth_query_key: Option<&str>) -> &str {
+    auth_query_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("ak")
+}
+
 /// Validate and canonicalize a file path.
 /// Rejects non-absolute paths; returns the resolved `PathBuf`.
 pub(crate) fn validate_local_path(file_path: &str) -> Result<std::path::PathBuf, String> {

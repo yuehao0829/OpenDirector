@@ -52,10 +52,11 @@ function buildEffectivePrompt(
   basePrompt: string,
   genParams: Pick<GenerationParamsValue, 'enableAudio' | 'enableMusic' | 'enableSubtitle'>,
   translate: (key: string, options?: Record<string, unknown>) => string,
+  capabilityParams?: CapabilityParams,
 ): string {
   const hints: string[] = [];
-  if (isMusicSuppressed(genParams)) hints.push(translate('inspector.promptHints.noMusic'));
-  if (!genParams.enableSubtitle) hints.push(translate('inspector.promptHints.noSubtitle'));
+  if (capabilityParams?.enableMusic && isMusicSuppressed(genParams)) hints.push(translate('inspector.promptHints.noMusic'));
+  if (capabilityParams?.enableSubtitle && !genParams.enableSubtitle) hints.push(translate('inspector.promptHints.noSubtitle'));
   return hints.length > 0 ? basePrompt + '\n' + hints.join('\n') : basePrompt;
 }
 
@@ -502,7 +503,7 @@ export function FragmentInspector() {
         : undefined;
 
     getGenerationService().submitTask(selectedFragment.id, effectiveInstanceId, effectiveModelId, {
-      prompt: buildEffectivePrompt(selectedFragment.prompt, genParams, t),
+      prompt: buildEffectivePrompt(selectedFragment.prompt, genParams, t, capabilityParams),
       references: selectedFragment.references,
       duration: genDuration,
       aspectRatio: genParams.aspectRatio,
@@ -726,7 +727,7 @@ function PreviewModeContent({
       enableAudio: genParams.enableAudio,
       enableMusic: genParams.enableMusic,
       enableSubtitle: genParams.enableSubtitle,
-    }, t);
+    }, t, capabilityParams);
 
     return parsePromptLabels(
       effectivePrompt,
@@ -750,11 +751,15 @@ function PreviewModeContent({
     genParams.enableAudio,
     genParams.enableMusic,
     genParams.enableSubtitle,
+    capabilityParams,
     t,
   ]);
 
   const isAudio = trackType === 'audio';
   const isImage = capabilityParams ? isImageModel(capabilityParams) : false;
+  const showMusicHint = capabilityParams?.enableMusic && isMusicSuppressed(genParams);
+  const showSubtitleHint = capabilityParams?.enableSubtitle && !genParams.enableSubtitle;
+  const hasConstraintHints = showMusicHint || showSubtitleHint || firstFrameAsReference;
 
   // Scene references provide shared context across fragments in the same scene
   const sceneRefAssets = useMemo((): Asset[] => {
@@ -786,10 +791,10 @@ function PreviewModeContent({
         </div>
       )}
 
-      {!isAudio && (isMusicSuppressed(genParams) || !genParams.enableSubtitle || firstFrameAsReference) && (
+      {!isAudio && hasConstraintHints && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-xs text-amber-400/80">
-          {isMusicSuppressed(genParams) && <div>{t('inspector.promptHints.musicDisabled')}</div>}
-          {!genParams.enableSubtitle && <div>{t('inspector.promptHints.subtitleDisabled')}</div>}
+          {showMusicHint && <div>{t('inspector.promptHints.musicDisabled')}</div>}
+          {showSubtitleHint && <div>{t('inspector.promptHints.subtitleDisabled')}</div>}
           {firstFrameAsReference && (
             <div>
               {t('inspector.promptHints.firstFrameAsReference', {

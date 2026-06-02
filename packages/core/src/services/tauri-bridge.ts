@@ -120,6 +120,8 @@ export const providerKey = {
     providerId: string,
     apiKey: string,
     baseUrl: string,
+    authMode?: string,
+    authQueryKey?: string,
   ): Promise<string> {
     const password = generateRandomHexPassword();
 
@@ -129,6 +131,8 @@ export const providerKey = {
       sk: '',
       region: '',
       base_url: baseUrl,
+      auth_mode: authMode,
+      auth_query_key: authQueryKey,
     };
 
     await this.save(providerId, credentials, password);

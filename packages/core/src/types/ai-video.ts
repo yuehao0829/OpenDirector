@@ -12,6 +12,8 @@ export interface ProviderCredentials {
   region: string;
   endpoint_id?: string;
   base_url?: string;
+  auth_mode?: string;
+  auth_query_key?: string;
   tos_endpoint?: string;
   tos_bucket?: string;
   asset_endpoint?: string;

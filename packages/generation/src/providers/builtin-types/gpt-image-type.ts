@@ -63,14 +63,36 @@ export function createGptImageTypeDefinition(): ProviderTypeDefinition {
         type: 'url',
         placeholder: 'https://api.openai.com/v1/images/generations',
         defaultValue: 'https://api.openai.com/v1/images/generations',
-        description: 'You can also enter https://api.openai.com/v1.',
+        description: 'OpenAI-compatible endpoint, or a third-party proxy URL.',
       },
       {
         key: 'apiKey',
         label: 'API Key',
         type: 'password',
         required: true,
-        placeholder: 'OpenAI API Key',
+        placeholder: 'API Key',
+      },
+      {
+        key: 'auth_mode',
+        label: 'Auth Mode',
+        type: 'select',
+        defaultValue: 'bearer',
+        advanced: true,
+        options: [
+          { value: 'bearer', label: 'Bearer Token' },
+          { value: 'query_param', label: 'Query Parameter' },
+        ],
+        description:
+          'Bearer: API key sent in Authorization header. Query Parameter: API key appended to URL as a query string.',
+      },
+      {
+        key: 'auth_query_key',
+        label: 'Query Key',
+        type: 'text',
+        defaultValue: 'ak',
+        advanced: true,
+        placeholder: 'ak',
+        description: 'Query parameter name for the API key (only used when Auth Mode is Query Parameter).',
       },
     ],
     modelFamilies: [
