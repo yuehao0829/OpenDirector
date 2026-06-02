@@ -4,7 +4,7 @@ import type { DraftFragment as DraftFragmentType } from '@opendirector/core/type
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { TRACK_HEIGHT } from './constants';
-import { parseAssetDragData, isDragCompatibleWithTrack, buildReferencesFromDragData } from './drag-types';
+import { parseAssetDragData, isDragCompatibleWithTrack, resolveDropSource } from './drag-types';
 
 const DRAFT_THEME = {
   video: {
@@ -63,8 +63,8 @@ export function DraftFragment({ draft, zoom, scrollX, visualY }: DraftFragmentPr
     const dragData = parseAssetDragData(e.dataTransfer);
     if (!dragData || !isDragCompatibleWithTrack(dragData.type, trackType)) return;
 
-    const references = buildReferencesFromDragData(dragData);
-    confirmDraftFragment(dragData.name, references);
+    const { sourceAssetId, references } = resolveDropSource(dragData);
+    confirmDraftFragment(dragData.name, references, sourceAssetId);
   };
 
   // Visual position formula (content coordinates, no header/offset):

@@ -90,6 +90,17 @@ export function buildReferencesFromDragData(
     }));
 }
 
+/** Resolve sourceAssetId and references for a drop operation.
+ *  Single-asset drop: primary asset becomes sourceAssetId, excluded from references.
+ *  Multi-asset drop: no sourceAssetId, all assets become references. */
+export function resolveDropSource(dragData: AssetDragData) {
+  const isMultiDrop = !!dragData.additionalAssets?.length;
+  return {
+    sourceAssetId: isMultiDrop ? undefined : dragData.id,
+    references: buildReferencesFromDragData(dragData, isMultiDrop ? undefined : [dragData.id]),
+  };
+}
+
 function resolvePositiveDuration(...durations: Array<number | undefined>): number | undefined {
   return durations.find((duration) => (duration ?? 0) > 0);
 }

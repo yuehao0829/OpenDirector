@@ -13,7 +13,7 @@ import { findSnapPoint } from '@opendirector/core/utils/snap';
 import { Fragment as FragmentComponent } from './Fragment';
 import { clsx } from 'clsx';
 import { TRACK_HEIGHT } from './constants';
-import { parseAssetDragData, isDragCompatibleWithTrack, buildReferencesFromDragData, resolveDroppedFragmentDuration } from './drag-types';
+import { parseAssetDragData, isDragCompatibleWithTrack, resolveDroppedFragmentDuration, resolveDropSource } from './drag-types';
 
 interface TrackProps {
   track: TrackType;
@@ -157,14 +157,16 @@ export function Track({ track, fragments, zoom, width, scrollX, viewportWidth, o
       return;
     }
 
+    const { sourceAssetId, references } = resolveDropSource(dragData);
+
     addFragment({
       id: `fragment-${Date.now()}`,
       trackId: track.id,
       start: dropTime,
       duration,
       prompt: '',
-      references: buildReferencesFromDragData(dragData),
-      sourceAssetId: dragData.additionalAssets?.length ? undefined : (dragData.type === 'image' ? undefined : dragData.id),
+      references,
+      sourceAssetId,
       status: 'draft',
       createdAt: new Date(),
       updatedAt: new Date(),
