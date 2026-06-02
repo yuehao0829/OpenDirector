@@ -20,6 +20,8 @@ import type {
   MultiProviderImportEntry,
   StartGenerationParams,
   PendingGenerationTask,
+  OpenAiImageGenerationParams,
+  OpenAiImageGenerationResult,
 } from '../types/ai-video';
 import type { FileUploadResult } from '../types/asset-provider';
 import type {
@@ -113,16 +115,16 @@ export const providerKey = {
     return password;
   },
 
-  /** Save Seedance credentials: generate random password, encrypt and write .enc, return password */
-  async saveSeedanceCredentials(
+  /** Save API-key credentials (Seedance, OpenAI Image, etc.): generate random password, encrypt and write .enc, return password */
+  async saveApiCredentials(
     providerId: string,
-    arkApiKey: string,
+    apiKey: string,
     baseUrl: string,
   ): Promise<string> {
     const password = generateRandomHexPassword();
 
     const credentials: ProviderCredentials = {
-      ark_api_key: arkApiKey,
+      ark_api_key: apiKey,
       ak: '',
       sk: '',
       region: '',
@@ -295,6 +297,12 @@ export const seedanceApi = {
   /** Batch query task statuses from the ARK API */
   batchQueryTasks(providerId: string, password: string, taskIds: string[]): Promise<TaskStatusResult[]> {
     return invoke('seedance_batch_query_tasks', { providerId, password, taskIds });
+  },
+};
+
+export const openAIImageApi = {
+  generateImage(params: OpenAiImageGenerationParams): Promise<OpenAiImageGenerationResult> {
+    return invoke('openai_generate_image', { params });
   },
 };
 
@@ -504,6 +512,7 @@ export const tauriBridge = {
   providerKey,
   providerConfig,
   seedanceApi,
+  openAIImageApi,
   tosApi,
   assetTaskApi,
   mediaApi,

@@ -290,6 +290,11 @@ export const resources = {
         duration: '时长: {{value}}',
         adaptive: '自适应',
         secondsContinuousShort: '{{seconds}}s (连续)',
+        imageOutputCompression: '压缩',
+        imageQuality: '质量',
+        imageOutputFormat: '格式',
+        imageBackground: '背景',
+        imageModeration: '内容审核',
       },
       assetPanel: {
         tabs: {
@@ -767,6 +772,11 @@ export const resources = {
         duration: 'Duration: {{value}}',
         adaptive: 'Adaptive',
         secondsContinuousShort: '{{seconds}}s (cont.)',
+        imageOutputCompression: 'Compression',
+        imageQuality: 'Quality',
+        imageOutputFormat: 'Format',
+        imageBackground: 'Background',
+        imageModeration: 'Moderation',
       },
       assetPanel: {
         tabs: {

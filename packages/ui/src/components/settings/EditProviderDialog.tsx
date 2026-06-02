@@ -146,7 +146,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
     if (isVolcengine) setValidating(true);
 
     try {
-      if (typeDef?.typeId === BUILTIN_TYPE_IDS.SEEDANCE) {
+      if (typeDef?.typeId === BUILTIN_TYPE_IDS.SEEDANCE || typeDef?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
         const apiKeyWasMasked = !credentials.apiKey?.trim() && (hasEncPassword || !!originalConfig.apiKey?.trim());
 
         if (apiKeyWasMasked) {
@@ -160,9 +160,9 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
             config._encPassword = newEncPassword;
           }
         } else {
-          const newEncPassword = await tauriBridge.providerKey.saveSeedanceCredentials(
-            instance.instanceId, credentials.apiKey, config.base_url ?? '',
-          );
+          const newEncPassword = await tauriBridge.providerKey.saveApiCredentials(
+              instance.instanceId, credentials.apiKey, config.base_url ?? '',
+            );
           config._encPassword = newEncPassword;
           config.apiKey = '';
         }

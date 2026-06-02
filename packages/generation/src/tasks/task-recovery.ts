@@ -31,7 +31,9 @@ import {
   getDb,
   getProviderPassword,
   buildGeneratedAsset,
+  generatedImagePath,
   generatedVideoPath,
+  mimeTypeToExtension,
 } from './generation-xml-repository';
 import { handleTaskComplete, markRecordTerminal, triggerNextSegmentIfNeeded } from './task-lifecycle';
 import { resetFragmentIfGenerating } from './fragment-utils';
@@ -493,39 +495,39 @@ async function reconcileCompletedGenerations(
     const assetMissing = record.resultAssetId ? !assetIdSet.has(record.resultAssetId) : true;
     if (!needsFragmentFix && !assetMissing) continue;
 
-    const videoRelPath = generatedVideoPath(record.id);
-    const videoAbsPath = `${folderPath}/${videoRelPath}`;
+    const mediaRelPath = resolveGeneratedMediaPath(record);
+    const mediaAbsPath = `${folderPath}/${mediaRelPath}`;
     const idx = recordIndex.get(record.id);
+    const isImageOutput = record.outputType === 'image';
 
-    // Try to read metadata directly — avoids TOCTOU from fs.exists()
-    const metadataResult = await fs.getMediaMetadata(videoAbsPath).catch(() => null);
+    const mediaInfo = await readGeneratedMediaInfo(record, mediaAbsPath, fs);
 
-    if (metadataResult !== null) {
+    if (mediaInfo !== null) {
       const assetId = generateId();
       const [thumbnailSettled] = await Promise.allSettled([
-        generateThumbnailForAsset(videoAbsPath, fs, 'video', folderPath, assetId),
+        generateThumbnailForAsset(mediaAbsPath, fs, isImageOutput ? 'image' : 'video', folderPath, assetId),
       ]);
       const thumbnailUrl = thumbnailSettled.status === 'fulfilled' ? thumbnailSettled.value?.thumbnailUrl : undefined;
 
-      const [fileSizeResult] = await Promise.allSettled([fs.getFileSize(videoAbsPath)]);
-      const fileSize = fileSizeResult.status === 'fulfilled' ? fileSizeResult.value : 0;
-
-      const webviewUrl = toWebViewUrl(videoAbsPath);
+      const webviewUrl = toWebViewUrl(mediaAbsPath);
       const project = useProjectStore.getState().currentProject;
 
       const asset = buildGeneratedAsset({
         taskId: record.id,
         assetId,
-        relativePath: videoRelPath,
-        fileSize,
+        relativePath: mediaRelPath,
+        fileSize: mediaInfo.fileSize,
         videoUrl: webviewUrl,
         thumbnailUrl,
-        duration: metadataResult.duration,
-        width: metadataResult.width,
-        height: metadataResult.height,
-        audioChannels: metadataResult.audioChannels,
-        sampleRate: metadataResult.sampleRate,
+        duration: isImageOutput ? undefined : mediaInfo.duration,
+        width: mediaInfo.width,
+        height: mediaInfo.height,
+        audioChannels: isImageOutput ? undefined : mediaInfo.audioChannels,
+        sampleRate: isImageOutput ? undefined : mediaInfo.sampleRate,
         projectId: project?.id ?? '',
+        outputType: isImageOutput ? 'image' : 'video',
+        mimeType: isImageOutput ? (record.result?.mimeType ?? 'image/jpeg') : undefined,
+        fileExtension: isImageOutput ? inferExtensionFromPath(mediaRelPath) : undefined,
       });
       const newAssetId = asset.id;
 
@@ -584,6 +586,56 @@ async function reconcileCompletedGenerations(
   }
 
   // Let the caller write back the XML to avoid double-write
+}
+
+async function readGeneratedMediaInfo(
+  record: GenerationRecord,
+  mediaAbsPath: string,
+  fs: NonNullable<Awaited<ReturnType<typeof getFs>>>,
+): Promise<{
+  fileSize: number;
+  duration?: number;
+  width?: number;
+  height?: number;
+  audioChannels?: number;
+  sampleRate?: number;
+} | null> {
+  if (record.outputType === 'image') {
+    const fileSize = await fs.getFileSize(mediaAbsPath).catch(() => null);
+    if (fileSize === null) return null;
+    return {
+      fileSize,
+      width: record.result?.width,
+      height: record.result?.height,
+    };
+  }
+
+  // Try to read video metadata directly — avoids TOCTOU from fs.exists()
+  const metadata = await fs.getMediaMetadata(mediaAbsPath).catch(() => null);
+  if (metadata === null) return null;
+
+  const fileSize = await fs.getFileSize(mediaAbsPath).catch(() => 0);
+  return {
+    fileSize,
+    duration: metadata.duration,
+    width: metadata.width,
+    height: metadata.height,
+    audioChannels: metadata.audioChannels,
+    sampleRate: metadata.sampleRate,
+  };
+}
+
+function resolveGeneratedMediaPath(record: GenerationRecord): string {
+  if (record.result?.fileName) return record.result.fileName;
+  if (record.outputType === 'image') {
+    return generatedImagePath(record.id, mimeTypeToExtension(record.result?.mimeType) ?? 'jpg');
+  }
+  return generatedVideoPath(record.id);
+}
+
+function inferExtensionFromPath(path: string): string | undefined {
+  const ext = path.split('.').pop()?.toLowerCase();
+  return ext ? mimeTypeToExtension(ext) ?? ext : undefined;
 }
 
 /**

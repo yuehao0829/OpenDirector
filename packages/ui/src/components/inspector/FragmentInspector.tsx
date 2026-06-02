@@ -17,7 +17,7 @@ import type {
   ConstraintIndicator,
   ModelVariant,
 } from '@opendirector/core/types/provider-system';
-import { computeReferenceIndicators, validateInputRequirements } from '@opendirector/core/types/provider-system';
+import { computeReferenceIndicators, isImageModel, validateInputRequirements } from '@opendirector/core/types/provider-system';
 import {
   buildContinuousPlan,
   computeContinuousProgress,
@@ -71,7 +71,13 @@ function hasSameGenerationParamsValue(
     left.enableMusic === right.enableMusic &&
     left.enableSubtitle === right.enableSubtitle &&
     left.enableWatermark === right.enableWatermark &&
-    left.enableWebSearch === right.enableWebSearch
+    left.enableWebSearch === right.enableWebSearch &&
+    left.imageQuality === right.imageQuality &&
+    left.imageOutputFormat === right.imageOutputFormat &&
+    left.imageBackground === right.imageBackground &&
+    left.imageModeration === right.imageModeration &&
+    left.autoDuration === right.autoDuration &&
+    left.imageOutputCompression === right.imageOutputCompression
   );
 }
 
@@ -79,7 +85,16 @@ function getFragmentGenParams(fragment: { genParams?: GenerationParamDefaults; d
   const defaults = useSettingsStore.getState().defaultGenerationParams;
   const base = fragment?.genParams ?? defaults;
   const duration = fragment?.duration ? fragmentMsToGenSeconds(fragment.duration) : 5;
-  return { ...base, duration, autoDuration: false };
+  return {
+    ...base,
+    duration,
+    autoDuration: false,
+    imageQuality: base.imageQuality ?? 'high',
+    imageOutputFormat: base.imageOutputFormat ?? 'jpeg',
+    imageBackground: base.imageBackground ?? 'opaque',
+    imageModeration: base.imageModeration ?? 'low',
+    imageOutputCompression: base.imageOutputCompression,
+  };
 }
 
 /** Strip UI-only fields (duration, autoDuration) to get GenerationParamDefaults for persistence */
@@ -311,6 +326,21 @@ export function FragmentInspector() {
       if (capabilityParams.aspectRatios && !capabilityParams.aspectRatios.includes(prev.aspectRatio)) {
         updates.aspectRatio = capabilityParams.aspectRatios[0];
       }
+      if (capabilityParams.imageQuality && !capabilityParams.imageQuality.includes(prev.imageQuality)) {
+        updates.imageQuality = capabilityParams.imageQuality[0];
+      }
+      if (capabilityParams.imageOutputFormats && !capabilityParams.imageOutputFormats.includes(prev.imageOutputFormat)) {
+        updates.imageOutputFormat = capabilityParams.imageOutputFormats[0];
+      }
+      if (capabilityParams.imageBackgrounds && !capabilityParams.imageBackgrounds.includes(prev.imageBackground)) {
+        updates.imageBackground = capabilityParams.imageBackgrounds[0];
+      }
+      // Enforce: transparent background requires png/webp (not jpeg)
+      const effectiveFormat = updates.imageOutputFormat ?? prev.imageOutputFormat;
+      const effectiveBackground = updates.imageBackground ?? prev.imageBackground;
+      if (effectiveBackground === 'transparent' && effectiveFormat === 'jpeg') {
+        updates.imageOutputFormat = 'png';
+      }
       if (Object.keys(updates).length === 0) return prev;
       return { ...prev, ...updates };
     });
@@ -479,6 +509,11 @@ export function FragmentInspector() {
       resolution: genParams.resolution,
       generateAudio: genParams.enableAudio,
       generateWatermark: genParams.enableWatermark,
+      imageQuality: genParams.imageQuality,
+      imageOutputFormat: genParams.imageOutputFormat,
+      imageBackground: genParams.imageBackground,
+      imageModeration: genParams.imageModeration,
+      imageOutputCompression: genParams.imageOutputCompression,
     }, options);
 
     // Clear selection to show TaskOverview dashboard
@@ -546,6 +581,7 @@ export function FragmentInspector() {
             scene={scene}
             trackType={resolvedTrackType}
             firstFrameAsReference={activeGeneration?.firstFrameAsReference}
+            capabilityParams={capabilityParams}
           />
         )}
       </div>
@@ -656,6 +692,7 @@ function PreviewModeContent({
   scene,
   trackType,
   firstFrameAsReference,
+  capabilityParams,
 }: {
   fragment: Fragment;
   genParams: GenerationParamsValue;
@@ -665,6 +702,7 @@ function PreviewModeContent({
   scene: Scene | null;
   trackType: 'video' | 'audio';
   firstFrameAsReference?: boolean;
+  capabilityParams?: CapabilityParams;
 }) {
   const { t } = useTranslation();
   const labelToRef = useMemo(() => {
@@ -716,6 +754,7 @@ function PreviewModeContent({
   ]);
 
   const isAudio = trackType === 'audio';
+  const isImage = capabilityParams ? isImageModel(capabilityParams) : false;
 
   // Scene references provide shared context across fragments in the same scene
   const sceneRefAssets = useMemo((): Asset[] => {
@@ -730,12 +769,20 @@ function PreviewModeContent({
       {!isAudio && (
         <div className="p-2 bg-zinc-800/50 rounded text-xs text-zinc-400">
           <span className="font-medium text-zinc-300">{t('inspector.labels.params')}</span>
-          <span className="ml-2">{genParams.resolution} · {genParams.aspectRatio} · {genParams.duration}s</span>
-          {genParams.enableAudio && <span className="ml-1">· {t('inspector.previewSummary.audioOn')}</span>}
-          {genParams.enableMusic && <span className="ml-1">· {t('inspector.previewSummary.musicOn')}</span>}
-          {genParams.enableSubtitle && <span className="ml-1">· {t('inspector.previewSummary.subtitleOn')}</span>}
-          {genParams.enableWatermark && <span className="ml-1">· {t('inspector.previewSummary.watermarkOn')}</span>}
-          {genParams.enableWebSearch && <span className="ml-1">· {t('inspector.previewSummary.webSearchOn')}</span>}
+          {isImage ? (
+            <>
+              <span className="ml-2">{genParams.resolution} · {genParams.aspectRatio} · {genParams.imageQuality} · {genParams.imageOutputFormat.toUpperCase()}</span>
+            </>
+          ) : (
+            <>
+              <span className="ml-2">{genParams.resolution} · {genParams.aspectRatio} · {genParams.duration}s</span>
+              {genParams.enableAudio && <span className="ml-1">· {t('inspector.previewSummary.audioOn')}</span>}
+              {genParams.enableMusic && <span className="ml-1">· {t('inspector.previewSummary.musicOn')}</span>}
+              {genParams.enableSubtitle && <span className="ml-1">· {t('inspector.previewSummary.subtitleOn')}</span>}
+              {genParams.enableWatermark && <span className="ml-1">· {t('inspector.previewSummary.watermarkOn')}</span>}
+              {genParams.enableWebSearch && <span className="ml-1">· {t('inspector.previewSummary.webSearchOn')}</span>}
+            </>
+          )}
         </div>
       )}
 

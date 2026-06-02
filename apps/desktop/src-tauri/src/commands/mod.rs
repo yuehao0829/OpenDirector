@@ -8,6 +8,7 @@ pub mod media;
 pub mod media_exchange;
 pub mod media_preview;
 pub mod metadata;
+pub mod openai_image;
 pub mod poll_utils;
 pub mod provider_config;
 pub mod provider_key;

@@ -26,9 +26,9 @@ export const GENERATIONS_XML = 'Generations.xml';
 export const GENERATED_VIDEO_DIR = 'Generated/Video';
 export const GENERATED_IMAGE_DIR = 'Generated/Image';
 export const generatedVideoPath = (id: string) => `${GENERATED_VIDEO_DIR}/${id}.mp4`;
-export const generatedImagePath = (id: string) => `${GENERATED_IMAGE_DIR}/${id}.jpg`;
+export const generatedImagePath = (id: string, extension = 'jpg') => `${GENERATED_IMAGE_DIR}/${id}.${extension}`;
 export const formatGeneratedAssetName = (id: string) => `generation-${id.slice(0, 8)}.mp4`;
-export const formatGeneratedImageName = (id: string) => `generation-${id.slice(0, 8)}.jpg`;
+export const formatGeneratedImageName = (id: string, extension = 'jpg') => `generation-${id.slice(0, 8)}.${extension}`;
 export const fragmentDisplayName = (id: string) => `Fragment ${id.slice(0, 8)}`;
 
 export function buildGeneratedAsset(params: {
@@ -46,6 +46,8 @@ export function buildGeneratedAsset(params: {
   mediaMetadataHydrated?: boolean;
   projectId: string;
   outputType?: 'video' | 'image';
+  mimeType?: string;
+  fileExtension?: string;
 }): Asset {
   const {
     assetId,
@@ -62,17 +64,20 @@ export function buildGeneratedAsset(params: {
     mediaMetadataHydrated,
     projectId,
     outputType = 'video',
+    mimeType,
+    fileExtension,
   } = params;
   const isImage = outputType === 'image';
+  const imageExtension = fileExtension ?? mimeTypeToExtension(mimeType) ?? 'jpg';
   return {
     id: assetId,
-    name: isImage ? formatGeneratedImageName(taskId) : formatGeneratedAssetName(taskId),
+    name: isImage ? formatGeneratedImageName(taskId, imageExtension) : formatGeneratedAssetName(taskId),
     type: isImage ? 'image' : 'video',
     source: 'generated',
     url: videoUrl,
     relativePath,
     fileSize,
-    mimeType: isImage ? 'image/jpeg' : 'video/mp4',
+    mimeType: isImage ? (mimeType ?? 'image/jpeg') : 'video/mp4',
     thumbnailUrl,
     duration: isImage ? undefined : duration,
     width,
@@ -87,6 +92,23 @@ export function buildGeneratedAsset(params: {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+}
+
+export function mimeTypeToExtension(mimeType: string | undefined): string | undefined {
+  switch (mimeType) {
+    case 'image/png':
+    case 'png':
+      return 'png';
+    case 'image/webp':
+    case 'webp':
+      return 'webp';
+    case 'image/jpeg':
+    case 'jpeg':
+    case 'jpg':
+      return 'jpg';
+    default:
+      return undefined;
+  }
 }
 
 // ── Shared platform adapters ──
@@ -178,6 +200,12 @@ export function buildProviderParams(modelId: string, params: GenerationParams, m
     generateWatermark: params.generateWatermark,
     style: params.style,
     negativePrompt: params.negativePrompt,
+    imageSize: params.imageSize,
+    imageQuality: params.imageQuality,
+    imageOutputFormat: params.imageOutputFormat,
+    imageBackground: params.imageBackground,
+    imageModeration: params.imageModeration,
+    imageOutputCompression: params.imageOutputCompression,
   };
 }
 
@@ -203,6 +231,12 @@ export function recordToParams(record: GenerationRecord): GenerationParams {
     generateWatermark: pp.generateWatermark as boolean | undefined,
     style: pp.style as string | undefined,
     negativePrompt: pp.negativePrompt as string | undefined,
+    imageSize: pp.imageSize as string | undefined,
+    imageQuality: pp.imageQuality as string | undefined,
+    imageOutputFormat: pp.imageOutputFormat as string | undefined,
+    imageBackground: pp.imageBackground as string | undefined,
+    imageModeration: pp.imageModeration as string | undefined,
+    imageOutputCompression: pp.imageOutputCompression as number | undefined,
   };
 }
 

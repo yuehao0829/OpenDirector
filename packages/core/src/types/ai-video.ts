@@ -20,6 +20,35 @@ export interface ProviderCredentials {
   asset_group_id?: string;
 }
 
+export interface OpenAiImageGenerationParams {
+  provider_id: string;
+  password: string;
+  task_id: string;
+  project_path: string;
+  model: string;
+  prompt: string;
+  n?: number;
+  size?: string;
+  quality?: string;
+  output_format?: string;
+  background?: string;
+  moderation?: string;
+  output_compression?: number;
+  user?: string;
+}
+
+export interface OpenAiImageGenerationResult {
+  file_path: string;
+  file_size: number;
+  mime_type: string;
+  output_format: string;
+  width?: number;
+  height?: number;
+  created?: number;
+  usage?: Record<string, unknown>;
+  revised_prompt?: string;
+}
+
 export interface CredentialValidation {
   valid: boolean;
   message: string;

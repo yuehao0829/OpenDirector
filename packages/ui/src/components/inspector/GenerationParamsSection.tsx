@@ -1,6 +1,7 @@
 import type { GenerationParamDefaults } from '@opendirector/core/types/generation';
 import { GLOBAL_GENERATION_OPTIONS } from '@opendirector/core/types/generation';
 import type { CapabilityParams } from '@opendirector/core/types/provider-system';
+import { isImageModel } from '@opendirector/core/types/provider-system';
 import { useMemo } from 'react';
 import { Monitor, RectangleHorizontal, Clock, Volume2, VolumeX, Music, Music4, Subtitles, Stamp } from 'lucide-react';
 import { Panel } from '../layout/Panel';
@@ -11,6 +12,11 @@ import { useTranslation } from 'react-i18next';
 export interface GenerationParamsValue extends GenerationParamDefaults {
   duration: number;
   autoDuration: boolean;
+  imageQuality: string;
+  imageOutputFormat: string;
+  imageBackground: string;
+  imageModeration: string;
+  imageOutputCompression?: number;
 }
 
 interface GenerationParamsSectionProps {
@@ -42,15 +48,32 @@ const DEFAULT_CAPABILITY_PARAMS: CapabilityParams = {
  */
 function resolveEffectiveParams(params: CapabilityParams): CapabilityParams {
   const resolutions = params.resolution
-    ? [...GLOBAL_GENERATION_OPTIONS.resolution].filter((r) => params.resolution!.includes(r))
+    ? GLOBAL_GENERATION_OPTIONS.resolution.filter((r) => params.resolution!.includes(r))
     : undefined;
   const aspectRatios = params.aspectRatios
-    ? [...GLOBAL_GENERATION_OPTIONS.aspectRatios].filter((r) => params.aspectRatios!.includes(r))
+    ? GLOBAL_GENERATION_OPTIONS.aspectRatios.filter((r) => params.aspectRatios!.includes(r))
+    : undefined;
+  const imageQuality = params.imageQuality
+    ? GLOBAL_GENERATION_OPTIONS.imageQuality.filter((q) => params.imageQuality!.includes(q))
+    : undefined;
+  const imageOutputFormats = params.imageOutputFormats
+    ? GLOBAL_GENERATION_OPTIONS.imageOutputFormats.filter((f) => params.imageOutputFormats!.includes(f))
+    : undefined;
+  const imageBackgrounds = params.imageBackgrounds
+    ? GLOBAL_GENERATION_OPTIONS.imageBackgrounds.filter((b) => params.imageBackgrounds!.includes(b))
+    : undefined;
+  const imageModeration = params.imageModeration
+    ? GLOBAL_GENERATION_OPTIONS.imageModeration.filter((m) => params.imageModeration!.includes(m))
     : undefined;
 
   return {
+    outputType: params.outputType,
     resolution: resolutions && resolutions.length > 0 ? resolutions : undefined,
     aspectRatios: aspectRatios && aspectRatios.length > 0 ? aspectRatios : undefined,
+    imageQuality: imageQuality && imageQuality.length > 0 ? imageQuality : undefined,
+    imageOutputFormats: imageOutputFormats && imageOutputFormats.length > 0 ? imageOutputFormats : undefined,
+    imageBackgrounds: imageBackgrounds && imageBackgrounds.length > 0 ? imageBackgrounds : undefined,
+    imageModeration: imageModeration && imageModeration.length > 0 ? imageModeration : undefined,
     durationRange: params.durationRange,
     enableAudio: params.enableAudio,
     enableMusic: params.enableMusic,
@@ -75,6 +98,8 @@ export function GenerationParamsSection({
     [capabilityParams],
   );
 
+  const isImage = isImageModel(params);
+
   const visibleToggles = TOGGLE_DEFS.filter((t) =>
     t.key === 'enableAudio' ? params[t.key] !== false : !!params[t.key],
   );
@@ -86,7 +111,7 @@ export function GenerationParamsSection({
     >
       <div className="space-y-5">
         {/* Continuous mode banner */}
-        {continuousMode && continuousPlan && continuousPlan.length > 0 && (
+        {!isImage && continuousMode && continuousPlan && continuousPlan.length > 0 && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2.5">
             <div className="text-sm font-medium text-amber-400">
               {t('generationParams.continuousMode', { count: continuousPlan.length })}
@@ -97,29 +122,7 @@ export function GenerationParamsSection({
           </div>
         )}
 
-        {/* Resolution */}
-        {params.resolution && params.resolution.length > 0 && (
-          <SettingCard label={t('settings.generationDefaults.resolution')}>
-            <div className="flex gap-1.5">
-              {params.resolution.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => onChange({ ...value, resolution: r })}
-                  disabled={disabled}
-                  className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
-                    value.resolution === r
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700'
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-          </SettingCard>
-        )}
-
-        {/* Aspect Ratio */}
+        {/* Aspect Ratio — shared by image and video */}
         {params.aspectRatios && params.aspectRatios.length > 0 && (
           <SettingCard label={t('settings.generationDefaults.aspectRatio')}>
             <div className="flex gap-1.5 min-w-0">
@@ -141,8 +144,28 @@ export function GenerationParamsSection({
           </SettingCard>
         )}
 
-        {/* Toggles */}
-        {visibleToggles.length > 0 && (
+        {params.resolution && params.resolution.length > 0 && (
+          <SettingCard label={t('settings.generationDefaults.resolution')}>
+            <div className="flex gap-1.5">
+              {params.resolution.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => onChange({ ...value, resolution: r })}
+                  disabled={disabled}
+                  className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                    value.resolution === r
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700'
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          </SettingCard>
+        )}
+
+        {!isImage && visibleToggles.length > 0 && (
           <div className="grid grid-cols-2 gap-1.5">
             {visibleToggles.map((toggle) => (
               <TogglePill
@@ -165,8 +188,7 @@ export function GenerationParamsSection({
           </div>
         )}
 
-        {/* Duration */}
-        {params.durationRange && (
+        {!isImage && params.durationRange && (
           <SettingCard
             label={
               continuousMode
@@ -214,6 +236,101 @@ export function GenerationParamsSection({
             )}
           </SettingCard>
         )}
+
+        {isImage && params.imageQuality && params.imageQuality.length > 0 && (
+          <SettingCard label={t('generationParams.imageQuality')}>
+            <div className="flex gap-1.5">
+              {params.imageQuality.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => onChange({ ...value, imageQuality: q })}
+                  disabled={disabled}
+                  className={`flex-1 px-2 py-2 text-sm rounded-md transition-colors ${
+                    value.imageQuality === q
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700'
+                  }`}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </SettingCard>
+        )}
+
+        {isImage && params.imageOutputFormats && params.imageOutputFormats.length > 0 && (
+          <SettingCard label={t('generationParams.imageOutputFormat')}>
+            <div className="flex gap-1.5">
+              {params.imageOutputFormats.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => {
+                    let next: GenerationParamsValue = { ...value, imageOutputFormat: f };
+                    if (f === 'jpeg' && value.imageBackground === 'transparent') {
+                      next.imageBackground = 'auto';
+                    }
+                    onChange(next);
+                  }}
+                  disabled={disabled}
+                  className={`flex-1 px-2 py-2 text-sm rounded-md transition-colors uppercase ${
+                    value.imageOutputFormat === f
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700'
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </SettingCard>
+        )}
+
+        {isImage && params.imageBackgrounds && params.imageBackgrounds.length > 0 && (
+          <SettingCard label={t('generationParams.imageBackground')}>
+            <div className="flex gap-1.5">
+              {params.imageBackgrounds
+                .filter((b) => b !== 'transparent' || value.imageOutputFormat !== 'jpeg')
+                .map((b) => (
+                <button
+                  key={b}
+                  onClick={() => {
+                    let next: GenerationParamsValue = { ...value, imageBackground: b };
+                    if (b === 'transparent' && value.imageOutputFormat === 'jpeg') {
+                      next.imageOutputFormat = 'png';
+                    }
+                    onChange(next);
+                  }}
+                  disabled={disabled}
+                  className={`flex-1 px-2 py-2 text-sm rounded-md transition-colors ${
+                    value.imageBackground === b
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700'
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </SettingCard>
+        )}
+
+        {isImage && (value.imageOutputFormat === 'jpeg' || value.imageOutputFormat === 'webp') && (
+          <SettingCard label={t('generationParams.imageOutputCompression')}>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={value.imageOutputCompression ?? 80}
+                onChange={(e) => onChange({ ...value, imageOutputCompression: Number(e.target.value) })}
+                disabled={disabled}
+                className="flex-1 accent-blue-500 disabled:opacity-40"
+              />
+              <span className="text-xs text-zinc-400 w-8 text-right">{value.imageOutputCompression ?? 80}%</span>
+            </div>
+          </SettingCard>
+        )}
       </div>
     </Panel>
   );
@@ -222,38 +339,61 @@ export function GenerationParamsSection({
 function SummaryBar({ value, params, continuousMode, totalDuration }: { value: GenerationParamsValue; params: CapabilityParams; continuousMode?: boolean; totalDuration?: number }) {
   const { t } = useTranslation();
   const items: { icon: React.ReactNode; active?: boolean }[] = [];
+  const isImage = isImageModel(params);
 
-  items.push({ icon: <Monitor size={15} />, active: true });
-  items.push({ icon: <span className="text-sm font-medium">{value.resolution}</span>, active: true });
-
-  if (params.aspectRatios && params.aspectRatios.length > 0) {
-    items.push({ icon: <RectangleHorizontal size={15} />, active: true });
-    items.push({ icon: <span className="text-sm font-medium">{value.aspectRatio}</span>, active: true });
-  }
-
-  const toggleSummary: { key: ToggleKey; onIcon: React.ReactNode; offIcon: React.ReactNode }[] = [
-    { key: 'enableAudio', onIcon: <Volume2 size={15} />, offIcon: <VolumeX size={15} /> },
-    { key: 'enableMusic', onIcon: <Music4 size={15} />, offIcon: <Music size={15} /> },
-    { key: 'enableSubtitle', onIcon: <Subtitles size={15} />, offIcon: <Subtitles size={15} /> },
-    { key: 'enableWatermark', onIcon: <Stamp size={15} />, offIcon: <Stamp size={15} /> },
-  ];
-
-  for (const t of toggleSummary) {
-    const paramVal = t.key === 'enableAudio' ? params.enableAudio !== false : params[t.key];
-    if (paramVal) {
-      items.push({
-        icon: value[t.key] ? t.onIcon : t.offIcon,
-        active: value[t.key],
-      });
+  if (isImage) {
+    if (params.resolution && params.resolution.length > 0) {
+      items.push({ icon: <Monitor size={15} />, active: true });
+      items.push({ icon: <span className="text-sm font-medium">{value.resolution}</span>, active: true });
     }
-  }
+    if (params.aspectRatios && params.aspectRatios.length > 0) {
+      items.push({ icon: <RectangleHorizontal size={15} />, active: true });
+      items.push({ icon: <span className="text-sm font-medium">{value.aspectRatio}</span>, active: true });
+    }
+    if (params.imageQuality && params.imageQuality.length > 0) {
+      items.push({ icon: <span className="text-sm font-medium">{value.imageQuality}</span>, active: true });
+    }
+    if (params.imageOutputFormats && params.imageOutputFormats.length > 0) {
+      items.push({ icon: <span className="text-sm font-medium uppercase">{value.imageOutputFormat}</span>, active: true });
+    }
+    if (params.imageBackgrounds && params.imageBackgrounds.length > 0) {
+      items.push({ icon: <span className="text-sm font-medium">{value.imageBackground}</span>, active: true });
+    }
+  } else {
+    if (params.resolution && params.resolution.length > 0) {
+      items.push({ icon: <Monitor size={15} />, active: true });
+      items.push({ icon: <span className="text-sm font-medium">{value.resolution}</span>, active: true });
+    }
 
-  if (params.durationRange) {
-    items.push({ icon: <Clock size={15} />, active: true });
-    if (continuousMode) {
-      items.push({ icon: <span className="text-sm font-medium">{t('generationParams.secondsContinuousShort', { seconds: Math.ceil((totalDuration ?? 0) / 1000) })}</span>, active: true });
-    } else {
-      items.push({ icon: <span className="text-sm font-medium">{value.duration}s</span>, active: true });
+    if (params.aspectRatios && params.aspectRatios.length > 0) {
+      items.push({ icon: <RectangleHorizontal size={15} />, active: true });
+      items.push({ icon: <span className="text-sm font-medium">{value.aspectRatio}</span>, active: true });
+    }
+
+    const toggleSummary: { key: ToggleKey; onIcon: React.ReactNode; offIcon: React.ReactNode }[] = [
+      { key: 'enableAudio', onIcon: <Volume2 size={15} />, offIcon: <VolumeX size={15} /> },
+      { key: 'enableMusic', onIcon: <Music4 size={15} />, offIcon: <Music size={15} /> },
+      { key: 'enableSubtitle', onIcon: <Subtitles size={15} />, offIcon: <Subtitles size={15} /> },
+      { key: 'enableWatermark', onIcon: <Stamp size={15} />, offIcon: <Stamp size={15} /> },
+    ];
+
+    for (const t of toggleSummary) {
+      const paramVal = t.key === 'enableAudio' ? params.enableAudio !== false : params[t.key];
+      if (paramVal) {
+        items.push({
+          icon: value[t.key] ? t.onIcon : t.offIcon,
+          active: value[t.key],
+        });
+      }
+    }
+
+    if (params.durationRange) {
+      items.push({ icon: <Clock size={15} />, active: true });
+      if (continuousMode) {
+        items.push({ icon: <span className="text-sm font-medium">{t('generationParams.secondsContinuousShort', { seconds: Math.ceil((totalDuration ?? 0) / 1000) })}</span>, active: true });
+      } else {
+        items.push({ icon: <span className="text-sm font-medium">{value.duration}s</span>, active: true });
+      }
     }
   }
 

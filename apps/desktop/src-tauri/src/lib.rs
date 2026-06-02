@@ -168,6 +168,7 @@ pub fn run() {
             commands::seedance_api::seedance_create_asset,
             commands::seedance_api::download_generation_video,
             commands::seedance_api::download_generation_image,
+            commands::openai_image::openai_generate_image,
             commands::tos_api::tos_presign_url,
             commands::tos_api::tos_delete_object,
             commands::tos_api::validate_tos_credentials,

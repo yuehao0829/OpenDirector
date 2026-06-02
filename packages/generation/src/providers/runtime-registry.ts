@@ -80,6 +80,10 @@ class ProviderRuntimeRegistry {
           const { SeedanceProvider } = await import('./seedance');
           return new SeedanceProvider(instance.instanceId);
         }
+        case BUILTIN_TYPE_IDS.OPENAI_IMAGE: {
+          const { GptImageProvider } = await import('./gpt-image');
+          return new GptImageProvider(instance.instanceId);
+        }
         default:
           throw new Error(`No constructor for built-in provider: ${typeDef.typeId}`);
       }

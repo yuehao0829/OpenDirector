@@ -286,8 +286,8 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
           useProviderInstanceStore.getState().updateInstance(instance.instanceId, {
             config: { ...config, _encPassword: encPassword, sk: '' },
           });
-        } else if (selectedType.typeId === BUILTIN_TYPE_IDS.SEEDANCE) {
-          const encPassword = await tauriBridge.providerKey.saveSeedanceCredentials(
+        } else if (selectedType.typeId === BUILTIN_TYPE_IDS.SEEDANCE || selectedType.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
+          const encPassword = await tauriBridge.providerKey.saveApiCredentials(
             instance.instanceId, credentials.apiKey, credentials.base_url,
           );
           useProviderInstanceStore.getState().updateInstance(instance.instanceId, {

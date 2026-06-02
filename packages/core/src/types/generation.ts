@@ -16,13 +16,17 @@ import type { GenerationResultInfo } from '../utils/xml/generations-xml';
  * Providers select a subset via their CapabilityParams; the settings UI shows all options.
  */
 export const GLOBAL_GENERATION_OPTIONS = {
-  resolution: ['480p', '720p', '1080p'] as const,
-  aspectRatios: ['16:9', '21:9', '4:3', '1:1', '3:4', '9:16', 'adaptive'] as const,
+  resolution: ['480p', '720p', '1080p', '2k', '4k'] as const,
+  aspectRatios: ['21:9', '16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16', 'adaptive'] as const,
   enableAudio: true,
   enableMusic: true,
   enableSubtitle: true,
   enableWatermark: true,
   enableWebSearch: true,
+  imageQuality: ['auto', 'low', 'medium', 'high'] as const,
+  imageOutputFormats: ['png', 'jpeg', 'webp'] as const,
+  imageBackgrounds: ['auto', 'transparent', 'opaque'] as const,
+  imageModeration: ['auto', 'low'] as const,
 } as const;
 
 /** Default generation parameter values (used in settings and new fragment creation) */
@@ -34,18 +38,26 @@ export const DEFAULT_GENERATION_PARAMS: GenerationParamDefaults = {
   enableSubtitle: false,
   enableWatermark: false,
   enableWebSearch: false,
+  imageQuality: 'high',
+  imageOutputFormat: 'jpeg',
+  imageBackground: 'opaque',
+  imageModeration: 'low',
 };
 
 const RESOLUTION_HEIGHTS: Record<string, number> = {
   '480p': 480,
   '720p': 720,
   '1080p': 1080,
+  '2k': 1440,
+  '4k': 2160,
 };
 
 const ASPECT_RATIO_NUMBERS: Record<string, [number, number]> = {
   '16:9': [16, 9],
   '21:9': [21, 9],
   '4:3': [4, 3],
+  '3:2': [3, 2],
+  '2:3': [2, 3],
   '1:1': [1, 1],
   '3:4': [3, 4],
   '9:16': [9, 16],
@@ -86,6 +98,19 @@ export function generationResolutionToPixels(
   return { width, height };
 }
 
+/** Round up to the nearest multiple of 16 (GPT Image API requires dimensions divisible by 16). */
+function toMultipleOf16(n: number): number {
+  return Math.ceil(n / 16) * 16;
+}
+
+/** Compute GPT Image API `size` parameter from resolution + aspectRatio. */
+export function computeGptImageSize(resolution: string, aspectRatio: string): string {
+  const { width, height } = generationResolutionToPixels(resolution, aspectRatio);
+  const w16 = Math.min(toMultipleOf16(width), 3840);
+  const h16 = Math.min(toMultipleOf16(height), 2160);
+  return `${w16}x${h16}`;
+}
+
 /** Persisted generation parameter defaults (no duration — duration is per-fragment) */
 export interface GenerationParamDefaults {
   resolution: string;
@@ -95,6 +120,12 @@ export interface GenerationParamDefaults {
   enableSubtitle: boolean;
   enableWatermark: boolean;
   enableWebSearch: boolean;
+  imageSize?: string;
+  imageQuality?: string;
+  imageOutputFormat?: string;
+  imageBackground?: string;
+  imageModeration?: string;
+  imageOutputCompression?: number;
 }
 
 /**
@@ -110,6 +141,12 @@ export interface GenerationParams {
   generateWatermark?: boolean;
   style?: string;
   negativePrompt?: string;
+  imageSize?: string;
+  imageQuality?: string;
+  imageOutputFormat?: string;
+  imageBackground?: string;
+  imageModeration?: string;
+  imageOutputCompression?: number;
 }
 
 /**

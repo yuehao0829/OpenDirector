@@ -5,6 +5,7 @@
 
 import { getPlatformAdapter } from '@opendirector/core/adapters';
 import { autoProcessReferences } from '@opendirector/core/services/reference-auto-processor';
+import { generateThumbnailForAsset } from '@opendirector/core/services/asset-import';
 import { tauriBridge } from '@opendirector/core/services/tauri-bridge';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useGenerationStore } from '@opendirector/core/stores/generationStore';
@@ -13,10 +14,13 @@ import { useProviderInstanceStore } from '@opendirector/core/stores/providerInst
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { SeedanceContentItem } from '@opendirector/core/types/ai-video';
 import type { Generation, GenerationParams } from '@opendirector/core/types/generation';
+import { computeGptImageSize } from '@opendirector/core/types/generation';
 import type { SubmitGenerationOptions } from '@opendirector/core/types/service-interfaces';
+import { BUILTIN_TYPE_IDS, type ProviderInstance } from '@opendirector/core/types/provider-system';
 import { t } from '@opendirector/core/i18n';
 import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
 import { generateId } from '@opendirector/core/utils/id';
+import { toWebViewUrl } from '@opendirector/core/utils/platform';
 import { seedanceTypeDefinition } from '../providers/builtin-types/seedance-type';
 import { refTypeToRole } from '../providers/seedance';
 import { providerRuntimeRegistry, resolveDefaultAssetProvider } from '../providers/runtime-registry';
@@ -29,10 +33,17 @@ import {
   getContentUrl,
   setContentUrl,
   resolveLocalFilePath,
+  getDb,
+  getFs,
+  buildGeneratedAsset,
+  generatedImagePath,
+  mimeTypeToExtension,
 } from './generation-xml-repository';
 import { resetFragmentIfGenerating } from './fragment-utils';
 import { failGeneration } from './store-sync';
 import { taskLog } from './task-log';
+import { safeCreateGeneration, safeSaveAsset } from './task-db-helpers';
+import { scheduleSaveAfterCompletion } from './completion-save';
 
 export async function submitGenerationTask(
   fragmentId: string,
@@ -41,6 +52,11 @@ export async function submitGenerationTask(
   params: GenerationParams,
   options?: SubmitGenerationOptions,
 ): Promise<string> {
+  const instance = useProviderInstanceStore.getState().get(instanceId);
+  if (instance?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
+    return submitGptImageTask(fragmentId, instanceId, modelId, params, options, instance);
+  }
+
   const continuousMeta = options?.continuousMode ? {
     continuousMode: true,
     continuousPlan: options.continuousPlan,
@@ -52,9 +68,7 @@ export async function submitGenerationTask(
 
   useTimelineStore.getState().updateFragment(fragmentId, { status: 'generating' });
 
-  // Resolve context early so we can create a pending Generation record
   const ctx = resolveFragmentContext(fragmentId);
-  const instance = useProviderInstanceStore.getState().get(instanceId);
   const providerLabel = instance?.displayName ?? instanceId;
 
   const modelName = resolveModelName(instanceId, modelId);
@@ -70,7 +84,6 @@ export async function submitGenerationTask(
     role: r.role,
   }));
 
-  // Create a pending Generation record immediately so UI can show it
   const pendingGeneration: Generation = {
     id: taskId,
     projectId: project?.id ?? '',
@@ -130,7 +143,6 @@ export async function submitGenerationTask(
 
   let assets = useAssetStore.getState().assets;
 
-  // Auto-process references (compress/transcode) before TOS upload
   if (options?.inputRequirements) {
     try {
       const platform = await getPlatformAdapter();
@@ -197,7 +209,6 @@ export async function submitGenerationTask(
     }
 
     if (hasReferenceImage) {
-      // Append first-frame hint to prompt
       const imageItemsBefore = content.slice(0, firstTextIdx >= 0 ? firstTextIdx : content.length)
         .filter((item) => item.type === 'image_url').length;
       const firstFrameImageIndex = imageItemsBefore + 1;
@@ -327,6 +338,193 @@ export async function submitGenerationTask(
   return taskId;
 }
 
+async function submitGptImageTask(
+  fragmentId: string,
+  instanceId: string,
+  modelId: string,
+  params: GenerationParams,
+  _options?: SubmitGenerationOptions,
+  instance?: ProviderInstance,
+): Promise<string> {
+  const taskId = generateId();
+  useTimelineStore.getState().updateFragment(fragmentId, { status: 'generating' });
+
+  const ctx = resolveFragmentContext(fragmentId);
+  const providerInstance = instance ?? useProviderInstanceStore.getState().get(instanceId);
+  const providerLabel = providerInstance?.displayName ?? instanceId;
+  const modelName = resolveModelName(instanceId, modelId);
+  const project = useProjectStore.getState().currentProject;
+  const folderPath = project?.folderPath;
+
+  if (!folderPath) {
+    await failGeneration(taskId, 'No project folder path');
+    resetFragmentIfGenerating(fragmentId, 'draft');
+    return taskId;
+  }
+
+  const normalized = normalizeGptImageParams(params);
+  const providerParams = buildProviderParams(modelId, normalized, modelName);
+  const references = params.references.map((r) => ({
+    assetId: r.assetId,
+    type: r.type,
+    weight: r.weight ?? 1,
+    role: r.role,
+  }));
+
+  const pendingGeneration: Generation = {
+    id: taskId,
+    projectId: project.id ?? '',
+    fragmentId,
+    fragmentName: ctx.fragmentName,
+    promptText: params.prompt,
+    references,
+    providerInstanceId: instanceId,
+    providerDisplayName: providerLabel,
+    providerParams,
+    outputType: 'image',
+    status: 'pending',
+    queuedAt: new Date(),
+    isSelected: false,
+    createdAt: new Date(),
+  };
+  useGenerationStore.getState().addGeneration(pendingGeneration);
+
+  await updateGenerationsXml(folderPath, taskId, {
+    status: 'pending',
+    fragmentId,
+    fragmentName: ctx.fragmentName,
+    prompt: params.prompt,
+    references,
+    providerInstanceId: instanceId,
+    providerDisplayName: providerLabel,
+    providerParams,
+    outputType: 'image',
+    isSelected: false,
+    createdAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  });
+
+  const password = getProviderPassword(providerInstance);
+
+  try {
+    await updateGenerationsXml(folderPath, taskId, {
+      status: 'processing',
+      startedAt: new Date().toISOString(),
+    });
+    useGenerationStore.getState().updateGeneration(taskId, {
+      status: 'processing',
+      startedAt: new Date(),
+      progress: 10,
+    });
+
+    const result = await tauriBridge.openAIImageApi.generateImage({
+      provider_id: instanceId,
+      password,
+      task_id: taskId,
+      project_path: folderPath,
+      model: modelId,
+      prompt: params.prompt,
+      n: 1,
+      size: normalized.imageSize,
+      quality: normalized.imageQuality,
+      output_format: normalized.imageOutputFormat,
+      background: normalized.imageBackground,
+      moderation: normalized.imageModeration,
+      output_compression: normalized.imageOutputCompression,
+    });
+
+    const fs = await getFs();
+    const db = await getDb();
+    const assetId = generateId();
+    const thumbnailResult = fs
+      ? await generateThumbnailForAsset(result.file_path, fs, 'image', folderPath, assetId).catch(() => undefined)
+      : undefined;
+    const thumbnailUrl = thumbnailResult?.thumbnailUrl;
+    const webviewUrl = toWebViewUrl(result.file_path);
+    const extension = mimeTypeToExtension(result.mime_type) ?? mimeTypeToExtension(result.output_format) ?? 'png';
+    const relativePath = generatedImagePath(taskId, extension);
+
+    const asset = buildGeneratedAsset({
+      taskId,
+      assetId,
+      relativePath,
+      fileSize: result.file_size,
+      videoUrl: webviewUrl,
+      thumbnailUrl,
+      duration: undefined,
+      width: result.width,
+      height: result.height,
+      projectId: project?.id ?? '',
+      outputType: 'image',
+      mimeType: result.mime_type,
+      fileExtension: extension,
+    });
+
+    useAssetStore.getState().addAsset(asset);
+    safeSaveAsset(db, folderPath, asset, 'db_save_gpt_image_asset');
+
+    const completedAt = new Date();
+    const resultInfo = {
+      fileName: relativePath,
+      fileSize: result.file_size,
+      duration: 0,
+      width: result.width,
+      height: result.height,
+      mimeType: result.mime_type,
+      usage: result.usage,
+      revisedPrompt: result.revised_prompt,
+      created: result.created,
+    };
+
+    useGenerationStore.getState().updateGeneration(taskId, {
+      resultAssetId: assetId,
+      status: 'completed',
+      result: resultInfo,
+      completedAt,
+      isSelected: true,
+      progress: undefined,
+    });
+
+    const generation: Generation = {
+      ...pendingGeneration,
+      resultAssetId: assetId,
+      status: 'completed',
+      result: resultInfo,
+      completedAt,
+      isSelected: true,
+    };
+    safeCreateGeneration(db, folderPath, generation, 'db_create_gpt_image_gen');
+
+    await updateGenerationsXml(folderPath, taskId, {
+      status: 'completed',
+      resultAssetId: assetId,
+      isSelected: true,
+      completedAt: completedAt.toISOString(),
+      result: resultInfo,
+    });
+
+    useTimelineStore.getState().updateFragment(fragmentId, {
+      generatedUrl: webviewUrl,
+      sourceAssetId: assetId,
+      resultAssetId: assetId,
+      thumbnailUrl,
+      status: 'completed',
+    });
+
+    scheduleSaveAfterCompletion();
+  } catch (error) {
+    const errorMsg = getErrorMessage(error);
+    taskLog.error(folderPath, 'gpt_image_submit_error', 'Failed to generate image', {
+      taskId,
+      error: errorMsg,
+    });
+    await failGeneration(taskId, errorMsg, folderPath);
+    resetFragmentIfGenerating(fragmentId, 'failed');
+  }
+
+  return taskId;
+}
+
 async function buildContentItems(params: GenerationParams): Promise<SeedanceContentItem[]> {
   const items: SeedanceContentItem[] = [];
 
@@ -385,4 +583,24 @@ function resolveArkModelId(instanceId: string, modelId: string): string {
 
 function resolveModelName(_instanceId: string, modelId: string): string | undefined {
   return providerTypeRegistry.findModelVariant(modelId)?.name;
+}
+
+function normalizeGptImageParams(params: GenerationParams): GenerationParams {
+  const outputFormat = params.imageOutputFormat ?? 'png';
+  let background = params.imageBackground ?? 'auto';
+  if (background === 'transparent' && outputFormat === 'jpeg') {
+    background = 'auto';
+  }
+  const resolution = params.resolution ?? '1080p';
+  const aspectRatio = params.aspectRatio ?? '16:9';
+  const computedSize = computeGptImageSize(resolution, aspectRatio);
+
+  return {
+    ...params,
+    imageSize: computedSize,
+    imageQuality: params.imageQuality ?? 'auto',
+    imageOutputFormat: outputFormat,
+    imageBackground: background,
+    imageModeration: params.imageModeration ?? 'auto',
+  };
 }

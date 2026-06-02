@@ -15,5 +15,6 @@ describe('registerGenerationServices', () => {
 
     expect(typeIds).toContain('seedance');
     expect(typeIds).toContain('volcengine');
+    expect(typeIds).toContain('openai-image');
   });
 });

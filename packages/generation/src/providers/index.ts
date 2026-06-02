@@ -1,6 +1,7 @@
 export * from './types';
 export * from './seedance';
 export * from './volcengine-tos';
+export * from './gpt-image';
 export * from './type-registry';
 export * from './runtime-registry';
 
@@ -10,8 +11,10 @@ import {
   createSeedanceTypeDefinition,
   createVolcengineTosTypeDefinition,
 } from './builtin-types/seedance-type';
+import { createGptImageTypeDefinition } from './builtin-types/gpt-image-type';
 
 export function registerBuiltinProviderTypes(): void {
   providerTypeRegistry.registerBuiltin(createSeedanceTypeDefinition());
   providerTypeRegistry.registerBuiltin(createVolcengineTosTypeDefinition());
+  providerTypeRegistry.registerBuiltin(createGptImageTypeDefinition());
 }

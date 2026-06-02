@@ -4,7 +4,6 @@
  */
 
 import { generateThumbnailForAsset } from '@opendirector/core/services/asset-import';
-import { saveProject } from '@opendirector/core/services/project-service';
 import { tauriBridge } from '@opendirector/core/services/tauri-bridge';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useGenerationStore } from '@opendirector/core/stores/generationStore';
@@ -38,6 +37,7 @@ import { resetFragmentIfGenerating } from './fragment-utils';
 import { failGeneration, cancelGeneration, getGenerationById } from './store-sync';
 import { taskLog } from './task-log';
 import { safeSaveAsset, safeCreateGeneration } from './task-db-helpers';
+import { scheduleSaveAfterCompletion } from './completion-save';
 
 export interface TaskCompleteParams {
   taskId: string;
@@ -632,21 +632,3 @@ export function markRecordTerminal(
   });
 }
 
-// ── Debounced save after task completion ──
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * Schedule a debounced project save after a generation task completes.
- * Multiple completions in quick succession (e.g. continuous mode) are
- * coalesced into a single save.
- */
-function scheduleSaveAfterCompletion(): void {
-  if (saveTimer !== null) {
-    clearTimeout(saveTimer);
-  }
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    saveProject().catch((e) => taskLog.warn(undefined, 'debounced_save', 'Debounced save after completion failed', { error: String(e) }));
-  }, 2000);
-}

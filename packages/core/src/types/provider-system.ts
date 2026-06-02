@@ -61,6 +61,7 @@ export type ProviderType = 'generation' | 'asset';
 export const BUILTIN_TYPE_IDS = {
   VOLCENGINE: 'volcengine',
   SEEDANCE: 'seedance',
+  OPENAI_IMAGE: 'openai-image',
 } as const;
 
 // ── Capability Definitions ──
@@ -564,14 +565,26 @@ function indicatorLabel(type: ConstraintIndicatorType, severity: 'error' | 'warn
 
 /** Parameters available for a specific model (drives UI controls) */
 export interface CapabilityParams {
+  outputType?: 'video' | 'image' | 'audio';
   resolution?: string[];
   aspectRatios?: string[];
+  imageSizes?: string[];
+  imageQuality?: string[];
+  imageOutputFormats?: string[];
+  imageBackgrounds?: string[];
+  imageModeration?: string[];
   durationRange?: { min: number; max: number; step: number };
   enableAudio?: boolean;
   enableMusic?: boolean;
   enableSubtitle?: boolean;
   enableWatermark?: boolean;
   enableWebSearch?: boolean;
+}
+
+export function isImageModel(params: CapabilityParams): boolean {
+  if (params.outputType === 'image') return true;
+  if ((params.imageSizes?.length ?? 0) > 0) return true;
+  return false;
 }
 
 // ── Model Definitions ──

@@ -15,6 +15,7 @@ import type { AssetType } from '../../types/persistence';
 
 const PROVIDER_PARAM_KNOWN_KEYS = new Set([
   'model', 'modelName', 'duration', 'aspectRatio', 'resolution', 'generateAudio', 'generateWatermark', 'style', 'negativePrompt',
+  'imageSize', 'imageQuality', 'imageOutputFormat', 'imageBackground', 'imageModeration', 'imageOutputCompression',
 ]);
 
 // ─── Types ───
@@ -45,6 +46,9 @@ export interface GenerationResultInfo {
   mimeType: string;
   lastFrameUrl?: string;
   lastFrameAssetId?: string;
+  usage?: Record<string, unknown>;
+  revisedPrompt?: string;
+  created?: number;
 }
 
 export interface GenerationRecord {
@@ -246,6 +250,9 @@ function createGenerationElement(gen: GenerationRecord): XmlElement {
     if (gen.result.height !== undefined) resultAttrs.height = gen.result.height;
     if (gen.result.lastFrameUrl) resultAttrs.lastFrameUrl = gen.result.lastFrameUrl;
     if (gen.result.lastFrameAssetId) resultAttrs.lastFrameAssetId = gen.result.lastFrameAssetId;
+    if (gen.result.created !== undefined) resultAttrs.created = gen.result.created;
+    if (gen.result.revisedPrompt) resultAttrs.revisedPrompt = gen.result.revisedPrompt;
+    if (gen.result.usage) resultAttrs.usage = JSON.stringify(gen.result.usage);
     element.child(createElement('result', resultAttrs).build());
   }
 
@@ -324,6 +331,9 @@ function parseGenerationElement(element: XmlElement): GenerationRecord {
       mimeType: resultElement.attributes.mimeType,
       lastFrameUrl: resultElement.attributes.lastFrameUrl || undefined,
       lastFrameAssetId: resultElement.attributes.lastFrameAssetId || undefined,
+      created: resultElement.attributes.created ? parseInt(resultElement.attributes.created, 10) : undefined,
+      revisedPrompt: resultElement.attributes.revisedPrompt || undefined,
+      usage: parseJsonRecord(resultElement.attributes.usage),
     };
   }
 
@@ -362,4 +372,16 @@ function parseGenerationElement(element: XmlElement): GenerationRecord {
     result,
     error,
   };
+}
+
+function parseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
