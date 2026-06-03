@@ -55,21 +55,3 @@ export function genSecondsToFragmentMs(seconds: number): number {
   return seconds * 1000;
 }
 
-/**
- * Compute weighted progress for continuous generation across segments.
- * Returns segment index info and overall percentage.
- */
-export function computeContinuousProgress(
-  plan: number[],
-  currentSegmentIndex: number,
-  segmentProgress: number,
-): { current: number; total: number; percent: number } {
-  const completedDur = plan.slice(0, currentSegmentIndex).reduce((a, b) => a + b, 0);
-  const totalDur = plan.reduce((a, b) => a + b, 0);
-  const segDur = (segmentProgress / 100) * (plan[currentSegmentIndex] ?? 0);
-  return {
-    current: currentSegmentIndex + 1,
-    total: plan.length,
-    percent: Math.round(((completedDur + segDur) / totalDur) * 100),
-  };
-}

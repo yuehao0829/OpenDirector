@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildContinuousPlan, fragmentMsToGenSeconds, isContinuousMode, computeContinuousProgress } from '../duration';
+import { buildContinuousPlan, fragmentMsToGenSeconds, isContinuousMode } from '../duration';
 
 describe('buildContinuousPlan', () => {
   it('returns a single segment for durations <= 15s', () => {
@@ -75,28 +75,3 @@ describe('isContinuousMode', () => {
   });
 });
 
-describe('computeContinuousProgress', () => {
-  it('returns correct progress for first segment at 50%', () => {
-    const result = computeContinuousProgress([15, 9, 8], 0, 50);
-    // completedDur=0, segDur=0.5*15=7.5, totalDur=32, percent=round(7.5/32*100)=round(23.4)=23
-    expect(result).toEqual({ current: 1, total: 3, percent: 23 });
-  });
-
-  it('returns 100% when all segments done', () => {
-    const result = computeContinuousProgress([15, 9, 8], 2, 100);
-    expect(result).toEqual({ current: 3, total: 3, percent: 100 });
-  });
-
-  it('handles single segment', () => {
-    const result = computeContinuousProgress([15], 0, 80);
-    expect(result).toEqual({ current: 1, total: 1, percent: 80 });
-  });
-
-  it('computes weighted progress across completed segments', () => {
-    // Plan [15, 9, 8] = 32s total; segment 1 (9s) at 50%
-    const result = computeContinuousProgress([15, 9, 8], 1, 50);
-    // completedDur = 15, segDur = 0.5 * 9 = 4.5, totalDur = 32
-    // percent = round((15 + 4.5) / 32 * 100) = round(60.9375) = 61
-    expect(result).toEqual({ current: 2, total: 3, percent: 61 });
-  });
-});

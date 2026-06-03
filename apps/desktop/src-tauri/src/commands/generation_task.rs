@@ -57,13 +57,6 @@ pub enum GenerationEvent {
         api_task_id: String,
         project_path: Option<String>,
     },
-    #[serde(rename = "progress")]
-    Progress {
-        task_id: String,
-        progress: i32,
-        status: String,
-        project_path: Option<String>,
-    },
     #[serde(rename = "download_progress")]
     DownloadProgress { task_id: String },
     #[serde(rename = "completed")]
@@ -871,9 +864,9 @@ async fn coordinator_loop(
     notify_rx: &mut mpsc::Receiver<()>,
     log_mgr: Arc<GenerationLogManager>,
 ) {
-    // Track last known (status, progress) + last log time per task_id
+    // Track last known status + last log time per task_id
     // to reduce log volume: log on status change, or at most every 60s otherwise
-    let mut last_status: HashMap<String, ((String, i32), std::time::Instant)> = HashMap::new();
+    let mut last_status: HashMap<String, (String, std::time::Instant)> = HashMap::new();
     let periodic_log_interval = std::time::Duration::from_secs(60);
 
     loop {
@@ -984,14 +977,13 @@ async fn coordinator_loop(
                             min_registered_at = snap.registered_at;
                         }
 
-                        let progress = status.progress.unwrap_or(0);
                         eprintln!(
-                            "[Coordinator] Task {} (api: {}): status={}, progress={}",
-                            snap.task_id, snap.api_task_id, status.status, progress
+                            "[Coordinator] Task {} (api: {}): status={}",
+                            snap.task_id, snap.api_task_id, status.status
                         );
 
-                        // Log on status/progress change, or periodically (every 60s) to avoid high log volume
-                        let status_key = (status.status.clone(), progress);
+                        // Log on status change, or periodically (every 60s) to avoid high log volume
+                        let status_key = status.status.clone();
                         let now = std::time::Instant::now();
                         let should_log = match last_status.get(&snap.task_id) {
                             Some((prev_key, last_log_time)) => {
@@ -1011,19 +1003,9 @@ async fn coordinator_loop(
                                 .data(serde_json::json!({
                                     "api_task_id": snap.api_task_id,
                                     "status": status.status,
-                                    "progress": progress,
                                 }))
                                 .log();
                         }
-                        let _ = app.emit(
-                            "generation:status",
-                            GenerationEvent::Progress {
-                                task_id: snap.task_id.clone(),
-                                progress,
-                                status: status.status.clone(),
-                                project_path: Some(snap.project_path.clone()),
-                            },
-                        );
 
                         match status.status.as_str() {
                             "succeeded" => {
@@ -1068,6 +1050,7 @@ async fn coordinator_loop(
         if !completed_tasks.is_empty() {
             let mut t = tasks.lock().await;
             for (task_id, outcome) in completed_tasks {
+                last_status.remove(&task_id);
                 if let Some(reg) = t.remove(&task_id) {
                     let _ = reg.result_tx.send(outcome);
                 }
@@ -1175,7 +1158,6 @@ async fn batch_query_tasks(
                 .unwrap_or_else(|| TaskStatusResult {
                     task_id: id.clone(),
                     status: "unknown".to_string(),
-                    progress: None,
                     result_url: None,
                     last_frame_url: None,
                     error: None,

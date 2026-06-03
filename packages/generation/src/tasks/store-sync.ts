@@ -42,15 +42,3 @@ export function cancelGeneration(taskId: string, folderPath?: string): Promise<b
 export function expireGeneration(taskId: string, errorMsg: string, folderPath?: string): Promise<boolean> {
   return transitionGeneration(taskId, 'expired', errorMsg, folderPath);
 }
-
-export function updateGenerationProgress(taskId: string, progress: number, folderPath?: string): void {
-  const gen = getGenerationById(taskId);
-  // Skip if progress unchanged — avoids redundant store updates and XML I/O
-  if (gen && gen.status === 'processing' && gen.progress === progress) return;
-  useGenerationStore.getState().updateGeneration(taskId, { status: 'processing', progress });
-  if (folderPath) {
-    updateGenerationsXml(folderPath, taskId, { status: 'processing' }).catch((err) =>
-      taskLog.warn(folderPath, 'progress_xml_write', 'Failed to write progress status to XML', { error: String(err) })
-    );
-  }
-}

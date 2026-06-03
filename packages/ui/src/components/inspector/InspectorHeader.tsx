@@ -21,8 +21,6 @@ interface InspectorHeaderProps {
   onModelChange: (modelId: string, instanceId: string) => void;
   modelDisabled?: boolean;
   trackType?: 'video' | 'audio';
-  /** Continuous segment progress info, e.g. { current: 2, total: 4, percent: 45 } */
-  segmentProgress?: { current: number; total: number; percent: number } | null;
 }
 
 export function InspectorHeader({
@@ -37,7 +35,6 @@ export function InspectorHeader({
   onModelChange,
   modelDisabled,
   trackType = 'video',
-  segmentProgress,
 }: InspectorHeaderProps) {
   const { t } = useTranslation();
   const isAudio = trackType === 'audio';
@@ -77,13 +74,7 @@ export function InspectorHeader({
             )}
           >
             {isGenerating
-              ? segmentProgress
-                ? t('inspector.actions.generatingProgress', {
-                    current: segmentProgress.current,
-                    total: segmentProgress.total,
-                    percent: segmentProgress.percent,
-                  })
-                : t('inspector.actions.generating')
+              ? t('inspector.actions.generating')
               : hasGenerated
                 ? t('inspector.actions.regenerate')
                 : t('inspector.actions.generate')}

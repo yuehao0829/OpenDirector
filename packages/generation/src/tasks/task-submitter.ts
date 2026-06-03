@@ -414,7 +414,6 @@ async function submitGptImageTask(
     useGenerationStore.getState().updateGeneration(taskId, {
       status: 'processing',
       startedAt: new Date(),
-      progress: 10,
     });
 
     const result = await tauriBridge.openAIImageApi.generateImage({
@@ -482,7 +481,6 @@ async function submitGptImageTask(
       result: resultInfo,
       completedAt,
       isSelected: true,
-      progress: undefined,
     });
 
     const generation: Generation = {

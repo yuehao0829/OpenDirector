@@ -109,7 +109,6 @@ pub struct CreateTaskResult {
 pub struct TaskStatusResult {
     pub task_id: String,
     pub status: String,
-    pub progress: Option<i32>,
     pub result_url: Option<String>,
     pub last_frame_url: Option<String>,
     pub error: Option<serde_json::Value>,
@@ -462,12 +461,6 @@ pub fn parse_single_task_status_from_value(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let progress = data
-        .get("progress")
-        .and_then(|v| v.as_i64())
-        .map(|p| p as i32);
-
-    // Extract video URL from content
     let result_url = data
         .get("content")
         .and_then(|c| c.get("video_url"))
@@ -486,7 +479,6 @@ pub fn parse_single_task_status_from_value(
     TaskStatusResult {
         task_id: task_id.to_string(),
         status,
-        progress,
         result_url,
         last_frame_url,
         error,

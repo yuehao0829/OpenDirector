@@ -20,7 +20,6 @@ import type {
 import { computeReferenceIndicators, isImageModel, validateInputRequirements } from '@opendirector/core/types/provider-system';
 import {
   buildContinuousPlan,
-  computeContinuousProgress,
   fragmentMsToGenSeconds,
   genSecondsToFragmentMs,
   isContinuousMode,
@@ -231,14 +230,6 @@ export function FragmentInspector() {
   );
   const isGenerating = !!activeGeneration;
 
-  // Continuous segment progress
-  const segmentProgress = useMemo(() => {
-    if (!activeGeneration?.continuousMode) return null;
-    const plan = activeGeneration.continuousPlan ?? [];
-    const idx = activeGeneration.currentSegmentIndex ?? 0;
-    if (plan.length === 0) return null;
-    return computeContinuousProgress(plan, idx, activeGeneration.progress ?? 0);
-  }, [activeGeneration?.continuousMode, activeGeneration?.continuousPlan, activeGeneration?.currentSegmentIndex, activeGeneration?.progress]);
 
   const resolvedModelSelection = useMemo(() => {
     const ps = selectedFragmentProviderSelection;
@@ -539,7 +530,6 @@ export function FragmentInspector() {
         selectedCompositeKey={selectedCompositeKey}
         onModelChange={handleModelChange}
         trackType={resolvedTrackType}
-        segmentProgress={segmentProgress}
       />
 
       {/* Scrollable content area */}

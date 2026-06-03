@@ -163,16 +163,6 @@ export function TaskOverview() {
                     <span>{providerName}</span>
                     <span>{formatTime(elapsed, false)}</span>
                   </div>
-                  {(g.progress ?? 0) > 0 && (
-                    <div className="pl-4">
-                      <div className="h-1.5 bg-zinc-700 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                          style={{ width: `${g.progress}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })}

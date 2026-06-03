@@ -1,11 +1,9 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { getProviderTypeRegistry } from '@opendirector/core/services/service-locator';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useGenerationStore } from '@opendirector/core/stores/generationStore';
 import { useSelectionStore } from '@opendirector/core/stores/selectionStore';
 import type { Generation } from '@opendirector/core/types/generation';
-import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
-import { computeContinuousProgress } from '@opendirector/core/utils/duration';
 import { formatDuration } from '@opendirector/core/utils/time';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -107,17 +105,6 @@ export function GeneratedCard({ generation }: GeneratedCardProps) {
   const canInteract = generation.status === 'completed' && !!generation.resultAssetId;
   const isFailed = generation.status === 'failed';
   const isNotCompleted = generation.status !== 'completed';
-  const isActive = isActiveGenerationStatus(generation.status);
-
-  // Continuous segment progress for active generations
-  const segmentInfo = useMemo(() => {
-    if (!generation.continuousMode) return null;
-    const plan = generation.continuousPlan ?? [];
-    const idx = generation.currentSegmentIndex ?? 0;
-    if (plan.length === 0) return null;
-    const progress = isActive ? (generation.progress ?? 0) : 100;
-    return computeContinuousProgress(plan, idx, progress);
-  }, [generation.continuousMode, generation.continuousPlan, generation.currentSegmentIndex, generation.progress, isActive]);
 
   const { line1: modelLine1, line2: modelLine2 } = resolveModelDisplay(generation.providerParams);
   const errorDisplay = isFailed && generation.errorMessage ? formatErrorMessage(generation.errorMessage) : null;
@@ -203,14 +190,6 @@ export function GeneratedCard({ generation }: GeneratedCardProps) {
         <p className={clsx('text-sm text-white leading-tight', isNotCompleted ? 'line-clamp-1' : 'line-clamp-2')}>
           {generation.promptText}
         </p>
-        {isActive && generation.progress != null && generation.progress > 0 && (
-          <div className="mt-1.5 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-500"
-              style={{ width: `${segmentInfo?.percent ?? generation.progress}%` }}
-            />
-          </div>
-        )}
         {errorDisplay && (
           <div className="relative group/error">
             <p className="text-xs text-red-400 mt-1 line-clamp-1">
@@ -224,14 +203,6 @@ export function GeneratedCard({ generation }: GeneratedCardProps) {
       </div>
 
       <div className="flex-shrink-0 text-xs text-zinc-400 w-20 text-center space-y-0.5">
-        {segmentInfo && isActive && (
-          <p className="text-blue-400">
-            {t('assetPanel.status.segment', {
-              current: segmentInfo.current,
-              total: segmentInfo.total,
-            })}
-          </p>
-        )}
         <p className="truncate">{formatDuration(asset?.duration)}</p>
         <p className="text-zinc-500 truncate">{modelLine1}</p>
         {modelLine2 && <p className="text-zinc-500 truncate">{modelLine2}</p>}

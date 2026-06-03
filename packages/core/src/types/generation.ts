@@ -204,8 +204,6 @@ export interface Generation {
   outputType: AssetType;           // Intended output type (video/image/audio) — set at creation, independent of success/failure
   resultAssetId?: string;
   status: GenerationStatus;
-  /** Runtime progress (0–100), not persisted to XML */
-  progress?: number;
   errorMessage?: string;
   providerTaskId?: string;
 

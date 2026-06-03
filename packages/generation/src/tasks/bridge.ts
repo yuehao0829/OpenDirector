@@ -17,7 +17,7 @@ import { useProjectStore } from '@opendirector/core/stores/projectStore';
 import { updateGenerationsXml } from './generation-xml-repository';
 import { handleTaskComplete } from './task-lifecycle';
 import { resetFragmentIfGenerating } from './fragment-utils';
-import { failGeneration, cancelGeneration, updateGenerationProgress, getGenerationById } from './store-sync';
+import { failGeneration, cancelGeneration, getGenerationById } from './store-sync';
 import { taskLog } from './task-log';
 
 let initialized = false;
@@ -68,16 +68,6 @@ export async function initTaskBridge(): Promise<void> {
             }).catch((err) => taskLog.warn(projectPath, 'write_provider_task_id', 'Failed to write providerTaskId to XML', { error: String(err) }));
           }
         }
-        break;
-
-      case 'progress':
-        taskLog.info(projectPath, 'event_progress', 'Task progress updated', {
-          taskId: payload.task_id,
-          progress: payload.progress,
-        });
-        // Always update store progress (needed for Rust-side polling to work correctly),
-        // but only write XML for the current project
-        updateGenerationProgress(payload.task_id, payload.progress, isCurrent ? projectPath : undefined);
         break;
 
       case 'completed':

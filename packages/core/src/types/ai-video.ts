@@ -112,7 +112,6 @@ export interface CreateTaskResult {
 export interface TaskStatusResult {
   task_id: string;
   status: TaskStatus;
-  progress?: number;
   result_url?: string;
   last_frame_url?: string;
   error?: unknown;
@@ -202,14 +201,6 @@ export interface GenerationEventCreated {
   project_path?: string;
 }
 
-export interface GenerationEventProgress {
-  type: 'progress';
-  task_id: string;
-  progress: number;
-  status: string;
-  project_path?: string;
-}
-
 export interface GenerationEventDownloadProgress {
   type: 'download_progress';
   task_id: string;
@@ -241,7 +232,6 @@ export interface GenerationEventCancelled {
 
 export type GenerationEvent =
   | GenerationEventCreated
-  | GenerationEventProgress
   | GenerationEventDownloadProgress
   | GenerationEventCompleted
   | GenerationEventFailed

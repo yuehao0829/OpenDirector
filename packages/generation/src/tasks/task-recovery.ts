@@ -37,7 +37,7 @@ import {
 } from './generation-xml-repository';
 import { handleTaskComplete, markRecordTerminal, triggerNextSegmentIfNeeded } from './task-lifecycle';
 import { resetFragmentIfGenerating } from './fragment-utils';
-import { failGeneration, cancelGeneration, expireGeneration, updateGenerationProgress } from './store-sync';
+import { failGeneration, cancelGeneration, expireGeneration } from './store-sync';
 import { taskLog } from './task-log';
 import { safeSaveAsset } from './task-db-helpers';
 
@@ -331,7 +331,6 @@ async function restoreSucceededTask(
 function restoreProcessingRecord(record: GenerationRecord): void {
   useGenerationStore.getState().updateGeneration(record.id, {
     status: 'processing',
-    progress: 0,
     errorMessage: undefined,
     continuousMode: record.continuousMode,
     continuousPlan: record.continuousPlan,
@@ -416,8 +415,6 @@ export async function refreshActiveGenerations(): Promise<void> {
       if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
       const written = await expireGeneration(gen.id, error, folderPath);
       if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
-    } else if ((serverStatus === 'running' || serverStatus === 'pending') && serverResult.progress != null) {
-      updateGenerationProgress(gen.id, serverResult.progress, folderPath);
     }
   }
 }

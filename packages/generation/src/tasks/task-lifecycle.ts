@@ -97,7 +97,6 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
         if (isCurrentProject) {
           useGenerationStore.getState().updateGeneration(taskId, {
             status: 'completed',
-            progress: 100,
           });
           const fragment = useTimelineStore.getState().fragments.find((f) => f.id === gen.fragmentId);
           if (fragment) {
@@ -230,7 +229,6 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
         ...(lastFrameAssetId ? { lastFrameAssetId } : {}),
         completedAt,
         ...(isContinuousIntermediate ? {} : { isSelected: true }),
-        progress: undefined,
       });
     }
 
@@ -576,7 +574,6 @@ async function persistLastFrame(
       lastFrameAssetId: undefined,
       compositeAssetId: undefined,
       firstFrameAsReference: undefined,
-      progress: undefined,
       errorMessage: undefined,
       providerTaskId: undefined,
       result: undefined,
