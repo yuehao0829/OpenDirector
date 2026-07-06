@@ -4,8 +4,21 @@ use super::transport::clamp_position;
 
 #[derive(Debug, Default)]
 pub struct PreviewBackendPollResult {
-    pub reached_eos: bool,
+    // Seqnums of any EOS messages seen this poll. A post-seek EOS inherits the seek's seqnum, so
+    // the session can tell a genuine end-of-stream from a stale EOS left on the bus by a seek.
+    pub eos_seqnums: Vec<gst::Seqnum>,
     pub last_error: Option<String>,
+    pub async_done_seqnums: Vec<gst::Seqnum>,
+}
+
+/// Latest-wins frame timestamp sample stamped with the seek generation that was
+/// current when the buffer flowed. Samples whose generation is older than the
+/// player's current generation predate the most recent flushing seek and are
+/// discarded by the session.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameSample {
+    pub generation: u64,
+    pub pts_ms: f64,
 }
 
 const SEEK_END_EPSILON_MS: f64 = 0.001;
@@ -69,6 +82,8 @@ pub(crate) fn fail_next_bind_surface_and_preroll_for_tests(count: usize) {
 #[cfg(not(test))]
 mod imp {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use ges::prelude::*;
@@ -81,11 +96,13 @@ mod imp {
     use crate::media::runtime::prepare_gstreamer_process_environment;
 
     use super::{
-        clamp_seek_position_ms, sanitize_duration_ms, seek_segment_range_ms, GesPreviewTimeline,
-        PreviewBackendPollResult,
+        clamp_seek_position_ms, sanitize_duration_ms, seek_segment_range_ms, FrameSample,
+        GesPreviewTimeline, PreviewBackendPollResult,
     };
 
-    const ASYNC_OPERATION_TIMEOUT: Duration = Duration::from_millis(1_000);
+    // Only the initial preroll during a pipeline build/swap and the final teardown block
+    // on the pipeline settling. Transport ops never block; completion is observed by poll().
+    const PIPELINE_BUILD_TIMEOUT: Duration = Duration::from_secs(5);
 
     #[derive(Debug)]
     pub struct GstreamerPreviewPlayer {
@@ -95,13 +112,16 @@ mod imp {
         surface_window_handle: Option<usize>,
         duration_ms: f64,
         frame_timestamp_probe: Option<(gst::Pad, gst::PadProbeId)>,
+        frame_slot: Arc<Mutex<Option<FrameSample>>>,
+        seek_generation: Arc<AtomicU64>,
     }
 
     // SAFETY:
-    // The preview manager serializes all access to preview sessions behind a single mutex.
-    // GES/GStreamer bindings do not mark these generated wrapper types as `Send`, but this
-    // application only moves the player as an opaque session-owned value between executor
-    // tasks and never accesses it concurrently.
+    // Each preview session owns its player behind a dedicated `tokio::sync::Mutex`, so the
+    // player is only ever accessed by one task at a time. GES/GStreamer bindings do not mark
+    // these generated wrapper types as `Send`, but this application only transfers the player
+    // as an opaque session-owned value between executor threads (including a build performed on
+    // a blocking thread) and never touches it concurrently.
     unsafe impl Send for GstreamerPreviewPlayer {}
 
     impl GstreamerPreviewPlayer {
@@ -120,6 +140,15 @@ mod imp {
                 None
             };
 
+            // GESPipeline's preview sink setters assert they run on the thread that
+            // constructed the pipeline, and GES installs a default audio sink through
+            // that setter during the first state change — which happens later on a
+            // different thread. Pre-set the audio sink here so GES never has to.
+            if prepared_timeline.has_audio {
+                let audio_sink = create_audio_sink()?;
+                pipeline.preview_set_audio_sink(Some(&audio_sink));
+            }
+
             pipeline.set_timeline(&timeline).map_err(|error| {
                 format!("failed to attach preview timeline to pipeline: {error}")
             })?;
@@ -127,14 +156,18 @@ mod imp {
                 .set_mode(preview_mode())
                 .map_err(|error| format!("failed to set preview pipeline mode: {error}"))?;
 
-            Ok(Self {
+            let mut player = Self {
                 pipeline,
                 _timeline: timeline,
                 video_sink,
                 surface_window_handle: None,
                 duration_ms: sanitize_duration_ms(prepared_timeline.duration_ms),
                 frame_timestamp_probe: None,
-            })
+                frame_slot: Arc::new(Mutex::new(None)),
+                seek_generation: Arc::new(AtomicU64::new(0)),
+            };
+            player.install_frame_timestamp_probe();
+            Ok(player)
         }
 
         pub fn bind_surface_and_preroll(
@@ -145,7 +178,7 @@ mod imp {
             self.pipeline
                 .set_state(gst::State::Paused)
                 .map_err(|error| format!("failed to preroll preview pipeline: {error}"))?;
-            wait_for_pipeline_async_completion(&self.pipeline, "preroll preview pipeline")
+            wait_for_pipeline_settle(&self.pipeline, "preroll preview pipeline")
         }
 
         pub fn bind_surface_handle(
@@ -162,21 +195,25 @@ mod imp {
             Ok(())
         }
 
-        pub fn install_frame_timestamp_probe(
-            &mut self,
-            sender: std::sync::mpsc::SyncSender<f64>,
-        ) {
+        fn install_frame_timestamp_probe(&mut self) {
             let Some(video_sink) = self.video_sink.as_ref() else {
                 return;
             };
             let Some(sink_pad) = video_sink.static_pad("sink") else {
                 return;
             };
+            let frame_slot = self.frame_slot.clone();
+            let seek_generation = self.seek_generation.clone();
             let Some(probe_id) = sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
                 if let Some(buffer) = info.buffer() {
                     if let Some(pts) = buffer.pts() {
-                        let position_ms = clock_time_to_ms(pts);
-                        let _ = sender.try_send(position_ms);
+                        let sample = FrameSample {
+                            generation: seek_generation.load(Ordering::Acquire),
+                            pts_ms: clock_time_to_ms(pts),
+                        };
+                        if let Ok(mut slot) = frame_slot.lock() {
+                            *slot = Some(sample);
+                        }
                     }
                 }
                 gst::PadProbeReturn::Ok
@@ -186,43 +223,54 @@ mod imp {
             self.frame_timestamp_probe = Some((sink_pad, probe_id));
         }
 
-        pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<(), String> {
-            self.seek_internal(position_ms, rate)?;
+        pub fn take_frame_sample(&self) -> Option<FrameSample> {
+            self.frame_slot.lock().ok().and_then(|mut slot| slot.take())
+        }
+
+        pub fn clear_frame_sample(&self) {
+            if let Ok(mut slot) = self.frame_slot.lock() {
+                *slot = None;
+            }
+        }
+
+        pub fn seek_generation(&self) -> u64 {
+            self.seek_generation.load(Ordering::Acquire)
+        }
+
+        pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<gst::Seqnum, String> {
+            let seqnum = self.seek_internal(position_ms, rate)?;
             self.pipeline
                 .set_state(gst::State::Playing)
                 .map_err(|error| format!("failed to start preview pipeline: {error}"))?;
-            wait_for_pipeline_async_completion(&self.pipeline, "start preview pipeline")?;
-            Ok(())
+            Ok(seqnum)
         }
 
         pub fn pause(&mut self) -> Result<(), String> {
             self.pipeline
                 .set_state(gst::State::Paused)
                 .map_err(|error| format!("failed to pause preview pipeline: {error}"))?;
-            wait_for_pipeline_async_completion(&self.pipeline, "pause preview pipeline")?;
             Ok(())
         }
 
-        pub fn seek_paused(&mut self, position_ms: f64) -> Result<(), String> {
+        pub fn seek_paused(&mut self, position_ms: f64) -> Result<gst::Seqnum, String> {
             self.pipeline
                 .set_state(gst::State::Paused)
                 .map_err(|error| format!("failed to prepare preview pipeline for seek: {error}"))?;
-            wait_for_pipeline_async_completion(
-                &self.pipeline,
-                "prepare preview pipeline for seek",
-            )?;
-            self.seek_internal(position_ms, 1.0)?;
-            #[cfg(target_os = "macos")]
-            expose_video_sink(self.video_sink.as_ref());
-            Ok(())
+            self.seek_internal(position_ms, 1.0)
         }
 
-        pub fn query_position_ms(&self) -> f64 {
+        #[cfg(target_os = "macos")]
+        pub fn expose_on_seek_complete(&self) {
+            expose_video_sink(self.video_sink.as_ref());
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        pub fn expose_on_seek_complete(&self) {}
+
+        pub fn query_position_ms(&self) -> Option<f64> {
             self.pipeline
                 .query_position::<gst::ClockTime>()
-                .map(clock_time_to_ms)
-                .unwrap_or(0.0)
-                .clamp(0.0, self.duration_ms)
+                .map(|position| clock_time_to_ms(position).clamp(0.0, self.duration_ms))
         }
 
         pub fn poll(&mut self) -> Result<PreviewBackendPollResult, String> {
@@ -235,7 +283,10 @@ mod imp {
             for message in bus.iter_timed(Some(gst::ClockTime::ZERO)) {
                 match message.view() {
                     gst::MessageView::Eos(..) => {
-                        result.reached_eos = true;
+                        result.eos_seqnums.push(message.seqnum());
+                    }
+                    gst::MessageView::AsyncDone(..) => {
+                        result.async_done_seqnums.push(message.seqnum());
                     }
                     gst::MessageView::Error(error) => {
                         let detail = error
@@ -263,7 +314,7 @@ mod imp {
             self.pipeline
                 .set_state(gst::State::Null)
                 .map_err(|error| format!("failed to stop preview pipeline: {error}"))?;
-            wait_for_pipeline_async_completion(&self.pipeline, "stop preview pipeline")?;
+            wait_for_pipeline_settle(&self.pipeline, "stop preview pipeline")?;
             self.surface_window_handle = None;
             Ok(())
         }
@@ -276,28 +327,42 @@ mod imp {
             clamp_seek_position_ms(position_ms, self.duration_ms)
         }
 
-        fn seek_internal(&self, position_ms: f64, rate: f64) -> Result<(), String> {
+        fn seek_internal(&self, position_ms: f64, rate: f64) -> Result<gst::Seqnum, String> {
+            // Bump the generation BEFORE dispatching so frames buffered under the old segment
+            // are stamped stale and the session discards them once the flush lands.
+            self.seek_generation.fetch_add(1, Ordering::AcqRel);
             // Keep the segment stop explicit so repeated seeks never reuse a stale earlier stop.
             let (start_ms, stop_ms) = seek_segment_range_ms(position_ms, self.duration_ms);
-            self.pipeline
-                .seek(
-                    rate,
-                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                    gst::SeekType::Set,
-                    clock_time_from_ms(start_ms),
-                    gst::SeekType::Set,
-                    clock_time_from_ms(stop_ms),
-                )
-                .map_err(|error| format!("failed to seek preview pipeline: {error}"))?;
-            wait_for_pipeline_async_completion(&self.pipeline, "seek preview pipeline")?;
-            Ok(())
+            let seek_event = gst::event::Seek::new(
+                rate,
+                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                gst::SeekType::Set,
+                clock_time_from_ms(start_ms),
+                gst::SeekType::Set,
+                clock_time_from_ms(stop_ms),
+            );
+            let seqnum = seek_event.seqnum();
+            let accepted = self.pipeline.send_event(seek_event);
+            if accepted {
+                Ok(seqnum)
+            } else {
+                Err("failed to seek preview pipeline".to_string())
+            }
         }
     }
 
-    fn wait_for_pipeline_async_completion(
-        pipeline: &ges::Pipeline,
-        operation: &str,
-    ) -> Result<(), String> {
+    impl Drop for GstreamerPreviewPlayer {
+        fn drop(&mut self) {
+            // Best-effort teardown for any path that drops a player without calling shutdown()
+            // (e.g. a rebuild discarded after its session was destroyed). Never block or panic here.
+            if let Some((pad, probe_id)) = self.frame_timestamp_probe.take() {
+                pad.remove_probe(probe_id);
+            }
+            let _ = self.pipeline.set_state(gst::State::Null);
+        }
+    }
+
+    fn wait_for_pipeline_settle(pipeline: &ges::Pipeline, operation: &str) -> Result<(), String> {
         let bus = pipeline
             .bus()
             .ok_or_else(|| "preview pipeline bus is unavailable".to_string())?;
@@ -316,13 +381,13 @@ mod imp {
             }
 
             let elapsed = started_at.elapsed();
-            if elapsed >= ASYNC_OPERATION_TIMEOUT {
+            if elapsed >= PIPELINE_BUILD_TIMEOUT {
                 return Err(format!(
                     "timed out waiting to {operation} (current={current_state:?}, pending={pending_state:?})"
                 ));
             }
 
-            let remaining = ASYNC_OPERATION_TIMEOUT
+            let remaining = PIPELINE_BUILD_TIMEOUT
                 .checked_sub(elapsed)
                 .unwrap_or_default()
                 .as_millis() as u64;
@@ -367,13 +432,16 @@ mod imp {
                 .entry(clip.layer)
                 .or_insert_with(|| timeline.append_layer())
                 .clone();
-            let asset = asset_cache
-                .entry(clip.uri.clone())
-                .or_insert_with(|| {
-                    ges::UriClipAsset::request_sync(&clip.uri)
-                        .expect("valid preview asset should have been discoverable")
-                })
-                .clone();
+            let asset = match asset_cache.get(&clip.uri) {
+                Some(asset) => asset.clone(),
+                None => {
+                    let asset = ges::UriClipAsset::request_sync(&clip.uri).map_err(|error| {
+                        format!("failed to discover preview asset {}: {error}", clip.uri)
+                    })?;
+                    asset_cache.insert(clip.uri.clone(), asset.clone());
+                    asset
+                }
+            };
 
             let ges_clip = layer
                 .add_asset(
@@ -449,6 +517,12 @@ mod imp {
         }
     }
 
+    fn create_audio_sink() -> Result<gst::Element, String> {
+        gst::ElementFactory::make("autoaudiosink")
+            .build()
+            .map_err(|error| format!("failed to create autoaudiosink: {error}"))
+    }
+
     #[cfg(target_os = "macos")]
     fn expose_video_sink(video_sink: Option<&gst::Element>) {
         if let Some(sink) = video_sink {
@@ -485,7 +559,8 @@ mod imp {
     use std::cell::Cell;
 
     use super::{
-        clamp_seek_position_ms, sanitize_duration_ms, GesPreviewTimeline, PreviewBackendPollResult,
+        clamp_seek_position_ms, sanitize_duration_ms, FrameSample, GesPreviewTimeline,
+        PreviewBackendPollResult,
     };
 
     thread_local! {
@@ -514,7 +589,9 @@ mod imp {
         rate: f64,
         playing: bool,
         surface_window_handle: Option<usize>,
-        frame_timestamp_probe: Option<()>,
+        seek_generation: u64,
+        frame_slot: Cell<Option<FrameSample>>,
+        pending_async_done: Option<gst::Seqnum>,
     }
 
     impl GstreamerPreviewPlayer {
@@ -525,7 +602,9 @@ mod imp {
                 rate: 1.0,
                 playing: false,
                 surface_window_handle: None,
-                frame_timestamp_probe: None,
+                seek_generation: 0,
+                frame_slot: Cell::new(None),
+                pending_async_done: None,
             })
         }
 
@@ -547,13 +626,23 @@ mod imp {
             Ok(())
         }
 
-        pub fn install_frame_timestamp_probe(&mut self, _sender: std::sync::mpsc::SyncSender<f64>) {}
+        pub fn take_frame_sample(&self) -> Option<FrameSample> {
+            self.frame_slot.take()
+        }
 
-        pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<(), String> {
+        pub fn clear_frame_sample(&self) {
+            self.frame_slot.set(None);
+        }
+
+        pub fn seek_generation(&self) -> u64 {
+            self.seek_generation
+        }
+
+        pub fn play(&mut self, position_ms: f64, rate: f64) -> Result<gst::Seqnum, String> {
             self.position_ms = clamp_seek_position_ms(position_ms, self.duration_ms);
             self.rate = rate;
             self.playing = true;
-            Ok(())
+            Ok(self.dispatch_seek())
         }
 
         pub fn pause(&mut self) -> Result<(), String> {
@@ -561,23 +650,28 @@ mod imp {
             Ok(())
         }
 
-        pub fn seek_paused(&mut self, position_ms: f64) -> Result<(), String> {
+        pub fn seek_paused(&mut self, position_ms: f64) -> Result<gst::Seqnum, String> {
             self.position_ms = clamp_seek_position_ms(position_ms, self.duration_ms);
             self.playing = false;
-            Ok(())
+            Ok(self.dispatch_seek())
         }
 
-        pub fn query_position_ms(&self) -> f64 {
-            self.position_ms
+        pub fn expose_on_seek_complete(&self) {}
+
+        pub fn query_position_ms(&self) -> Option<f64> {
+            Some(self.position_ms)
         }
 
         pub fn poll(&mut self) -> Result<PreviewBackendPollResult, String> {
             let _ = (self.rate, self.playing, self.surface_window_handle);
-            Ok(PreviewBackendPollResult::default())
+            Ok(PreviewBackendPollResult {
+                async_done_seqnums: self.pending_async_done.take().into_iter().collect(),
+                ..PreviewBackendPollResult::default()
+            })
         }
 
-        pub fn is_playing_for_tests(&self) -> bool {
-            self.playing
+        pub fn set_frame_sample_for_tests(&mut self, sample: FrameSample) {
+            self.frame_slot.set(Some(sample));
         }
 
         pub fn shutdown(&mut self) -> Result<(), String> {
@@ -591,6 +685,15 @@ mod imp {
 
         pub fn clamp_seek_position_ms(&self, position_ms: f64) -> f64 {
             clamp_seek_position_ms(position_ms, self.duration_ms)
+        }
+
+        // Model a flushing seek: bump the generation and stage the seqnum that the next poll()
+        // will surface as the matching ASYNC_DONE, mirroring the real backend's completion path.
+        fn dispatch_seek(&mut self) -> gst::Seqnum {
+            self.seek_generation += 1;
+            let seqnum = gst::Seqnum::next();
+            self.pending_async_done = Some(seqnum);
+            seqnum
         }
     }
 }

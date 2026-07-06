@@ -471,28 +471,28 @@ export const previewApi = {
     return invoke('media_preview_set_timeline', { sessionId, snapshot });
   },
 
-  play(sessionId: string): Promise<void> {
-    return invoke('media_preview_play', { sessionId });
+  play(sessionId: string, epoch: number): Promise<void> {
+    return invoke('media_preview_play', { sessionId, epoch });
   },
 
-  playFrom(sessionId: string, timeMs: number): Promise<void> {
-    return invoke('media_preview_play_from', { sessionId, timeMs });
+  playFrom(sessionId: string, timeMs: number, epoch: number): Promise<void> {
+    return invoke('media_preview_play_from', { sessionId, timeMs, epoch });
   },
 
-  pause(sessionId: string): Promise<void> {
-    return invoke('media_preview_pause', { sessionId });
+  pause(sessionId: string, epoch: number): Promise<void> {
+    return invoke('media_preview_pause', { sessionId, epoch });
   },
 
-  seek(sessionId: string, timeMs: number): Promise<void> {
-    return invoke('media_preview_seek', { sessionId, timeMs });
+  seek(sessionId: string, timeMs: number, epoch: number): Promise<void> {
+    return invoke('media_preview_seek', { sessionId, timeMs, epoch });
   },
 
-  stepFrame(sessionId: string, direction = 1): Promise<void> {
-    return invoke('media_preview_step_frame', { sessionId, direction });
+  stepFrame(sessionId: string, direction: number, epoch: number): Promise<void> {
+    return invoke('media_preview_step_frame', { sessionId, direction, epoch });
   },
 
-  setRate(sessionId: string, rate: number): Promise<void> {
-    return invoke('media_preview_set_rate', { sessionId, rate });
+  setRate(sessionId: string, rate: number, epoch: number): Promise<void> {
+    return invoke('media_preview_set_rate', { sessionId, rate, epoch });
   },
 
   getDiagnostics(sessionId: string): Promise<PreviewDiagnostics> {

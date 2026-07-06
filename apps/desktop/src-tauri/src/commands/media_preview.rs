@@ -72,53 +72,59 @@ pub async fn media_preview_set_timeline(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_play(
     session_id: String,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.play(&session_id).await
+    state.play(&session_id, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_play_from(
     session_id: String,
     time_ms: f64,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.play_from(&session_id, time_ms).await
+    state.play_from(&session_id, time_ms, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_pause(
     session_id: String,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.pause(&session_id).await
+    state.pause(&session_id, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_seek(
     session_id: String,
     time_ms: f64,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.seek(&session_id, time_ms).await
+    state.seek(&session_id, time_ms, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_step_frame(
     session_id: String,
     direction: i32,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.step_frame(&session_id, direction).await
+    state.step_frame(&session_id, direction, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn media_preview_set_rate(
     session_id: String,
     rate: f64,
+    epoch: u64,
     state: State<'_, Arc<PreviewSessionManager>>,
 ) -> Result<(), String> {
-    state.set_rate(&session_id, rate).await
+    state.set_rate(&session_id, rate, epoch).await
 }
 
 #[tauri::command(rename_all = "camelCase")]

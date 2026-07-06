@@ -119,6 +119,10 @@ export class PreviewSessionController {
   private session: PreviewSessionInfo | null = null;
   private unlisten: Array<() => void> = [];
   private listeners = new Set<PreviewSessionListener>();
+  // Single writer of the transport epoch. Allocated per outgoing transport
+  // command; incoming position/state/frameTimestamp events whose epoch does not
+  // match the latest sent epoch are stale intents and are dropped here.
+  private transportEpoch = 0;
 
   get sessionId(): string | null {
     return this.session?.sessionId ?? null;
@@ -154,6 +158,8 @@ export class PreviewSessionController {
     const sessionId = this.session?.sessionId;
     this.teardownListeners();
     this.session = null;
+    // Re-align a reused controller with a fresh backend session's epoch 0.
+    this.transportEpoch = 0;
     if (!sessionId) {
       return;
     }
@@ -213,37 +219,37 @@ export class PreviewSessionController {
   async play(): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.play(sessionId);
+    await tauriBridge.previewApi.play(sessionId, ++this.transportEpoch);
   }
 
   async playFrom(timeMs: number): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.playFrom(sessionId, timeMs);
+    await tauriBridge.previewApi.playFrom(sessionId, timeMs, ++this.transportEpoch);
   }
 
   async pause(): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.pause(sessionId);
+    await tauriBridge.previewApi.pause(sessionId, ++this.transportEpoch);
   }
 
   async seek(timeMs: number): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.seek(sessionId, timeMs);
+    await tauriBridge.previewApi.seek(sessionId, timeMs, ++this.transportEpoch);
   }
 
   async stepFrame(direction: 1 | -1 = 1): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.stepFrame(sessionId, direction);
+    await tauriBridge.previewApi.stepFrame(sessionId, direction, ++this.transportEpoch);
   }
 
   async setRate(rate: number): Promise<void> {
     const sessionId = this.requireSessionId();
     if (!sessionId) return;
-    await tauriBridge.previewApi.setRate(sessionId, rate);
+    await tauriBridge.previewApi.setRate(sessionId, rate, ++this.transportEpoch);
   }
 
   async getDiagnostics(): Promise<PreviewDiagnostics | null> {
@@ -256,18 +262,22 @@ export class PreviewSessionController {
     return isNativeTimelinePreviewEnabled() ? (this.session?.sessionId ?? null) : null;
   }
 
+  private isFreshEpoch(epoch: number): boolean {
+    return epoch === this.transportEpoch;
+  }
+
   private async attachEventListeners(): Promise<void> {
     const sessionId = this.session?.sessionId;
     if (!sessionId) return;
 
     const listeners = await Promise.all([
       tauriBridge.listen<PreviewSessionPositionEvent>(PREVIEW_POSITION_EVENT, (payload) => {
-        if (payload.sessionId === sessionId) {
+        if (payload.sessionId === sessionId && this.isFreshEpoch(payload.epoch)) {
           this.emit({ type: 'position', payload });
         }
       }),
       tauriBridge.listen<PreviewSessionStateEvent>(PREVIEW_STATE_EVENT, (payload) => {
-        if (payload.sessionId === sessionId) {
+        if (payload.sessionId === sessionId && this.isFreshEpoch(payload.epoch)) {
           this.applyStateEvent(payload);
           this.emit({ type: 'state', payload });
         }
@@ -285,7 +295,7 @@ export class PreviewSessionController {
       tauriBridge.listen<PreviewSessionFrameTimestampEvent>(
         PREVIEW_FRAME_TIMESTAMP_EVENT,
         (payload) => {
-          if (payload.sessionId === sessionId) {
+          if (payload.sessionId === sessionId && this.isFreshEpoch(payload.epoch)) {
             this.emit({ type: 'frameTimestamp', payload });
           }
         },

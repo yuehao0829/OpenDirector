@@ -84,11 +84,13 @@ export interface PreviewSessionPositionEvent {
   isBuffering: boolean;
   driftMs: number;
   rate: number;
+  epoch: number;
 }
 
 export interface PreviewSessionFrameTimestampEvent {
   sessionId: string;
   positionMs: number;
+  epoch: number;
 }
 
 export interface PreviewSessionStateEvent {
@@ -99,6 +101,7 @@ export interface PreviewSessionStateEvent {
   nativeSurfaceAttached: boolean;
   timelineAttached: boolean;
   message?: string;
+  epoch: number;
 }
 
 export interface PreviewSessionErrorEvent {
@@ -158,6 +161,8 @@ export interface PreviewDiagnostics {
   durationMs: number;
   positionMs: number;
   rate: number;
+  transportEpoch: number;
+  pendingSeekTargetMs: number | null;
   viewport?: PreviewViewport | null;
   timelineTrackCount: number;
   timelineFragmentCount: number;

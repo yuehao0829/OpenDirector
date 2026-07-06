@@ -23,13 +23,14 @@ import {
   subscribeNativePreviewOcclusion,
 } from '@opendirector/core/utils/native-preview-occlusion';
 import {
-  projectNativePlaybackPosition,
-  type NativePlaybackSample,
-} from './nativePlaybackClock';
-import {
-  shouldIgnoreStaleNativePlayingPosition,
-  shouldSyncPausedNativePlayhead,
-} from './nativeTimelinePreviewSync';
+  applyBackendSample,
+  applyIntent,
+  createNativeTransportModel,
+  projectPositionMs,
+  shouldAdoptPausedPosition,
+  type NativeTransportModel,
+  type NativeTransportPhase,
+} from './nativeTransportModel';
 
 interface UseNativeTimelinePreviewOptions {
   enabled: boolean;
@@ -63,9 +64,13 @@ interface QueuedTimelineSubmission {
 }
 
 const DIAGNOSTICS_EVENT_DEBOUNCE_MS = 80;
-const NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS = 250;
-const PENDING_NATIVE_TARGET_MAX_AGE_MS = 2_000;
-const PENDING_TRANSPORT_INTENT_MAX_AGE_MS = 1_500;
+// Positions this hook itself wrote to the store (rAF playback clock, backend
+// paused sync) echo back through the playhead; they must not feed a redundant
+// transport command.
+const PLAYHEAD_ECHO_EPSILON_MS = 0.5;
+// Tolerance for treating a paused backend position as confirming/clamping the
+// editor playhead (absorbs seek landing accuracy), see shouldAdoptPausedPosition.
+const PAUSED_POSITION_MATCH_TOLERANCE_MS = 250;
 
 function createIdleTimelineSubmissionState(): TimelineSubmissionState {
   return {
@@ -78,6 +83,22 @@ function createIdleTimelineSubmissionState(): TimelineSubmissionState {
 
 function createPreviewSnapshotKey(snapshot: ReturnType<typeof buildTimelinePreviewSnapshot>): string {
   return JSON.stringify(snapshot);
+}
+
+function phaseFromState(state: PreviewSessionState): NativeTransportPhase {
+  switch (state) {
+    case 'playing':
+      return 'playing';
+    case 'ended':
+      return 'ended';
+    case 'error':
+      return 'error';
+    case 'idle':
+    case 'destroyed':
+      return 'idle';
+    default:
+      return 'paused';
+  }
 }
 
 function ensureSurfaceId(element: HTMLElement): string {
@@ -161,63 +182,28 @@ export function useNativeTimelinePreview({
   const transportControlled =
     active && surfaceAttached && timelineAttached && state !== 'error' && state !== 'destroyed';
 
-  const nativePlayheadSyncRef = useRef<{
-    positionMs: number;
-    updatedAt: number;
-  }>({
-    positionMs: 0,
-    updatedAt: 0,
-  });
   const nativeStepFrameInFlightRef = useRef(false);
+  // Latest-target-wins seek coalescing with a single in-flight invoke. Ordering
+  // safety comes from the transport epoch + backend stale-command drop.
   const nativeSeekQueueRef = useRef<{
     inFlight: boolean;
-    activeTargetMs: number | null;
-    activeTargetGeneration: number | null;
     queuedTargetMs: number | null;
-    queuedTargetGeneration: number | null;
-    generation: number;
   }>({
     inFlight: false,
-    activeTargetMs: null,
-    activeTargetGeneration: null,
     queuedTargetMs: null,
-    queuedTargetGeneration: null,
-    generation: 0,
   });
   const nativeTransportCommandQueueRef = useRef<Promise<void>>(Promise.resolve());
-  // Backend position samples are not trusted for rebasing the playback clock
-  // while playing — D3D11 video sink (Windows) can report oscillating positions
-  // around GES clip boundaries, causing bidirectional playhead snap/jitter.
-  const nativeBackendPositionRef = useRef<NativePlaybackSample>({
-    positionMs: 0,
-    updatedAt: 0,
-    rate: 1,
-  });
-  const nativeObservedTransportStateRef = useRef<'playing' | 'paused' | null>(null);
-  const nativePlaybackClockRef = useRef<{
-    basePositionMs: number;
-    baseUpdatedAt: number;
-    rate: number;
-  }>({
-    basePositionMs: 0,
-    baseUpdatedAt: 0,
-    rate: 1,
-  });
-  const pendingNativeTargetRef = useRef<{
-    generation: number;
-    targetMs: number;
-    sourcePositionMs: number;
-    requestedAt: number;
-  } | null>(null);
-  const pendingNativeTargetGenerationRef = useRef(0);
-  const pendingTransportIntentRef = useRef<{
-    generation: number;
-    desiredState: 'playing' | 'paused';
-    targetMs: number | null;
-    sourcePositionMs: number | null;
-    requestedAt: number;
-  } | null>(null);
-  const transportIntentGenerationRef = useRef(0);
+  // Tail of the position-bearing command chain (seek, stepFrame). Also read as
+  // "a non-subsuming position command is in flight" so a concurrent pause waits
+  // for it — a raced pause+seek must never reach the backend out of epoch order.
+  const nativePositionCommandInFlightRef = useRef<Promise<void>>(Promise.resolve());
+  // The single source of position/phase truth on the frontend. The rAF loop
+  // projects from it; every epoch-fresh backend event and local intent updates it.
+  const transportModelRef = useRef<NativeTransportModel>(createNativeTransportModel());
+  // Last playhead position this hook wrote to the store; used to reject echoes.
+  // null = this hook has not written yet, so it owns nothing and must neither
+  // suppress a seek as an echo nor block a paused adoption.
+  const lastAppliedPlayheadRef = useRef<number | null>(null);
 
   const refreshDiagnosticsRef = useRef<((priority?: 'event' | 'immediate') => void) | null>(null);
   const diagnosticsRefreshStateRef = useRef<{
@@ -232,21 +218,20 @@ export function useNativeTimelinePreview({
   const timelineSubmissionRef = useRef<TimelineSubmissionState>(createIdleTimelineSubmissionState());
   const queuedTimelineSubmissionRef = useRef<QueuedTimelineSubmission | null>(null);
 
-  const getPauseTransportTargetMs = useCallback(() => {
-    const timelineState = useTimelineStore.getState();
-    if (
-      state === 'playing' ||
-      nativeObservedTransportStateRef.current === 'playing'
-    ) {
-      return Math.max(0, projectNativePlaybackClockPosition(performance.now()));
-    }
-    return Math.max(0, timelineState.getPlayheadRef());
-  }, [state]);
-
   const isCurrentController = useCallback(
     (controller: PreviewSessionController | null): boolean =>
       controller !== null && controllerRef.current === controller,
     [],
+  );
+
+  // A stale controller's failure must not clobber the current controller's error state.
+  const reportControllerError = useCallback(
+    (controller: PreviewSessionController | null, controllerError: unknown) => {
+      if (isCurrentController(controller)) {
+        setError(getErrorMessage(controllerError));
+      }
+    },
+    [isCurrentController],
   );
 
   const resetPreviewState = () => {
@@ -257,24 +242,12 @@ export function useNativeTimelinePreview({
     setPositionMs(0);
     setDiagnostics(null);
     setError(null);
-    nativeBackendPositionRef.current = {
-      positionMs: 0,
-      updatedAt: 0,
-      rate: 1,
-    };
-    nativeObservedTransportStateRef.current = null;
-    nativePlaybackClockRef.current = {
-      basePositionMs: 0,
-      baseUpdatedAt: 0,
-      rate: 1,
-    };
-    nativePlayheadSyncRef.current = {
-      positionMs: 0,
-      updatedAt: 0,
-    };
+    transportModelRef.current = createNativeTransportModel();
+    lastAppliedPlayheadRef.current = null;
     nativeTransportCommandQueueRef.current = Promise.resolve();
-    pendingNativeTargetRef.current = null;
-    pendingTransportIntentRef.current = null;
+    nativePositionCommandInFlightRef.current = Promise.resolve();
+    nativeSeekQueueRef.current.inFlight = false;
+    nativeSeekQueueRef.current.queuedTargetMs = null;
   };
 
   const resetTimelineSubmission = useCallback(() => {
@@ -417,18 +390,84 @@ export function useNativeTimelinePreview({
     [isCurrentController],
   );
 
-  const syncTimelinePlayheadFromNative = (
-    positionMs: number,
-    updatedAt: number,
-    syncStore: boolean,
-  ) => {
-    const clampedPositionMs = Math.max(0, positionMs);
-    nativePlayheadSyncRef.current = {
-      positionMs: clampedPositionMs,
-      updatedAt,
-    };
+  // Serialize a position-bearing command (seek, stepFrame) behind any pending
+  // state command and any earlier position command, exposing it via
+  // nativePositionCommandInFlightRef so a concurrent pause waits for it. This
+  // gives every pair of mutually-non-subsuming transport invokes a total order on
+  // the backend session; playFrom is exempt (it subsumes an in-flight seek), so a
+  // scrub-then-play stays responsive.
+  //
+  // The transport tail is snapshotted at enqueue time, not read when the prior
+  // position command settles: every command may only wait on commands enqueued
+  // strictly before it, keeping the two-chain wait graph acyclic (a lazy read
+  // deadlocks with a pause that awaits this position tail).
+  const runNativePositionCommand = useCallback(
+    (controller: PreviewSessionController, command: () => Promise<void>): Promise<void> => {
+      const transportTail = nativeTransportCommandQueueRef.current.catch(() => {});
+      const run = nativePositionCommandInFlightRef.current
+        .catch(() => {})
+        .then(() => transportTail)
+        .then(() => {
+          if (!isCurrentController(controller)) {
+            return;
+          }
+          return command();
+        });
+      nativePositionCommandInFlightRef.current = run.catch(() => {});
+      return run;
+    },
+    [isCurrentController],
+  );
 
+  // I4: play is always position-bearing. Read the playhead ref at dispatch time
+  // (not effect time) so a play queued behind a stalled command can never
+  // resurrect a stale target, then re-anchor the model to what was actually sent.
+  const dispatchNativePlayFrom = useCallback(
+    (controller: PreviewSessionController) => {
+      nativeSeekQueueRef.current.queuedTargetMs = null;
+      void enqueueNativeTransportCommand(controller, () => {
+        const targetMs = Math.max(0, useTimelineStore.getState().getPlayheadRef());
+        lastAppliedPlayheadRef.current = targetMs;
+        transportModelRef.current = applyIntent(
+          transportModelRef.current,
+          { type: 'play', targetMs },
+          performance.now(),
+        );
+        return controller.playFrom(targetMs).then(() => {
+          if (isCurrentController(controller)) {
+            setPositionMs(targetMs);
+            refreshDiagnosticsRef.current?.('immediate');
+          }
+        });
+      }).catch((playError) => {
+        reportControllerError(controller, playError);
+      });
+    },
+    [enqueueNativeTransportCommand, reportControllerError],
+  );
+
+  // Write a native-derived position into the playhead store, mirroring where the
+  // old code did (setPlayhead only when the low-frequency display value has
+  // drifted; otherwise the ref-only fast path). Records the value as an echo.
+  //
+  // Ownership guard: if the store's playhead ref no longer matches what this hook
+  // last wrote, a foreign (user) write is pending and owns the playhead — leave it
+  // untouched so the pending seek/play effect can turn it into a transport
+  // command. A null lastApplied means the hook has not written yet and owns
+  // nothing to defend, so the write (e.g. initial paused adoption) proceeds.
+  const writePlayheadFromNative = (positionMs: number, syncStore: boolean) => {
     const timelineState = useTimelineStore.getState();
+    const lastAppliedMs = lastAppliedPlayheadRef.current;
+    if (
+      lastAppliedMs !== null &&
+      Math.abs(timelineState.getPlayheadRef() - lastAppliedMs) > PLAYHEAD_ECHO_EPSILON_MS
+    ) {
+      return;
+    }
+
+    const clampedPositionMs = Math.max(0, positionMs);
+    lastAppliedPlayheadRef.current = clampedPositionMs;
+
     if (syncStore) {
       if (
         Math.abs(timelineState.playhead - clampedPositionMs) > 0.5 ||
@@ -446,31 +485,7 @@ export function useNativeTimelinePreview({
     }
   };
 
-  const rebaseNativePlaybackClock = (
-    positionMs: number,
-    updatedAt: number,
-    rate = 1,
-  ) => {
-    nativePlaybackClockRef.current = {
-      basePositionMs: Math.max(0, positionMs),
-      baseUpdatedAt: updatedAt,
-      rate: rate > 0 ? rate : 1,
-    };
-  };
-
-  const projectNativePlaybackClockPosition = (targetTime: number) => {
-    const clock = nativePlaybackClockRef.current;
-    return projectNativePlaybackPosition(
-      {
-        positionMs: clock.basePositionMs,
-        updatedAt: clock.baseUpdatedAt,
-        rate: clock.rate,
-      },
-      targetTime,
-    );
-  };
-
-  const shouldSyncPausedPositionFromNative = (
+  const shouldAdoptPausedPositionFromNative = (
     positionMs: number,
     controller: PreviewSessionController,
   ) => {
@@ -482,316 +497,79 @@ export function useNativeTimelinePreview({
       timelineSubmissionRef.current.sessionId === controllerSessionId &&
       timelineSubmissionRef.current.status !== 'idle';
     const timelineState = useTimelineStore.getState();
-    return shouldSyncPausedNativePlayhead({
-      nextPositionMs: positionMs,
-      currentPlayheadMs: timelineState.playhead,
-      currentPlayheadRefMs: timelineState.getPlayheadRef(),
+    return shouldAdoptPausedPosition({
+      backendMs: positionMs,
+      playheadMs: timelineState.playhead,
+      playheadRefMs: timelineState.getPlayheadRef(),
       timelineDurationMs: timelineState.duration,
       timelineReady: controllerTimelineAttached || hasSubmittedTimeline,
       timelineAttached: controllerTimelineAttached,
-      thresholdMs: NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS,
+      toleranceMs: PAUSED_POSITION_MATCH_TOLERANCE_MS,
     });
   };
 
-  const markPendingNativeTarget = useCallback((targetMs: number, requestedAt = performance.now()) => {
-    const generation = pendingNativeTargetGenerationRef.current + 1;
-    pendingNativeTargetGenerationRef.current = generation;
-    pendingNativeTargetRef.current = {
-      generation,
-      targetMs: Math.max(0, targetMs),
-      sourcePositionMs: Math.max(0, nativeBackendPositionRef.current.positionMs),
-      requestedAt,
-    };
-    return generation;
-  }, []);
+  // Fold an epoch-fresh backend event into the transport model. Playing samples
+  // only re-anchor the model (the rAF loop owns the store); paused/idle/ended
+  // samples that are "settled" are written straight to the playhead store.
+  const ingestBackendSample = (
+    controller: PreviewSessionController,
+    positionMs: number,
+    phase: NativeTransportPhase | undefined,
+    rate: number | undefined,
+    now: number,
+  ) => {
+    transportModelRef.current = applyBackendSample(
+      transportModelRef.current,
+      { positionMs, phase, rate },
+      now,
+    );
+    setPositionMs(Math.max(0, positionMs));
 
-  const markPendingTransportIntent = useCallback(
-    (
-      desiredState: 'playing' | 'paused',
-      targetMs: number | null,
-      requestedAt = performance.now(),
-    ) => {
-      const generation = transportIntentGenerationRef.current + 1;
-      transportIntentGenerationRef.current = generation;
-      pendingTransportIntentRef.current = {
-        generation,
-        desiredState,
-        targetMs: targetMs === null ? null : Math.max(0, targetMs),
-        sourcePositionMs:
-          targetMs === null ? null : Math.max(0, nativeBackendPositionRef.current.positionMs),
-        requestedAt,
-      };
-      return generation;
-    },
-    [],
-  );
-
-  const getPendingTransportIntent = useCallback((now = performance.now()) => {
-    const pendingTransportIntent = pendingTransportIntentRef.current;
-    if (!pendingTransportIntent) {
-      return null;
-    }
-
-    if (now - pendingTransportIntent.requestedAt > PENDING_TRANSPORT_INTENT_MAX_AGE_MS) {
-      pendingTransportIntentRef.current = null;
-      return null;
-    }
-
-    return pendingTransportIntent;
-  }, []);
-
-  const clearPendingTransportIntentIfCurrent = useCallback(
-    (generation: number, desiredState: 'playing' | 'paused') => {
-      const pendingTransportIntent = pendingTransportIntentRef.current;
-      if (!pendingTransportIntent) {
-        return;
-      }
-
-      if (
-        pendingTransportIntent.generation !== generation ||
-        pendingTransportIntent.desiredState !== desiredState
-      ) {
-        return;
-      }
-
-      pendingTransportIntentRef.current = null;
-    },
-    [],
-  );
-
-  const clearPendingNativeTargetIfCurrent = useCallback((generation: number) => {
-    const pendingNativeTarget = pendingNativeTargetRef.current;
-    if (!pendingNativeTarget) {
+    if (transportModelRef.current.phase === 'playing') {
       return;
     }
-
-    if (pendingNativeTarget.generation !== generation) {
-      return;
+    if (shouldAdoptPausedPositionFromNative(positionMs, controller)) {
+      writePlayheadFromNative(positionMs, true);
     }
+  };
 
-    pendingNativeTargetRef.current = null;
-  }, []);
-
-  const isPendingTransportIntentCurrent = useCallback(
-    (generation: number, desiredState: 'playing' | 'paused', now = performance.now()) => {
-      const pendingTransportIntent = getPendingTransportIntent(now);
-      if (!pendingTransportIntent) {
-        return false;
-      }
-
-      return (
-        pendingTransportIntent.generation === generation &&
-        pendingTransportIntent.desiredState === desiredState
-      );
-    },
-    [getPendingTransportIntent],
-  );
-
-  const shouldIgnoreConflictingTransportSample = useCallback(
-    (sampleState: 'playing' | 'paused', now = performance.now()) => {
-      const pendingTransportIntent = getPendingTransportIntent(now);
-      if (!pendingTransportIntent) {
-        return false;
-      }
-
-      return pendingTransportIntent.desiredState !== sampleState;
-    },
-    [getPendingTransportIntent],
-  );
-
-  const settlePendingTransportIntent = useCallback(
-    (sampleState: 'playing' | 'paused', positionMs: number, now = performance.now()) => {
-      const pendingTransportIntent = getPendingTransportIntent(now);
-      if (!pendingTransportIntent) {
-        return;
-      }
-
-      if (pendingTransportIntent.desiredState !== sampleState) {
-        return;
-      }
-
-      if (
-        sampleState === 'playing' &&
-        pendingTransportIntent.targetMs !== null
-      ) {
-        const sourcePositionMs = pendingTransportIntent.sourcePositionMs;
-        const targetPositionMs = pendingTransportIntent.targetMs;
-        if (
-          sourcePositionMs === null ||
-          (targetPositionMs > sourcePositionMs &&
-            positionMs < targetPositionMs - NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS) ||
-          (targetPositionMs < sourcePositionMs &&
-            positionMs > targetPositionMs + NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS) ||
-          (Math.abs(targetPositionMs - sourcePositionMs) <=
-            NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS &&
-            Math.abs(positionMs - targetPositionMs) >
-              NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS)
-        ) {
-          return;
-        }
-      }
-      pendingTransportIntentRef.current = null;
-    },
-    [getPendingTransportIntent],
-  );
-
-  const clearPendingNativeTargetIfSettled = useCallback(
-    (positionMs: number, now = performance.now()) => {
-      const pendingTarget = pendingNativeTargetRef.current;
-      if (!pendingTarget) {
-        return;
-      }
-
-      const expired = now - pendingTarget.requestedAt > PENDING_NATIVE_TARGET_MAX_AGE_MS;
-      const settled =
-        (pendingTarget.targetMs > pendingTarget.sourcePositionMs &&
-          positionMs >= pendingTarget.targetMs - NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS) ||
-        (pendingTarget.targetMs < pendingTarget.sourcePositionMs &&
-          positionMs <= pendingTarget.targetMs + NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS) ||
-        (Math.abs(pendingTarget.targetMs - pendingTarget.sourcePositionMs) <=
-          NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS &&
-          Math.abs(positionMs - pendingTarget.targetMs) <=
-            NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS);
-
-      if (!expired && !settled) {
-        return;
-      }
-      pendingNativeTargetRef.current = null;
-    },
-    [],
-  );
-
-  const shouldIgnorePlayingSample = useCallback(
-    (positionMs: number, now = performance.now()) => {
-      clearPendingNativeTargetIfSettled(positionMs, now);
-      const pendingTarget = pendingNativeTargetRef.current;
-      if (!pendingTarget) {
-        return false;
-      }
-
-      return shouldIgnoreStaleNativePlayingPosition({
-        nextPositionMs: positionMs,
-        targetPositionMs: pendingTarget.targetMs,
-        sourcePositionMs: pendingTarget.sourcePositionMs,
-        currentPlayheadRefMs: useTimelineStore.getState().getPlayheadRef(),
-        requestedAt: pendingTarget.requestedAt,
-        now,
-        thresholdMs: NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS,
-        maxPendingMs: PENDING_NATIVE_TARGET_MAX_AGE_MS,
-      });
-    },
-    [clearPendingNativeTargetIfSettled],
-  );
-
-  const shouldFreezePlayheadForPendingPause = useCallback(() => {
-    const pendingTransportIntent = pendingTransportIntentRef.current;
-    if (!pendingTransportIntent) {
-      return false;
-    }
-
-    if (pendingTransportIntent.desiredState !== 'paused') {
-      return false;
-    }
-
-    if (
-      performance.now() - pendingTransportIntent.requestedAt >
-      PENDING_TRANSPORT_INTENT_MAX_AGE_MS
-    ) {
-      return false;
-    }
-
-    return !useTimelineStore.getState().isPlaying;
-  }, []);
-
-  const pumpNativeSeekQueue = useCallback(async (controller: PreviewSessionController) => {
+  const pumpNativeSeekQueue = useCallback((controller: PreviewSessionController) => {
     const seekQueue = nativeSeekQueueRef.current;
-    if (seekQueue.inFlight) {
+    if (seekQueue.inFlight || seekQueue.queuedTargetMs === null) {
       return;
     }
 
     seekQueue.inFlight = true;
-
-    try {
-      while (true) {
-        const nextTargetMs = seekQueue.queuedTargetMs;
-        const nextTargetGeneration = seekQueue.queuedTargetGeneration;
-        seekQueue.queuedTargetMs = null;
-        seekQueue.queuedTargetGeneration = null;
-        if (nextTargetMs === null) {
-          break;
-        }
-        const generationAtQueueDrain = seekQueue.generation;
-        seekQueue.activeTargetMs = nextTargetMs;
-        seekQueue.activeTargetGeneration = nextTargetGeneration;
-
-        if (
-          !isCurrentController(controller) ||
-          !timelineAttached ||
-          useTimelineStore.getState().isPlaying
-        ) {
-          break;
-        }
-
-        try {
-          const currentSeekQueue = nativeSeekQueueRef.current;
-          const storeIsPlaying = useTimelineStore.getState().isPlaying;
-          if (
-            storeIsPlaying ||
-            currentSeekQueue.generation !== generationAtQueueDrain
-          ) {
-            continue;
-          }
-
-          await controller.seek(nextTargetMs);
-          const currentSeekQueueAfterSeek = nativeSeekQueueRef.current;
-          if (
-            !isCurrentController(controller) ||
-            !timelineAttached ||
-            useTimelineStore.getState().isPlaying ||
-            currentSeekQueueAfterSeek.generation !== generationAtQueueDrain
-          ) {
-            continue;
-          }
-          const syncAt = performance.now();
-          nativeBackendPositionRef.current = {
-            positionMs: nextTargetMs,
-            updatedAt: syncAt,
-            rate: nativeBackendPositionRef.current.rate,
-          };
-          setPositionMs(nextTargetMs);
-          if (isCurrentController(controller)) {
-            refreshDiagnosticsRef.current?.('immediate');
-          }
-        } catch (seekError) {
-          if (nextTargetGeneration !== null) {
-            clearPendingNativeTargetIfCurrent(nextTargetGeneration);
-          }
-          if (isCurrentController(controller)) {
-            const message = getErrorMessage(seekError);
-            setError(message);
-          }
-          break;
-        }
+    void runNativePositionCommand(controller, async () => {
+      // Coalesce to the latest queued target at execution time (latest-wins).
+      const nextTargetMs = seekQueue.queuedTargetMs;
+      seekQueue.queuedTargetMs = null;
+      if (
+        nextTargetMs === null ||
+        !isCurrentController(controller) ||
+        !timelineAttached ||
+        useTimelineStore.getState().isPlaying
+      ) {
+        return;
       }
-    } finally {
+
+      try {
+        await controller.seek(nextTargetMs);
+        if (!isCurrentController(controller)) {
+          return;
+        }
+        setPositionMs(nextTargetMs);
+        refreshDiagnosticsRef.current?.('immediate');
+      } catch (seekError) {
+        reportControllerError(controller, seekError);
+      }
+    }).finally(() => {
       seekQueue.inFlight = false;
-      seekQueue.activeTargetMs = null;
-      seekQueue.activeTargetGeneration = null;
-    }
-
-    if (!isCurrentController(controller)) {
-      return;
-    }
-
-    if (seekQueue.queuedTargetMs !== null) {
-      void pumpNativeSeekQueue(controller);
-      return;
-    }
-  }, [
-    clearPendingNativeTargetIfCurrent,
-    isCurrentController,
-    timelineAttached,
-  ]);
+      if (isCurrentController(controller) && seekQueue.queuedTargetMs !== null) {
+        pumpNativeSeekQueue(controller);
+      }
+    });
+  }, [isCurrentController, runNativePositionCommand, timelineAttached]);
 
   refreshDiagnosticsRef.current = (priority = 'event') => {
     const controller = controllerRef.current;
@@ -816,10 +594,7 @@ export function useNativeTimelinePreview({
           }
         })
         .catch((diagnosticsError) => {
-          if (isCurrentController(activeController)) {
-            const message = getErrorMessage(diagnosticsError);
-            setError(message);
-          }
+          reportControllerError(activeController, diagnosticsError);
         })
         .finally(() => {
           refreshState.inFlight = false;
@@ -870,11 +645,7 @@ export function useNativeTimelinePreview({
       controllerRef.current = null;
       nativeStepFrameInFlightRef.current = false;
       nativeSeekQueueRef.current.inFlight = false;
-      nativeSeekQueueRef.current.activeTargetMs = null;
-      nativeSeekQueueRef.current.activeTargetGeneration = null;
       nativeSeekQueueRef.current.queuedTargetMs = null;
-      nativeSeekQueueRef.current.queuedTargetGeneration = null;
-      nativeSeekQueueRef.current.generation += 1;
       resetTimelineSubmission();
       resetPreviewState();
       const refreshState = diagnosticsRefreshStateRef.current;
@@ -904,166 +675,45 @@ export function useNativeTimelinePreview({
 
       switch (event.type) {
         case 'position': {
-          const nextPositionMs = event.payload.positionMs;
-          const nextRate = event.payload.rate > 0 ? event.payload.rate : 1;
-          const syncAt = performance.now();
-          const transportSampleState = event.payload.isPlaying ? 'playing' : 'paused';
-          const storeIsPlaying = useTimelineStore.getState().isPlaying;
-          const ignoreLatePlayingSample =
-            transportSampleState === 'playing' &&
-            nativeObservedTransportStateRef.current === 'paused' &&
-            !storeIsPlaying;
-          const ignoreConflictingTransportSample = shouldIgnoreConflictingTransportSample(
-            transportSampleState,
-            syncAt,
-          );
-          const ignorePendingTargetSample = shouldIgnorePlayingSample(nextPositionMs, syncAt);
-          const ignorePlayingSample = event.payload.isPlaying && ignorePendingTargetSample;
-          if (ignoreConflictingTransportSample || ignoreLatePlayingSample) {
-            break;
-          }
-          nativeObservedTransportStateRef.current = transportSampleState;
-          settlePendingTransportIntent(transportSampleState, nextPositionMs, syncAt);
-          if (!ignorePendingTargetSample) {
-            clearPendingNativeTargetIfSettled(nextPositionMs, syncAt);
-            nativeBackendPositionRef.current = {
-              positionMs: nextPositionMs,
-              updatedAt: syncAt,
-              rate: nextRate,
-            };
-            setPositionMs(nextPositionMs);
-          }
-
-          if (!event.payload.isPlaying) {
-            if (ignorePendingTargetSample) {
-              break;
-            }
-            rebaseNativePlaybackClock(nextPositionMs, syncAt, nextRate);
-            if (
-              shouldSyncPausedPositionFromNative(
-                nextPositionMs,
-                controller,
-              )
-            ) {
-              syncTimelinePlayheadFromNative(nextPositionMs, syncAt, true);
-            }
-          } else if (ignorePlayingSample) {
-            break;
-          } else {
-            const currentRate = nativePlaybackClockRef.current.rate > 0 ? nativePlaybackClockRef.current.rate : 1;
-            if (Math.abs(currentRate - nextRate) > 0.000_001) {
-              rebaseNativePlaybackClock(
-                projectNativePlaybackClockPosition(syncAt),
-                syncAt,
-                nextRate,
-              );
-            } else {
-              nativePlaybackClockRef.current.rate = nextRate;
-            }
-          }
+          const now = performance.now();
+          const phase: NativeTransportPhase = event.payload.isPlaying ? 'playing' : 'paused';
+          ingestBackendSample(controller, event.payload.positionMs, phase, event.payload.rate, now);
           break;
         }
         case 'state': {
-          const syncAt = performance.now();
-          const transportSampleState =
-            event.payload.state === 'playing'
-              ? 'playing'
-              : event.payload.state === 'paused'
-                ? 'paused'
-                : null;
-          const ignoreConflictingTransportSample =
-            transportSampleState === null
-              ? false
-              : shouldIgnoreConflictingTransportSample(transportSampleState, syncAt);
+          const now = performance.now();
           setSurfaceAttached(event.payload.nativeSurfaceAttached);
           setTimelineAttached(event.payload.timelineAttached);
-          if (!ignoreConflictingTransportSample) {
-            setState(event.payload.state);
-            if (transportSampleState) {
-              nativeObservedTransportStateRef.current = transportSampleState;
-            } else {
-              nativeObservedTransportStateRef.current = null;
-            }
-          }
+          setState(event.payload.state);
+          // A transient detach must not clear a submission the setTimeline promise
+          // still owns; its own .then/.catch resolves that lifecycle.
           if (
             !event.payload.timelineAttached &&
             timelineSubmissionRef.current.controller === controller &&
-            timelineSubmissionRef.current.sessionId === event.payload.sessionId
+            timelineSubmissionRef.current.sessionId === event.payload.sessionId &&
+            timelineSubmissionRef.current.status !== 'in_flight'
           ) {
             resetTimelineSubmission();
           }
-          const nextRate = event.payload.rate > 0 ? event.payload.rate : 1;
-          const ignorePendingTargetSample = shouldIgnorePlayingSample(event.payload.positionMs, syncAt);
-          const ignorePlayingSample =
-            event.payload.state === 'playing' &&
-            ignorePendingTargetSample;
-          if (ignoreConflictingTransportSample) {
-            break;
-          }
-          if (!ignorePendingTargetSample) {
-            setPositionMs(event.payload.positionMs);
-            clearPendingNativeTargetIfSettled(event.payload.positionMs, syncAt);
 
-            nativeBackendPositionRef.current = {
-              positionMs: event.payload.positionMs,
-              updatedAt: syncAt,
-              rate: nextRate,
-            };
-          }
-          if (transportSampleState) {
-            settlePendingTransportIntent(
-              transportSampleState,
-              event.payload.positionMs,
-              syncAt,
-            );
-          }
-          {
+          ingestBackendSample(
+            controller,
+            event.payload.positionMs,
+            phaseFromState(event.payload.state),
+            event.payload.rate,
+            now,
+          );
+
+          // `timelineStore.isPlaying` is the command source for native transport,
+          // so only terminal states pull it back to paused.
+          if (
+            event.payload.state === 'ended' ||
+            event.payload.state === 'error' ||
+            event.payload.state === 'destroyed'
+          ) {
             const timelineState = useTimelineStore.getState();
-            if (event.payload.state === 'playing') {
-              if (ignorePlayingSample) {
-                break;
-              }
-              const currentRate = nativePlaybackClockRef.current.rate > 0 ? nativePlaybackClockRef.current.rate : 1;
-              if (Math.abs(currentRate - nextRate) > 0.000_001) {
-                rebaseNativePlaybackClock(
-                  projectNativePlaybackClockPosition(syncAt),
-                  syncAt,
-                  nextRate,
-                );
-              } else {
-                nativePlaybackClockRef.current.rate = nextRate;
-              }
-            } else {
-              if (ignorePendingTargetSample) {
-                break;
-              }
-              rebaseNativePlaybackClock(
-                event.payload.positionMs,
-                syncAt,
-                nextRate,
-              );
-              if (
-                shouldSyncPausedPositionFromNative(
-                  event.payload.positionMs,
-                  controller,
-                )
-              ) {
-                syncTimelinePlayheadFromNative(event.payload.positionMs, syncAt, true);
-              }
-            }
-            // `timelineStore.isPlaying` is the command source for native transport.
-            // Mirroring transient backend `paused` states back into the store causes
-            // seek->play races: a seek completion emits `paused`, the UI flips back
-            // to paused, and immediately sends a conflicting pause command.
-            if (
-              event.payload.state === 'ended' ||
-              event.payload.state === 'error' ||
-              event.payload.state === 'destroyed'
-            ) {
-              pendingTransportIntentRef.current = null;
-              if (timelineState.isPlaying) {
-                timelineState.pause();
-              }
+            if (timelineState.isPlaying) {
+              timelineState.pause();
             }
           }
           if (event.payload.state !== 'error') {
@@ -1073,7 +723,6 @@ export function useNativeTimelinePreview({
           break;
         }
         case 'error':
-          pendingTransportIntentRef.current = null;
           setError(event.payload.message);
           setState('error');
           refreshDiagnosticsRef.current?.('immediate');
@@ -1082,13 +731,8 @@ export function useNativeTimelinePreview({
           refreshDiagnosticsRef.current?.('event');
           break;
         case 'frameTimestamp': {
-          const syncAt = performance.now();
-          nativeBackendPositionRef.current = {
-            positionMs: event.payload.positionMs,
-            updatedAt: syncAt,
-            rate: nativeBackendPositionRef.current.rate,
-          };
-          setPositionMs(event.payload.positionMs);
+          const now = performance.now();
+          ingestBackendSample(controller, event.payload.positionMs, undefined, undefined, now);
           break;
         }
         default:
@@ -1126,11 +770,7 @@ export function useNativeTimelinePreview({
       unsubscribe();
       nativeStepFrameInFlightRef.current = false;
       nativeSeekQueue.inFlight = false;
-      nativeSeekQueue.activeTargetMs = null;
-      nativeSeekQueue.activeTargetGeneration = null;
       nativeSeekQueue.queuedTargetMs = null;
-      nativeSeekQueue.queuedTargetGeneration = null;
-      nativeSeekQueue.generation += 1;
       if (controllerRef.current === controller) {
         controllerRef.current = null;
         surfaceSyncRevisionRef.current += 1;
@@ -1153,13 +793,9 @@ export function useNativeTimelinePreview({
     };
   }, [
     active,
-    clearPendingNativeTargetIfSettled,
     isCurrentController,
     projectId,
     resetTimelineSubmission,
-    settlePendingTransportIntent,
-    shouldIgnoreConflictingTransportSample,
-    shouldIgnorePlayingSample,
   ]);
 
   useEffect(() => {
@@ -1269,132 +905,41 @@ export function useNativeTimelinePreview({
     }
 
     const controller = controllerRef.current;
+    const now = performance.now();
+
     if (isPlaying) {
-      const queuedTransportIntent = getPendingTransportIntent();
-      const hasPendingPauseIntent = queuedTransportIntent?.desiredState === 'paused';
-      nativeSeekQueueRef.current.generation += 1;
-      nativeSeekQueueRef.current.queuedTargetMs = null;
-      nativeSeekQueueRef.current.queuedTargetGeneration = null;
-      const timelineState = useTimelineStore.getState();
-      const targetPlayheadMs = timelineState.getPlayheadRef();
-      const transportIntentGeneration = markPendingTransportIntent('playing', targetPlayheadMs);
-      const seekQueue = nativeSeekQueueRef.current;
-      const hasPendingSeekForTarget =
-        (seekQueue.queuedTargetMs !== null &&
-          Math.abs(seekQueue.queuedTargetMs - targetPlayheadMs) <= 0.5) ||
-        (seekQueue.activeTargetMs !== null &&
-          Math.abs(seekQueue.activeTargetMs - targetPlayheadMs) <= 0.5);
-      const needsSeekBeforePlay =
-        (seekQueue.inFlight && !hasPendingSeekForTarget) ||
-        (seekQueue.queuedTargetMs !== null && !hasPendingSeekForTarget) ||
-        Math.abs(
-          targetPlayheadMs - nativeBackendPositionRef.current.positionMs,
-        ) > NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS;
-
-      if (
-        state === 'playing' &&
-        !needsSeekBeforePlay &&
-        !hasPendingSeekForTarget &&
-        !hasPendingPauseIntent
-      ) {
-        return;
-      }
-
-      if (needsSeekBeforePlay || hasPendingSeekForTarget) {
-        const pendingTargetGeneration = markPendingNativeTarget(targetPlayheadMs);
-        rebaseNativePlaybackClock(
-          targetPlayheadMs,
-          performance.now(),
-          nativeBackendPositionRef.current.rate,
-        );
-        let didSendPlayFrom = false;
-        void enqueueNativeTransportCommand(controller, async () => {
-          if (!isPendingTransportIntentCurrent(transportIntentGeneration, 'playing')) {
-            return;
-          }
-          didSendPlayFrom = true;
-          await controller.playFrom(targetPlayheadMs);
-        })
-          .then(() => {
-            if (
-              !didSendPlayFrom ||
-              !isCurrentController(controller) ||
-              !isPendingTransportIntentCurrent(transportIntentGeneration, 'playing')
-            ) {
-              return;
-            }
-            const syncAt = performance.now();
-            nativeBackendPositionRef.current = {
-              positionMs: targetPlayheadMs,
-              updatedAt: syncAt,
-              rate: nativeBackendPositionRef.current.rate,
-            };
-            setPositionMs(targetPlayheadMs);
-            if (isCurrentController(controller)) {
-              refreshDiagnosticsRef.current?.('immediate');
-            }
-          })
-          .catch((playError) => {
-            clearPendingTransportIntentIfCurrent(transportIntentGeneration, 'playing');
-            clearPendingNativeTargetIfCurrent(pendingTargetGeneration);
-            if (isCurrentController(controller)) {
-              const message = getErrorMessage(playError);
-              setError(message);
-            }
-          });
-        return;
-      }
-
-      void enqueueNativeTransportCommand(controller, async () => {
-        if (!isPendingTransportIntentCurrent(transportIntentGeneration, 'playing')) {
-          return;
-        }
-        await controller.play();
-      })
-        .then(() => {
-          if (isCurrentController(controller)) {
-            refreshDiagnosticsRef.current?.('immediate');
-          }
-        })
-        .catch((playError) => {
-          clearPendingTransportIntentIfCurrent(transportIntentGeneration, 'playing');
-          if (isCurrentController(controller)) {
-            const message = getErrorMessage(playError);
-            setError(message);
-          }
-        });
-      return;
-    }
-
-    const targetPlayheadMs = getPauseTransportTargetMs();
-    const queuedTransportIntent = getPendingTransportIntent();
-    const hasPendingPlayIntent = queuedTransportIntent?.desiredState === 'playing';
-    const needsSeekBeforePause =
-      Math.abs(targetPlayheadMs - nativeBackendPositionRef.current.positionMs) >
-      NATIVE_PLAYHEAD_RESYNC_THRESHOLD_MS;
-    if (
-      state === 'paused' &&
-      nativeObservedTransportStateRef.current !== 'playing' &&
-      !hasPendingPlayIntent
-    ) {
-      return;
-    }
-    let pendingTargetGeneration: number | null = null;
-    if (needsSeekBeforePause) {
-      const requestedAt = performance.now();
-      pendingTargetGeneration = markPendingNativeTarget(targetPlayheadMs, requestedAt);
-      rebaseNativePlaybackClock(
-        targetPlayheadMs,
-        requestedAt,
-        nativeBackendPositionRef.current.rate,
+      // Optimistic phase so a racing pause still fires; dispatch re-reads the
+      // playhead so the actual playFrom target is never stale.
+      const targetMs = Math.max(0, useTimelineStore.getState().getPlayheadRef());
+      transportModelRef.current = applyIntent(
+        transportModelRef.current,
+        { type: 'play', targetMs },
+        now,
       );
+      lastAppliedPlayheadRef.current = targetMs;
+      dispatchNativePlayFrom(controller);
+      return;
     }
-    const transportIntentGeneration = markPendingTransportIntent('paused', targetPlayheadMs);
 
+    // Nothing to stop unless we believe playback is running — avoids emitting a
+    // redundant pause on initial timeline attach. The seek effect handles the
+    // pause-time playhead reconciliation (it deliberately does not record an echo).
+    if (transportModelRef.current.phase !== 'playing') {
+      return;
+    }
+
+    const targetMs = Math.max(0, useTimelineStore.getState().getPlayheadRef());
+    transportModelRef.current = applyIntent(
+      transportModelRef.current,
+      { type: 'pause', targetMs },
+      now,
+    );
+    // Order behind any in-flight seek/stepFrame (captured now, before the seek
+    // effect can enqueue one) so a raced pause+seek reaches the backend in epoch
+    // order rather than concurrently.
+    const positionCommandInFlight = nativePositionCommandInFlightRef.current;
     void enqueueNativeTransportCommand(controller, async () => {
-      if (!isPendingTransportIntentCurrent(transportIntentGeneration, 'paused')) {
-        return;
-      }
+      await positionCommandInFlight.catch(() => {});
       await controller.pause();
     })
       .then(() => {
@@ -1403,29 +948,14 @@ export function useNativeTimelinePreview({
         }
       })
       .catch((pauseError) => {
-        clearPendingTransportIntentIfCurrent(transportIntentGeneration, 'paused');
-        if (pendingTargetGeneration !== null) {
-          clearPendingNativeTargetIfCurrent(pendingTargetGeneration);
-        }
-        if (isCurrentController(controller)) {
-          const message = getErrorMessage(pauseError);
-          setError(message);
-        }
+        reportControllerError(controller, pauseError);
       });
   }, [
     active,
-    isCurrentController,
-    getPendingTransportIntent,
-    isPendingTransportIntentCurrent,
-    isPlaying,
-    getPauseTransportTargetMs,
-    markPendingTransportIntent,
-    markPendingNativeTarget,
-    clearPendingNativeTargetIfCurrent,
-    clearPendingTransportIntentIfCurrent,
+    dispatchNativePlayFrom,
     enqueueNativeTransportCommand,
-    pumpNativeSeekQueue,
-    state,
+    isCurrentController,
+    isPlaying,
     timelineAttached,
   ]);
 
@@ -1437,34 +967,22 @@ export function useNativeTimelinePreview({
     let cancelled = false;
     let animationId = 0;
     let lastStoreSyncAt = 0;
-    const nativeSyncIntervalMs = 100;
-    const startAt = performance.now();
-
-    rebaseNativePlaybackClock(
-      nativeBackendPositionRef.current.positionMs,
-      startAt,
-      nativeBackendPositionRef.current.rate,
-    );
+    const storeSyncIntervalMs = 100;
 
     const animate = (frameTime: number) => {
       if (cancelled) return;
 
-      const clock = nativePlaybackClockRef.current;
-      const rate = clock.rate > 0 ? clock.rate : 1;
-      let nextPositionMs = clock.basePositionMs + (frameTime - clock.baseUpdatedAt) * rate;
-      const shouldFreezePlayhead = shouldFreezePlayheadForPendingPause();
-
-      nextPositionMs = Math.max(0, nextPositionMs);
-
-      if (shouldFreezePlayhead) {
-        animationId = window.requestAnimationFrame(animate);
-        return;
-      }
-
-      const shouldSyncStore = frameTime - lastStoreSyncAt >= nativeSyncIntervalMs;
-      syncTimelinePlayheadFromNative(nextPositionMs, frameTime, shouldSyncStore);
-      if (shouldSyncStore) {
-        lastStoreSyncAt = frameTime;
+      // Only project while the model itself is playing. A pause/seek intent (or an
+      // ingested pause sample) re-anchors the model before this effect is torn down,
+      // and a straggler frame must not write that anchor into the store — paused
+      // positions may only enter through the tolerance-gated adoption path.
+      if (transportModelRef.current.phase === 'playing') {
+        const projectedMs = projectPositionMs(transportModelRef.current, frameTime);
+        const shouldSyncStore = frameTime - lastStoreSyncAt >= storeSyncIntervalMs;
+        writePlayheadFromNative(projectedMs, shouldSyncStore);
+        if (shouldSyncStore) {
+          lastStoreSyncAt = frameTime;
+        }
       }
 
       animationId = window.requestAnimationFrame(animate);
@@ -1476,71 +994,52 @@ export function useNativeTimelinePreview({
       cancelled = true;
       window.cancelAnimationFrame(animationId);
     };
-  }, [active, shouldFreezePlayheadForPendingPause, state, transportControlled]);
+  }, [active, state, transportControlled]);
 
   useEffect(() => {
     if (!active || !controllerRef.current || !timelineAttached) {
       nativeSeekQueueRef.current.inFlight = false;
-      nativeSeekQueueRef.current.activeTargetMs = null;
-      nativeSeekQueueRef.current.activeTargetGeneration = null;
       nativeSeekQueueRef.current.queuedTargetMs = null;
-      nativeSeekQueueRef.current.queuedTargetGeneration = null;
-      nativeSeekQueueRef.current.generation += 1;
       return;
     }
 
-    if (
-      state === 'playing' ||
-      nativeObservedTransportStateRef.current === 'playing'
-    ) {
+    const controller = controllerRef.current;
+    const targetMs = Math.max(0, useTimelineStore.getState().getPlayheadRef());
+
+    // Reject echoes of positions this hook wrote to the store (rAF playback
+    // clock, backend paused sync); only genuine scrubs reach the backend.
+    const lastAppliedMs = lastAppliedPlayheadRef.current;
+    if (lastAppliedMs !== null && Math.abs(targetMs - lastAppliedMs) <= PLAYHEAD_ECHO_EPSILON_MS) {
       return;
     }
 
-    if (isPlaying) {
-      // During playback, timeline playhead updates are driven by the native
-      // clock and timeline rebuild recovery. Treating those updates as manual
-      // scrubs feeds back into redundant backend seeks while resizing clips.
-      if (nativeSeekQueueRef.current.inFlight) {
-        return;
-      }
-      nativeSeekQueueRef.current.queuedTargetMs = null;
-      nativeSeekQueueRef.current.queuedTargetGeneration = null;
+    const now = performance.now();
+    if (useTimelineStore.getState().isPlaying) {
+      // Seamless seek during playback: re-issue playFrom at the scrubbed target.
+      transportModelRef.current = applyIntent(
+        transportModelRef.current,
+        { type: 'play', targetMs },
+        now,
+      );
+      lastAppliedPlayheadRef.current = targetMs;
+      dispatchNativePlayFrom(controller);
       return;
     }
 
-    const targetPlayheadMs = getPauseTransportTargetMs();
-    const recentNativeSync = nativePlayheadSyncRef.current;
-    if (
-      Math.abs(targetPlayheadMs - recentNativeSync.positionMs) <= 0.5 &&
-      performance.now() - recentNativeSync.updatedAt < 250
-    ) {
-      return;
-    }
-
-    const seekQueue = nativeSeekQueueRef.current;
-    const requestedAt = performance.now();
-    const pendingTargetGeneration = markPendingNativeTarget(targetPlayheadMs, requestedAt);
-    seekQueue.queuedTargetMs = targetPlayheadMs;
-    seekQueue.queuedTargetGeneration = pendingTargetGeneration;
-    rebaseNativePlaybackClock(
-      targetPlayheadMs,
-      requestedAt,
-      nativeBackendPositionRef.current.rate,
+    transportModelRef.current = applyIntent(
+      transportModelRef.current,
+      { type: 'seek', targetMs },
+      now,
     );
-
-    if (seekQueue.inFlight) {
-      return;
-    }
-
-    void pumpNativeSeekQueue(controllerRef.current);
+    lastAppliedPlayheadRef.current = targetMs;
+    nativeSeekQueueRef.current.queuedTargetMs = targetMs;
+    pumpNativeSeekQueue(controller);
   }, [
     active,
-    getPauseTransportTargetMs,
+    dispatchNativePlayFrom,
     isPlaying,
-    markPendingNativeTarget,
     playhead,
     pumpNativeSeekQueue,
-    state,
     timelineAttached,
   ]);
 
@@ -1557,25 +1056,22 @@ export function useNativeTimelinePreview({
       }
 
       nativeStepFrameInFlightRef.current = true;
-      void controller
-        .stepFrame(direction)
-        .then(() => {
+      void runNativePositionCommand(controller, () =>
+        controller.stepFrame(direction).then(() => {
           if (isCurrentController(controller)) {
             refreshDiagnosticsRef.current?.('immediate');
           }
-        })
+        }),
+      )
         .catch((stepError) => {
-          if (isCurrentController(controller)) {
-            const message = getErrorMessage(stepError);
-            setError(message);
-          }
+          reportControllerError(controller, stepError);
         })
         .finally(() => {
           nativeStepFrameInFlightRef.current = false;
         });
       return true;
     });
-  }, [active, isCurrentController, isPlaying, timelineAttached]);
+  }, [active, isCurrentController, isPlaying, runNativePositionCommand, timelineAttached]);
 
   useEffect(() => {
     if (!active || !controllerRef.current) {
@@ -1616,10 +1112,7 @@ export function useNativeTimelinePreview({
           }
         })
         .catch((viewportError) => {
-          if (isCurrentController(controller)) {
-            const message = getErrorMessage(viewportError);
-            setError(message);
-          }
+          reportControllerError(controller, viewportError);
         });
     };
 

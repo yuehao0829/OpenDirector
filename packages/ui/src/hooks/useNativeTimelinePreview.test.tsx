@@ -1215,7 +1215,7 @@ describe('useNativeTimelinePreview', () => {
     expect(timelineStoreState.current.setPlayheadRefOnly).not.toHaveBeenCalledWith(18_960);
   });
 
-  it('drops stale paused seeks when immediate replay starts before the queued seek is sent', async () => {
+  it('seeks the paused scrub target then replays with playFrom at that target', async () => {
     setMockPlayhead(1_000);
     timelineStoreState.current.duration = 10_000;
     timelineStoreState.current.isPlaying = true;
@@ -1249,7 +1249,6 @@ describe('useNativeTimelinePreview', () => {
     previewControllerState.playFromCalls.length = 0;
     previewControllerState.pauseCalls.length = 0;
     previewControllerState.seekCalls.length = 0;
-    previewControllerState.deferPause = true;
 
     timelineStoreState.current.isPlaying = false;
     setMockPlayhead(5_000);
@@ -1260,6 +1259,12 @@ describe('useNativeTimelinePreview', () => {
       await Promise.resolve();
     });
 
+    // Pausing and scrubbing to a new target seeks the paused preview there.
+    expect(previewControllerState.pauseCalls).toHaveLength(1);
+    expect(previewControllerState.seekCalls).toHaveLength(1);
+    expect(previewControllerState.seekCalls[0]?.timeMs).toBe(5_000);
+    expect(previewControllerState.playFromCalls).toHaveLength(0);
+
     timelineStoreState.current.isPlaying = true;
 
     await act(async () => {
@@ -1268,10 +1273,57 @@ describe('useNativeTimelinePreview', () => {
       await Promise.resolve();
     });
 
+    expect(previewControllerState.playFromCalls).toHaveLength(1);
+    expect(previewControllerState.playFromCalls[0]?.timeMs).toBe(5_000);
+    expect(previewControllerState.playCalls).toHaveLength(0);
+  });
+
+  it('serializes a raced pause and scrub so the seek waits behind the in-flight pause', async () => {
+    setMockPlayhead(1_000);
+    timelineStoreState.current.duration = 10_000;
+    timelineStoreState.current.isPlaying = true;
+
+    await act(async () => {
+      root.render(<HookHost />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const controller = previewControllerState.instances[0];
+    expect(controller).toBeDefined();
+
+    await act(async () => {
+      controller.emit({
+        type: 'state',
+        payload: {
+          sessionId: controller.id,
+          state: 'playing',
+          positionMs: 1_000,
+          rate: 1,
+          nativeSurfaceAttached: true,
+          timelineAttached: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    previewControllerState.commandLog.length = 0;
+    previewControllerState.pauseCalls.length = 0;
+    previewControllerState.seekCalls.length = 0;
+    previewControllerState.deferPause = true;
+
+    // One commit both pauses and scrubs (e.g. a ruler click while playing).
+    timelineStoreState.current.isPlaying = false;
+    setMockPlayhead(5_000);
+    await act(async () => {
+      root.render(<HookHost />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The seek must not reach the backend concurrently with the in-flight pause.
     expect(previewControllerState.commandLog).toEqual([`pause:${controller.id}`]);
     expect(previewControllerState.seekCalls).toHaveLength(0);
-    expect(previewControllerState.playCalls).toHaveLength(0);
-    expect(previewControllerState.playFromCalls).toHaveLength(0);
 
     await act(async () => {
       previewControllerState.pauseCalls[0]?.deferred?.resolve();
@@ -1281,11 +1333,10 @@ describe('useNativeTimelinePreview', () => {
 
     expect(previewControllerState.commandLog).toEqual([
       `pause:${controller.id}`,
-      `playFrom:${controller.id}:5000`,
+      `seek:${controller.id}:5000`,
     ]);
-    expect(previewControllerState.seekCalls).toHaveLength(0);
-    expect(previewControllerState.playFromCalls).toHaveLength(1);
-    expect(previewControllerState.playCalls).toHaveLength(0);
+    expect(previewControllerState.seekCalls).toHaveLength(1);
+    expect(previewControllerState.seekCalls[0]?.timeMs).toBe(5_000);
   });
 
   it('does not block playFrom behind an already in-flight paused seek', async () => {
@@ -1346,7 +1397,7 @@ describe('useNativeTimelinePreview', () => {
     expect(previewControllerState.playCalls).toHaveLength(0);
   });
 
-  it('queues a plain play after an in-flight pause when replay resumes at the same target', async () => {
+  it('replays with playFrom (never bare play) behind an in-flight pause at the same target', async () => {
     setMockPlayhead(1_000);
     timelineStoreState.current.duration = 10_000;
     timelineStoreState.current.isPlaying = true;
@@ -1377,6 +1428,7 @@ describe('useNativeTimelinePreview', () => {
 
     previewControllerState.commandLog.length = 0;
     previewControllerState.playCalls.length = 0;
+    previewControllerState.playFromCalls.length = 0;
     previewControllerState.pauseCalls.length = 0;
     previewControllerState.deferPause = true;
 
@@ -1404,9 +1456,10 @@ describe('useNativeTimelinePreview', () => {
 
     expect(previewControllerState.commandLog).toEqual([
       `pause:${controller.id}`,
-      `play:${controller.id}`,
+      `playFrom:${controller.id}:1000`,
     ]);
-    expect(previewControllerState.playCalls).toHaveLength(1);
+    expect(previewControllerState.playFromCalls).toHaveLength(1);
+    expect(previewControllerState.playCalls).toHaveLength(0);
   });
 
   it('accepts native playing samples again after a pause request fails', async () => {
@@ -1512,7 +1565,7 @@ describe('useNativeTimelinePreview', () => {
       await Promise.resolve();
     });
 
-    expect(previewControllerState.playCalls).toHaveLength(1);
+    expect(previewControllerState.playFromCalls).toHaveLength(1);
 
     await act(async () => {
       controller.emit({
@@ -1558,7 +1611,7 @@ describe('useNativeTimelinePreview', () => {
     expect(previewControllerState.seekCalls).toHaveLength(0);
   });
 
-  it('accepts the first real playing position after a slow play start times out the local intent', async () => {
+  it('pauses at the editor playhead after a play start without re-seeking', async () => {
     let nowMs = 0;
     const performanceNowSpy = vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
 
@@ -1601,7 +1654,7 @@ describe('useNativeTimelinePreview', () => {
         await Promise.resolve();
       });
 
-      expect(previewControllerState.playCalls).toHaveLength(1);
+      expect(previewControllerState.playFromCalls).toHaveLength(1);
 
       nowMs = 1_600;
       await act(async () => {
@@ -1650,63 +1703,6 @@ describe('useNativeTimelinePreview', () => {
     } finally {
       performanceNowSpy.mockRestore();
     }
-  });
-
-  it('ignores stale paused state samples after the latest local intent has switched back to play', async () => {
-    setMockPlayhead(8_000);
-    timelineStoreState.current.duration = 30_000;
-
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const controller = previewControllerState.instances[0];
-    expect(controller).toBeDefined();
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
-          state: 'paused',
-          positionMs: 8_000,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    timelineStoreState.current.setPlayhead.mockClear();
-    timelineStoreState.current.setPlayheadRefOnly.mockClear();
-    timelineStoreState.current.isPlaying = true;
-
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
-          state: 'paused',
-          positionMs: 8_120,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    expect(timelineStoreState.current.setPlayhead).not.toHaveBeenCalled();
-    expect(timelineStoreState.current.setPlayheadRefOnly).not.toHaveBeenCalledWith(8_120);
   });
 
   it('ignores late playing position samples after paused state so paused scrubbing can still seek', async () => {
@@ -1852,107 +1848,6 @@ describe('useNativeTimelinePreview', () => {
     expect(previewControllerState.seekCalls[0]?.timeMs).toBe(8_340);
   });
 
-  it('does not let an ignored stale paused state overwrite the observed playing transport', async () => {
-    setMockPlayhead(8_077);
-    timelineStoreState.current.duration = 30_000;
-
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const controller = previewControllerState.instances[0];
-    expect(controller).toBeDefined();
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
-          state: 'paused',
-          positionMs: 8_077,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    previewControllerState.playCalls.length = 0;
-    previewControllerState.pauseCalls.length = 0;
-    previewControllerState.seekCalls.length = 0;
-
-    timelineStoreState.current.isPlaying = true;
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(previewControllerState.playCalls).toHaveLength(1);
-
-    await act(async () => {
-      controller.emit({
-        type: 'position',
-        payload: {
-          sessionId: controller.id,
-          positionMs: 8_340,
-          isPlaying: true,
-          isBuffering: false,
-          driftMs: 0,
-          rate: 1,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
-          state: 'paused',
-          positionMs: 8_077,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    previewControllerState.pauseCalls.length = 0;
-    previewControllerState.seekCalls.length = 0;
-    timelineStoreState.current.isPlaying = false;
-
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(previewControllerState.pauseCalls).toHaveLength(1);
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
-          state: 'paused',
-          positionMs: 8_340,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    expect(previewControllerState.seekCalls).toHaveLength(0);
-  });
-
   it('queues a pause behind an in-flight play when playback is cancelled before native enters playing', async () => {
     setMockPlayhead(1_000);
     timelineStoreState.current.duration = 10_000;
@@ -1982,9 +1877,9 @@ describe('useNativeTimelinePreview', () => {
     });
 
     previewControllerState.commandLog.length = 0;
-    previewControllerState.playCalls.length = 0;
+    previewControllerState.playFromCalls.length = 0;
     previewControllerState.pauseCalls.length = 0;
-    previewControllerState.deferPlay = true;
+    previewControllerState.deferPlayFrom = true;
 
     timelineStoreState.current.isPlaying = true;
     await act(async () => {
@@ -2000,17 +1895,17 @@ describe('useNativeTimelinePreview', () => {
       await Promise.resolve();
     });
 
-    expect(previewControllerState.commandLog).toEqual([`play:${controller.id}`]);
+    expect(previewControllerState.commandLog).toEqual([`playFrom:${controller.id}:1000`]);
     expect(previewControllerState.pauseCalls).toHaveLength(0);
 
     await act(async () => {
-      previewControllerState.playCalls[0]?.deferred?.resolve();
+      previewControllerState.playFromCalls[0]?.deferred?.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
 
     expect(previewControllerState.commandLog).toEqual([
-      `play:${controller.id}`,
+      `playFrom:${controller.id}:1000`,
       `pause:${controller.id}`,
     ]);
     expect(previewControllerState.pauseCalls).toHaveLength(1);
@@ -2467,9 +2362,10 @@ describe('useNativeTimelinePreview', () => {
     expect(previewControllerState.seekCalls).toHaveLength(0);
   });
 
-  it('skips a queued stale playFrom when high-frequency transport toggles end on pause', async () => {
-    setMockPlayhead(1_000);
-    timelineStoreState.current.duration = 10_000;
+  it('issues a seamless playFrom for a genuine scrub while playing', async () => {
+    setMockPlayhead(5_000);
+    timelineStoreState.current.duration = 30_000;
+    timelineStoreState.current.isPlaying = true;
 
     await act(async () => {
       root.render(<HookHost />);
@@ -2485,30 +2381,8 @@ describe('useNativeTimelinePreview', () => {
         type: 'state',
         payload: {
           sessionId: controller.id,
-          state: 'paused',
-          positionMs: 1_000,
-          rate: 1,
-          nativeSurfaceAttached: true,
-          timelineAttached: true,
-        },
-      });
-      await Promise.resolve();
-    });
-
-    timelineStoreState.current.isPlaying = true;
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      controller.emit({
-        type: 'state',
-        payload: {
-          sessionId: controller.id,
           state: 'playing',
-          positionMs: 1_000,
+          positionMs: 5_000,
           rate: 1,
           nativeSurfaceAttached: true,
           timelineAttached: true,
@@ -2520,51 +2394,21 @@ describe('useNativeTimelinePreview', () => {
     previewControllerState.commandLog.length = 0;
     previewControllerState.playCalls.length = 0;
     previewControllerState.playFromCalls.length = 0;
-    previewControllerState.pauseCalls.length = 0;
-    previewControllerState.deferPause = true;
+    previewControllerState.seekCalls.length = 0;
 
-    timelineStoreState.current.isPlaying = false;
+    // A genuine playhead jump while still playing re-issues playFrom (not a
+    // dropped/queued paused seek) at the new target.
+    setMockPlayhead(12_000);
     await act(async () => {
       root.render(<HookHost />);
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    setMockPlayhead(5_000);
-    timelineStoreState.current.isPlaying = true;
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    timelineStoreState.current.isPlaying = false;
-    await act(async () => {
-      root.render(<HookHost />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(previewControllerState.commandLog).toEqual([`pause:${controller.id}`]);
-
-    await act(async () => {
-      previewControllerState.pauseCalls[0]?.deferred?.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(
-      container
-        .querySelector('[data-testid="native-preview-host"]')
-        ?.getAttribute('data-position'),
-    ).not.toBe('5000');
-    expect(previewControllerState.commandLog).toEqual([
-      `pause:${controller.id}`,
-      `pause:${controller.id}`,
-    ]);
-    expect(previewControllerState.playFromCalls).toHaveLength(0);
+    expect(previewControllerState.playFromCalls).toHaveLength(1);
+    expect(previewControllerState.playFromCalls[0]?.timeMs).toBe(12_000);
+    expect(previewControllerState.seekCalls).toHaveLength(0);
     expect(previewControllerState.playCalls).toHaveLength(0);
-    expect(previewControllerState.pauseCalls).toHaveLength(2);
   });
 
   it('temporarily hides the native surface while a global occlusion blocker is active', async () => {

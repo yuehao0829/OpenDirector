@@ -1,5 +1,4 @@
-use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 
@@ -25,6 +24,53 @@ const FRAME_TIMESTAMP_EVENT: &str = "media-preview://frame-timestamp";
 const FRAME_TIMESTAMP_STALENESS_THRESHOLD_MS: u128 = 200;
 const CONSECUTIVE_SEEK_WINDOW_MS: f64 = 200.0;
 const EMPTY_TIMELINE_VIRTUAL_DURATION_MS: f64 = 60_000.0;
+// Non-fatal safety valve: a flushing seek whose seqnum-matched ASYNC_DONE never arrives is
+// unpinned after this window so the session keeps tracking pipeline position.
+const PENDING_SEEK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A dispatched flushing seek awaiting its seqnum-matched `ASYNC_DONE`. While one is pending the
+/// session position stays pinned at `target_ms` (only a matching-generation frame sample may move
+/// it). `metrics` is `Some` only for user seeks that should record seek latency/burst statistics;
+/// step/preroll/rate re-seeks pin and await completion without inflating seek metrics.
+#[derive(Debug)]
+struct PendingSeek {
+    target_ms: f64,
+    seqnum: gst::Seqnum,
+    issued_at: Instant,
+    metrics: Option<(SeekKind, u64)>,
+}
+
+/// Discovery + GES/pipeline construction result. Built off any session lock (potentially on a
+/// blocking thread) and then applied to a session via `install_rebuilt_timeline`.
+pub struct PreviewRebuild {
+    snapshot: TimelinePreviewSnapshot,
+    prepared_timeline: GesPreviewTimeline,
+    player: Option<GstreamerPreviewPlayer>,
+}
+
+impl PreviewRebuild {
+    pub fn build(snapshot: TimelinePreviewSnapshot) -> Result<Self, String> {
+        let prepared_timeline = build_preview_timeline(&snapshot)?;
+        let player = if prepared_timeline.clips.is_empty() {
+            None
+        } else {
+            Some(GstreamerPreviewPlayer::new_pending(&prepared_timeline)?)
+        };
+        Ok(Self {
+            snapshot,
+            prepared_timeline,
+            player,
+        })
+    }
+
+    /// Discard a rebuild that will not be installed (superseded by a newer submission), shutting
+    /// down any pipeline it prepared so it never leaks.
+    pub fn shutdown(self) {
+        if let Some(mut player) = self.player {
+            let _ = player.shutdown();
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct PreviewSession {
@@ -44,7 +90,12 @@ pub struct PreviewSession {
     pub last_error: Option<String>,
     pub metrics: SessionMetrics,
     pub preview_player: Option<GstreamerPreviewPlayer>,
-    frame_timestamp_receiver: Option<mpsc::Receiver<f64>>,
+    transport_epoch: u64,
+    pending_seek: Option<PendingSeek>,
+    // Seqnum of the most recently dispatched flushing seek. Unlike `pending_seek` it is NOT
+    // cleared on completion or by the safety valve, so a genuine post-seek EOS (which inherits the
+    // seek's seqnum) can be distinguished from a stale EOS long after the seek settled.
+    last_seek_seqnum: Option<gst::Seqnum>,
     last_frame_timestamp_ms: f64,
     last_frame_timestamp_at: Option<Instant>,
     last_seek_completed_at: Option<Instant>,
@@ -71,7 +122,9 @@ impl PreviewSession {
             last_error: None,
             metrics: SessionMetrics::default(),
             preview_player: None,
-            frame_timestamp_receiver: None,
+            transport_epoch: 0,
+            pending_seek: None,
+            last_seek_seqnum: None,
             last_frame_timestamp_ms: 0.0,
             last_frame_timestamp_at: None,
             last_seek_completed_at: None,
@@ -191,6 +244,8 @@ impl PreviewSession {
             },
             last_error: self.last_error.clone(),
             metrics: self.metrics.as_model(),
+            transport_epoch: self.transport_epoch,
+            pending_seek_target_ms: self.pending_seek.as_ref().map(|pending| pending.target_ms),
         }
     }
 
@@ -205,6 +260,10 @@ impl PreviewSession {
         viewport: Option<PreviewViewport>,
         surface_sync_revision: Option<u64>,
     ) -> Result<(), String> {
+        if matches!(self.state, PreviewSessionState::Destroyed) {
+            return Ok(());
+        }
+
         let Some(desired_surface_presenting) =
             self.prepare_surface_attach(viewport, surface_sync_revision)?
         else {
@@ -330,6 +389,9 @@ impl PreviewSession {
         viewport: PreviewViewport,
         surface_sync_revision: Option<u64>,
     ) -> Result<(), String> {
+        if matches!(self.state, PreviewSessionState::Destroyed) {
+            return Ok(());
+        }
         if !self.begin_surface_sync(surface_sync_revision) {
             return Ok(());
         }
@@ -342,6 +404,9 @@ impl PreviewSession {
         presenting: bool,
         surface_sync_revision: Option<u64>,
     ) -> Result<(), String> {
+        if matches!(self.state, PreviewSessionState::Destroyed) {
+            return Ok(());
+        }
         if !self.begin_surface_sync(surface_sync_revision) {
             return Ok(());
         }
@@ -392,78 +457,91 @@ impl PreviewSession {
         }
     }
 
-    pub fn set_timeline(&mut self, timeline: TimelinePreviewSnapshot) -> Result<(), String> {
+    // Synchronous build + install. Production drives the two phases separately so discovery runs
+    // off the session lock (see `PreviewSessionManager::set_timeline`); this convenience keeps the
+    // pairing testable in-process.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn set_timeline(&mut self, snapshot: TimelinePreviewSnapshot) -> Result<(), String> {
+        let rebuild = PreviewRebuild::build(snapshot).map_err(|error| {
+            let message = format!("Failed to build preview timeline: {error}");
+            self.set_error(message.clone(), Some(error));
+            message
+        })?;
+        self.install_rebuilt_timeline(rebuild)
+    }
+
+    pub fn install_rebuilt_timeline(&mut self, rebuild: PreviewRebuild) -> Result<(), String> {
+        let PreviewRebuild {
+            snapshot: timeline,
+            prepared_timeline,
+            player,
+        } = rebuild;
+
+        // The session may have been destroyed while this rebuild was built off-lock. Discard the
+        // freshly built pipeline instead of resurrecting a torn-down session and leaking it.
+        if matches!(self.state, PreviewSessionState::Destroyed) {
+            if let Some(mut player) = player {
+                let _ = player.shutdown();
+            }
+            return Err("preview session was destroyed".to_string());
+        }
+
         let was_playing = matches!(self.state, PreviewSessionState::Playing);
         self.sync_playback_position();
-        let previous_state = self.state;
         let previous_position_ms = self.position_ms;
         let previous_virtual_play_started_at = self.virtual_play_started_at;
         let previous_virtual_play_base_position_ms = self.virtual_play_base_position_ms;
-
-        let prepared_timeline = match build_preview_timeline(&timeline) {
-            Ok(prepared_timeline) => prepared_timeline,
-            Err(error) => {
-                let message = format!("Failed to build preview timeline: {error}");
-                self.set_error(message.clone(), Some(error));
-                return Err(message);
-            }
-        };
 
         let next_duration_ms =
             playback_duration_ms(&timeline, prepared_timeline.clips.is_empty(), None);
 
         self.stop_virtual_playback();
         self.position_ms = clamp_position(self.position_ms, next_duration_ms);
+        self.reset_frame_timestamps();
 
-        if prepared_timeline.clips.is_empty() {
-            self.frame_timestamp_receiver = None;
-            self.last_frame_timestamp_at = None;
-            if let Err(error) = self.replace_preview_player(None) {
-                return Err(self
-                    .fail_operation("Failed to reset preview backend for empty timeline", error));
-            }
-        } else {
-            let (sender, receiver) = mpsc::sync_channel::<f64>(1);
-            self.frame_timestamp_receiver = Some(receiver);
-
-            let preview_player = match GstreamerPreviewPlayer::new_pending(&prepared_timeline) {
-                Ok(player) => player,
-                Err(error) => {
-                    return Err(self.fail_operation("Failed to initialize preview backend", error));
+        match player {
+            None => {
+                if let Err(error) = self.replace_preview_player(None) {
+                    return Err(self.fail_operation(
+                        "Failed to reset preview backend for empty timeline",
+                        error,
+                    ));
                 }
-            };
-            if let Err(error) = self
-                .replace_preview_player_with_pending(preview_player)
-            {
-                self.frame_timestamp_receiver = None;
-                self.last_frame_timestamp_at = None;
-                self.position_ms = previous_position_ms;
-                self.virtual_play_started_at = previous_virtual_play_started_at;
-                self.virtual_play_base_position_ms = previous_virtual_play_base_position_ms;
-                let message = self.fail_operation(
-                    "Failed to bind preview backend to native preview surface",
-                    error,
-                );
-                if self.preview_player.is_some() || self.virtual_play_started_at.is_some() {
-                    self.state = previous_state;
-                }
-                return Err(message);
             }
-
-            if let Some(player) = self.preview_player.as_mut() {
-                player.install_frame_timestamp_probe(sender);
+            Some(player) => {
+                if let Err(error) = self.replace_preview_player_with_pending(player) {
+                    // Swap failed but the old player is retained; keep the session usable.
+                    self.position_ms = previous_position_ms;
+                    self.virtual_play_started_at = previous_virtual_play_started_at;
+                    self.virtual_play_base_position_ms = previous_virtual_play_base_position_ms;
+                    return Err(self.fail_operation(
+                        "Failed to bind preview backend to native preview surface",
+                        error,
+                    ));
+                }
             }
         }
 
+        // The pipeline was swapped for a fresh one; any seek in flight on the old pipeline is gone,
+        // and its seqnum must not gate the new pipeline's genuine EOS.
+        self.pending_seek = None;
+        self.last_seek_seqnum = None;
+
         if was_playing && self.position_ms >= next_duration_ms {
             if let Some(preview_player) = self.preview_player.as_mut() {
-                let seek_position_ms = preview_player.clamp_seek_position_ms(next_duration_ms);
-                let seek_result = if next_duration_ms > 0.0 {
-                    preview_player.seek_paused(seek_position_ms)
-                } else {
-                    preview_player.pause()
-                };
-                if let Err(error) = seek_result {
+                if next_duration_ms > 0.0 {
+                    let seek_position_ms =
+                        preview_player.clamp_seek_position_ms(next_duration_ms);
+                    match preview_player.seek_paused(seek_position_ms) {
+                        Ok(seqnum) => self.set_pending_seek(seek_position_ms, seqnum, None),
+                        Err(error) => {
+                            return Err(self.fail_operation(
+                                "Failed to position preview backend at the updated timeline end",
+                                error,
+                            ))
+                        }
+                    }
+                } else if let Err(error) = preview_player.pause() {
                     return Err(self.fail_operation(
                         "Failed to position preview backend at the updated timeline end",
                         error,
@@ -475,11 +553,15 @@ impl PreviewSession {
             self.state = PreviewSessionState::Ended;
         } else if was_playing {
             if let Some(preview_player) = self.preview_player.as_mut() {
-                if let Err(error) = preview_player.play(self.position_ms, self.rate) {
-                    return Err(self.fail_operation(
-                        "Failed to resume preview backend after timeline update",
-                        error,
-                    ));
+                let play_position_ms = self.position_ms;
+                match preview_player.play(play_position_ms, self.rate) {
+                    Ok(seqnum) => self.set_pending_seek(play_position_ms, seqnum, None),
+                    Err(error) => {
+                        return Err(self.fail_operation(
+                            "Failed to resume preview backend after timeline update",
+                            error,
+                        ))
+                    }
                 }
             } else {
                 self.start_virtual_playback();
@@ -504,11 +586,41 @@ impl PreviewSession {
         Ok(())
     }
 
-    pub fn play(&mut self) -> Result<(), String> {
+    // Gate shared by every transport entry point: commands arriving after destroy or
+    // carrying a stale epoch are dropped as no-ops; fresh commands adopt their epoch.
+    fn accept_transport_command(&mut self, epoch: u64) -> bool {
+        if matches!(self.state, PreviewSessionState::Destroyed) {
+            return false;
+        }
+        if epoch < self.transport_epoch {
+            return false;
+        }
+        self.transport_epoch = epoch;
+        true
+    }
+
+    // Drop the frame-PTS state and any latched frame sample together (contract R3):
+    // around a flushing seek, a pre-flush PTS must never rewind the trusted position.
+    fn discard_frame_samples(&mut self) {
+        self.reset_frame_timestamps();
+        if let Some(preview_player) = self.preview_player.as_ref() {
+            preview_player.clear_frame_sample();
+        }
+    }
+
+    pub fn play(&mut self, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         if self.timeline.is_none() {
             self.set_error("Cannot play before timeline is attached", None);
             return Err("Cannot play before timeline is attached".to_string());
         }
+
+        // Play from the trusted position_ms (a pinned seek target while a seek is pending);
+        // clear any stale frame sample so playback never resumes from a pre-seek PTS.
+        self.discard_frame_samples();
 
         let duration_ms = self.effective_duration_ms();
         if self.position_ms >= duration_ms {
@@ -518,8 +630,16 @@ impl PreviewSession {
         }
 
         if let Some(preview_player) = self.preview_player.as_mut() {
-            if let Err(error) = preview_player.play(self.position_ms, self.rate) {
-                return Err(self.fail_operation("Failed to start preview playback", error));
+            let previous_position_ms = self.position_ms;
+            let play_position_ms = preview_player.clamp_seek_position_ms(self.position_ms);
+            match preview_player.play(play_position_ms, self.rate) {
+                Ok(seqnum) => {
+                    self.position_ms = play_position_ms;
+                    self.begin_metered_pending_seek(previous_position_ms, play_position_ms, seqnum);
+                }
+                Err(error) => {
+                    return Err(self.fail_operation("Failed to start preview playback", error))
+                }
             }
         } else {
             self.start_virtual_playback();
@@ -530,29 +650,38 @@ impl PreviewSession {
         Ok(())
     }
 
-    pub fn play_from(&mut self, time_ms: f64) -> Result<(), String> {
+    pub fn play_from(&mut self, time_ms: f64, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         if self.timeline.is_none() {
             self.set_error("Cannot play before timeline is attached", None);
             return Err("Cannot play before timeline is attached".to_string());
         }
 
-        self.reset_frame_timestamps();
-        self.sync_playback_position();
+        self.discard_frame_samples();
+        let previous_position_ms = self.position_ms;
         let duration_ms = self.effective_duration_ms();
         self.position_ms = clamp_position(time_ms, duration_ms);
 
         if self.position_ms >= duration_ms {
-            self.seek_to_session_end()?;
+            self.seek_to_session_end(None)?;
             self.last_error = None;
             return Ok(());
         }
 
         if let Some(preview_player) = self.preview_player.as_mut() {
             let play_position_ms = preview_player.clamp_seek_position_ms(self.position_ms);
-            preview_player
-                .play(play_position_ms, self.rate)
-                .map_err(|error| self.fail_operation("Failed to start preview playback", error))?;
-            self.position_ms = play_position_ms;
+            match preview_player.play(play_position_ms, self.rate) {
+                Ok(seqnum) => {
+                    self.position_ms = play_position_ms;
+                    self.begin_metered_pending_seek(previous_position_ms, play_position_ms, seqnum);
+                }
+                Err(error) => {
+                    return Err(self.fail_operation("Failed to start preview playback", error))
+                }
+            }
         } else {
             self.start_virtual_playback();
         }
@@ -563,7 +692,11 @@ impl PreviewSession {
         Ok(())
     }
 
-    pub fn pause(&mut self) -> Result<(), String> {
+    pub fn pause(&mut self, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         self.sync_playback_position();
         let pause_result = if let Some(preview_player) = self.preview_player.as_mut() {
             preview_player.pause()
@@ -581,16 +714,19 @@ impl PreviewSession {
         Ok(())
     }
 
-    pub fn seek(&mut self, time_ms: f64) -> Result<(), String> {
+    pub fn seek(&mut self, time_ms: f64, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         let previous_position_ms = self.position_ms;
-        let seek_kind = self.classify_seek(previous_position_ms, time_ms);
-        let seek_burst_count = self.next_seek_burst_count();
-        let started_at = Instant::now();
         let was_playing = matches!(self.state, PreviewSessionState::Playing);
-        self.sync_playback_position();
+        self.discard_frame_samples();
         let duration_ms = self.effective_duration_ms();
         self.state = PreviewSessionState::Seeking;
         self.position_ms = clamp_position(time_ms, duration_ms);
+        let seek_metrics =
+            Some((self.classify_seek(previous_position_ms, self.position_ms), self.next_seek_burst_count()));
 
         if self.preview_player.is_none() {
             if was_playing && self.position_ms < duration_ms {
@@ -603,75 +739,68 @@ impl PreviewSession {
                 self.stop_virtual_playback();
                 self.state = PreviewSessionState::Paused;
             }
-            self.complete_seek_metrics(seek_kind, seek_burst_count, started_at);
+            // No pipeline to await: record seek metrics immediately.
+            if let Some((kind, burst_count)) = seek_metrics {
+                self.record_completed_seek(kind, 0.0, burst_count);
+            }
             self.last_error = None;
             return Ok(());
         }
 
         if self.position_ms >= duration_ms {
-            if let Err(error) = self.seek_to_session_end() {
-                return Err(self
-                    .fail_operation("Failed to seek preview playback to the session end", error));
-            }
-            self.complete_seek_metrics(seek_kind, seek_burst_count, started_at);
+            self.seek_to_session_end(seek_metrics)?;
             return Ok(());
         }
 
-        let seek_position_ms = self
-            .preview_player
-            .as_ref()
-            .map(|preview_player| preview_player.clamp_seek_position_ms(self.position_ms))
-            .unwrap_or(self.position_ms);
+        let Some(preview_player) = self.preview_player.as_mut() else {
+            // Unreachable: the pipeline-less path returned above.
+            return Ok(());
+        };
+        let seek_position_ms = preview_player.clamp_seek_position_ms(self.position_ms);
         self.position_ms = seek_position_ms;
 
         let seek_result = if was_playing {
-            self.preview_player
-                .as_mut()
-                .expect("preview_player existence checked above")
-                .play(seek_position_ms, self.rate)
+            preview_player.play(seek_position_ms, self.rate)
         } else {
-            self.preview_player
-                .as_mut()
-                .expect("preview_player existence checked above")
-                .seek_paused(seek_position_ms)
+            preview_player.seek_paused(seek_position_ms)
         };
-        if let Err(error) = seek_result {
-            let operation = if was_playing {
-                "Failed to resume preview playback after seek"
-            } else {
-                "Failed to seek paused preview playback"
-            };
-            return Err(self.fail_operation(operation, error));
+        match seek_result {
+            Ok(seqnum) => self.set_pending_seek(seek_position_ms, seqnum, seek_metrics),
+            Err(error) => {
+                let operation = if was_playing {
+                    "Failed to resume preview playback after seek"
+                } else {
+                    "Failed to seek paused preview playback"
+                };
+                return Err(self.fail_operation(operation, error));
+            }
         }
 
-        if was_playing {
-            self.state = PreviewSessionState::Playing;
+        self.state = if was_playing {
+            PreviewSessionState::Playing
         } else {
-            self.state = PreviewSessionState::Paused;
-        }
-
-        self.complete_seek_metrics(seek_kind, seek_burst_count, started_at);
+            PreviewSessionState::Paused
+        };
         self.last_error = None;
         Ok(())
     }
 
-    pub fn step_frame(&mut self, direction: i32) -> Result<(), String> {
+    pub fn step_frame(&mut self, direction: i32, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         self.stop_virtual_playback();
+        self.discard_frame_samples();
         let duration_ms = self.effective_duration_ms();
-        let frame_duration_ms = match self.timeline.as_ref() {
-            Some(timeline) if timeline.fps > 0.0 => 1000.0 / timeline.fps,
-            _ => 1000.0 / 30.0,
-        };
+        let frame_duration_ms = self.frame_duration_ms();
         self.position_ms = clamp_position(
             self.position_ms + frame_duration_ms * if direction >= 0 { 1.0 } else { -1.0 },
             duration_ms,
         );
 
         if self.position_ms >= duration_ms {
-            if let Err(error) = self.seek_to_session_end() {
-                return Err(self
-                    .fail_operation("Failed to step preview playback to the session end", error));
-            }
+            self.seek_to_session_end(None)?;
             self.metrics.step_count += 1;
             return Ok(());
         }
@@ -684,15 +813,26 @@ impl PreviewSession {
         Ok(())
     }
 
-    pub fn set_rate(&mut self, rate: f64) -> Result<(), String> {
+    pub fn set_rate(&mut self, rate: f64, epoch: u64) -> Result<(), String> {
+        if !self.accept_transport_command(epoch) {
+            return Ok(());
+        }
+
         self.sync_playback_position();
         self.rate = normalize_rate(rate);
         if matches!(self.state, PreviewSessionState::Playing) {
+            // A rate change dispatches a flushing seek; clear the frame-PTS state first so a
+            // pre-rate sample cannot rewind the pinned position (contract R3).
+            self.discard_frame_samples();
+            let target_ms = self.position_ms;
             if let Some(preview_player) = self.preview_player.as_mut() {
-                if let Err(error) = preview_player.play(self.position_ms, self.rate) {
-                    return Err(
-                        self.fail_operation("Failed to update preview playback rate", error)
-                    );
+                match preview_player.play(target_ms, self.rate) {
+                    Ok(seqnum) => self.set_pending_seek(target_ms, seqnum, None),
+                    Err(error) => {
+                        return Err(
+                            self.fail_operation("Failed to update preview playback rate", error)
+                        )
+                    }
                 }
             } else {
                 self.start_virtual_playback();
@@ -714,6 +854,7 @@ impl PreviewSession {
             ));
         }
         self.state = PreviewSessionState::Destroyed;
+        self.timeline = None;
         self.prepared_timeline = None;
         self.last_error = None;
         Ok(())
@@ -737,6 +878,7 @@ impl PreviewSession {
                 native_surface_attached: self.native_surface_attached(),
                 timeline_attached: self.timeline.is_some(),
                 message,
+                epoch: self.transport_epoch,
             },
         )
         .map_err(|error| error.to_string())
@@ -752,6 +894,7 @@ impl PreviewSession {
                 is_buffering: false,
                 drift_ms: 0.0,
                 rate: self.rate,
+                epoch: self.transport_epoch,
             },
         )
         .map_err(|error| error.to_string())
@@ -784,16 +927,16 @@ impl PreviewSession {
     }
 
     fn drain_frame_timestamps(&mut self) -> bool {
-        let Some(receiver) = self.frame_timestamp_receiver.as_ref() else {
-            return false;
-        };
-        let mut latest_ts: Option<f64> = None;
-        while let Ok(ts) = receiver.try_recv() {
-            latest_ts = Some(ts);
-        }
-        if let Some(ts) = latest_ts {
-            self.last_frame_timestamp_ms = ts;
-            self.last_frame_timestamp_at = Some(Instant::now());
+        if let Some(preview_player) = self.preview_player.as_ref() {
+            let current_generation = preview_player.seek_generation();
+            // Only accept samples stamped with the current seek generation; anything older
+            // predates the most recent flushing seek and would teleport the playhead backwards.
+            if let Some(sample) = preview_player.take_frame_sample() {
+                if sample.generation == current_generation {
+                    self.last_frame_timestamp_ms = sample.pts_ms;
+                    self.last_frame_timestamp_at = Some(Instant::now());
+                }
+            }
         }
         if let Some(last_at) = self.last_frame_timestamp_at {
             if last_at.elapsed().as_millis() < FRAME_TIMESTAMP_STALENESS_THRESHOLD_MS {
@@ -806,6 +949,7 @@ impl PreviewSession {
     }
 
     fn reset_frame_timestamps(&mut self) {
+        self.last_frame_timestamp_ms = 0.0;
         self.last_frame_timestamp_at = None;
     }
 
@@ -815,6 +959,7 @@ impl PreviewSession {
             PreviewSessionFrameTimestampEvent {
                 session_id: self.session_id.clone(),
                 position_ms: self.position_ms,
+                epoch: self.transport_epoch,
             },
         )
             .map_err(|error| error.to_string())
@@ -825,6 +970,38 @@ impl PreviewSession {
             .as_ref()
             .map(|timeline| timeline.duration_ms)
             .unwrap_or(0.0)
+    }
+
+    fn frame_duration_ms(&self) -> f64 {
+        match self.timeline.as_ref() {
+            Some(timeline) if timeline.fps > 0.0 => 1000.0 / timeline.fps,
+            _ => 1000.0 / 30.0,
+        }
+    }
+
+    // EOS messages are not flushed off the bus by a seek and, unlike ASYNC_DONE, can predate the
+    // current segment. GStreamer stamps a post-seek EOS with the seek's seqnum, so honor EOS only
+    // when it carries the most recent seek's seqnum (or no seek was ever dispatched — natural
+    // playout). As a fallback for any GES element that drops the seqnum, also accept EOS when
+    // nothing is pending and the pipeline is already parked within a frame of the end.
+    fn should_honor_eos(&self, eos_seqnums: &[gst::Seqnum]) -> bool {
+        if eos_seqnums.is_empty() {
+            return false;
+        }
+        if self
+            .last_seek_seqnum
+            .map_or(true, |seqnum| eos_seqnums.contains(&seqnum))
+        {
+            return true;
+        }
+        if self.pending_seek.is_none() {
+            if let Some(preview_player) = self.preview_player.as_ref() {
+                if let Some(position_ms) = preview_player.query_position_ms() {
+                    return position_ms >= self.duration_ms() - self.frame_duration_ms();
+                }
+            }
+        }
+        false
     }
 
     fn playback_duration_ms(&self) -> f64 {
@@ -861,26 +1038,29 @@ impl PreviewSession {
             .unwrap_or(0.0)
     }
 
-    fn seek_to_session_end(&mut self) -> Result<(), String> {
+    fn seek_to_session_end(
+        &mut self,
+        seek_metrics: Option<(SeekKind, u64)>,
+    ) -> Result<(), String> {
         let duration_ms = self.effective_duration_ms();
-        let operation_result = if let Some(preview_player) = self.preview_player.as_mut() {
+        if let Some(preview_player) = self.preview_player.as_mut() {
             let seek_position_ms = preview_player.clamp_seek_position_ms(duration_ms);
             if duration_ms > 0.0 {
-                preview_player.seek_paused(seek_position_ms)
-            } else {
-                preview_player.pause()
+                match preview_player.seek_paused(seek_position_ms) {
+                    Ok(seqnum) => self.set_pending_seek(seek_position_ms, seqnum, seek_metrics),
+                    Err(error) => {
+                        return Err(self.fail_operation(
+                            "Failed to seek preview backend to the last frame",
+                            error,
+                        ))
+                    }
+                }
+            } else if let Err(error) = preview_player.pause() {
+                return Err(self.fail_operation(
+                    "Failed to pause preview backend at empty-session end",
+                    error,
+                ));
             }
-        } else {
-            Ok(())
-        };
-
-        if let Err(error) = operation_result {
-            let operation = if duration_ms > 0.0 {
-                "Failed to seek preview backend to the last frame"
-            } else {
-                "Failed to pause preview backend at empty-session end"
-            };
-            return Err(self.fail_operation(operation, error));
         }
 
         self.position_ms = duration_ms;
@@ -889,22 +1069,21 @@ impl PreviewSession {
     }
 
     fn seek_paused_to_position(&mut self, position_ms: f64) -> Result<(), String> {
-        let seek_position_ms = self
-            .preview_player
-            .as_ref()
-            .map(|preview_player| preview_player.clamp_seek_position_ms(position_ms))
-            .unwrap_or(position_ms);
-
-        let seek_result = if let Some(preview_player) = self.preview_player.as_mut() {
-            preview_player.seek_paused(seek_position_ms)
+        if let Some(preview_player) = self.preview_player.as_mut() {
+            let seek_position_ms = preview_player.clamp_seek_position_ms(position_ms);
+            match preview_player.seek_paused(seek_position_ms) {
+                Ok(seqnum) => {
+                    self.position_ms = seek_position_ms;
+                    self.set_pending_seek(seek_position_ms, seqnum, None);
+                }
+                Err(error) => {
+                    return Err(self.fail_operation("Failed to seek paused preview backend", error))
+                }
+            }
         } else {
-            Ok(())
-        };
-        if let Err(error) = seek_result {
-            return Err(self.fail_operation("Failed to seek paused preview backend", error));
+            self.position_ms = position_ms;
         }
 
-        self.position_ms = seek_position_ms;
         self.state = PreviewSessionState::Paused;
         Ok(())
     }
@@ -936,16 +1115,57 @@ impl PreviewSession {
         }
     }
 
-    fn complete_seek_metrics(
+    fn begin_metered_pending_seek(
         &mut self,
-        seek_kind: SeekKind,
-        seek_burst_count: u64,
-        started_at: Instant,
+        previous_position_ms: f64,
+        target_ms: f64,
+        seqnum: gst::Seqnum,
     ) {
-        let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-        self.metrics
-            .record_seek(seek_kind, latency_ms, seek_burst_count);
+        let metrics = Some((
+            self.classify_seek(previous_position_ms, target_ms),
+            self.next_seek_burst_count(),
+        ));
+        self.set_pending_seek(target_ms, seqnum, metrics);
+    }
+
+    fn set_pending_seek(
+        &mut self,
+        target_ms: f64,
+        seqnum: gst::Seqnum,
+        metrics: Option<(SeekKind, u64)>,
+    ) {
+        // Remember the seqnum for EOS gating; unlike `pending_seek` it survives completion so a
+        // genuine post-seek EOS arriving later still matches (see `should_honor_eos`).
+        self.last_seek_seqnum = Some(seqnum);
+        self.pending_seek = Some(PendingSeek {
+            target_ms,
+            seqnum,
+            issued_at: Instant::now(),
+            metrics,
+        });
+    }
+
+    // Called from tick() when a pending seek's seqnum-matched ASYNC_DONE arrives: unpin the
+    // position, fold in seek latency metrics (for user seeks only), and repaint the freshly
+    // seeked frame on macOS when the pipeline is not playing.
+    fn record_completed_seek(&mut self, kind: SeekKind, latency_ms: f64, burst_count: u64) {
+        self.metrics.record_seek(kind, latency_ms, burst_count);
         self.last_seek_completed_at = Some(Instant::now());
+    }
+
+    fn complete_pending_seek(&mut self) {
+        let Some(pending) = self.pending_seek.take() else {
+            return;
+        };
+        if let Some((kind, burst_count)) = pending.metrics {
+            let latency_ms = pending.issued_at.elapsed().as_secs_f64() * 1000.0;
+            self.record_completed_seek(kind, latency_ms, burst_count);
+        }
+        if !matches!(self.state, PreviewSessionState::Playing) {
+            if let Some(preview_player) = self.preview_player.as_ref() {
+                preview_player.expose_on_seek_complete();
+            }
+        }
     }
 
     pub fn tick(&mut self) -> Result<SessionTick, String> {
@@ -958,32 +1178,85 @@ impl PreviewSession {
             if let Some(error) = poll.last_error {
                 self.set_error(error, None);
                 tick.error_emitted = true;
-            } else if poll.reached_eos {
-                self.position_ms = self.duration_ms();
-                self.state = PreviewSessionState::Ended;
+            } else {
+                if let Some(pending) = self.pending_seek.as_ref() {
+                    if poll
+                        .async_done_seqnums
+                        .iter()
+                        .any(|seqnum| *seqnum == pending.seqnum)
+                    {
+                        self.complete_pending_seek();
+                    }
+                }
+                if self.should_honor_eos(&poll.eos_seqnums) {
+                    // A genuine end-of-stream: unpin any in-flight seek (a stale target must not
+                    // hold the playhead past the end) and drop its frame sample, then settle.
+                    if self.pending_seek.take().is_some() {
+                        self.discard_frame_samples();
+                    }
+                    self.position_ms = self.duration_ms();
+                    self.state = PreviewSessionState::Ended;
+                }
+            }
+        }
+
+        // GES/nlecomposition does not propagate seek-event seqnums onto ASYNC_DONE (observed:
+        // ASYNC_DONE carries unrelated seqnums on every seek), so the seqnum fast-path above
+        // rarely fires on GES pipelines. Confirm completion by observation instead: once the
+        // pipeline reports a position at (or, while playing, just past) the target, the flush
+        // has landed and the pin can lift. Clear the frame slot at that point — it may still
+        // hold a pre-flush sample stamped with the current generation.
+        if let Some(pending) = self.pending_seek.as_ref() {
+            if let Some(queried_ms) = self
+                .preview_player
+                .as_ref()
+                .and_then(|preview_player| preview_player.query_position_ms())
+            {
+                let elapsed_ms = pending.issued_at.elapsed().as_secs_f64() * 1000.0;
+                let slack_ms = if matches!(self.state, PreviewSessionState::Playing) {
+                    elapsed_ms + 200.0
+                } else {
+                    50.0
+                };
+                if queried_ms >= pending.target_ms - 50.0
+                    && queried_ms <= pending.target_ms + slack_ms
+                {
+                    self.complete_pending_seek();
+                    self.discard_frame_samples();
+                }
+            }
+        }
+
+        // Safety valve: unpin a seek whose ASYNC_DONE never arrived, without poisoning the session.
+        // Also drop any frame sample latched under the pin so a pre-flush PTS can't rewind us.
+        if let Some(pending) = self.pending_seek.as_ref() {
+            if pending.issued_at.elapsed() > PENDING_SEEK_TIMEOUT {
+                self.pending_seek = None;
+                self.discard_frame_samples();
             }
         }
 
         let playing = matches!(self.state, PreviewSessionState::Playing);
         let has_player = self.preview_player.is_some();
 
-        if playing && has_player {
+        if self.pending_seek.is_some() {
+            // Position stays pinned at the seek target until the seqnum-matched ASYNC_DONE lands.
+            // We never drain here: a buffer carrying the current generation can still be a pre-flush
+            // frame, and ASYNC_DONE cannot fire until a post-flush buffer has overwritten the slot,
+            // so by the tick that unpins, the slot already holds a genuine post-seek PTS.
+        } else if playing && has_player {
             if self.drain_frame_timestamps() {
                 tick.position_source_is_frame_timestamp = true;
-                tick.position_changed = true;
             } else {
                 self.sync_playback_position();
-                if self.position_ms != previous_position_ms {
-                    tick.position_changed = true;
-                }
             }
         } else {
             self.sync_playback_position();
-            if self.position_ms != previous_position_ms {
-                tick.position_changed = true;
-            }
         }
 
+        if self.position_ms != previous_position_ms {
+            tick.position_changed = true;
+        }
         if self.state != previous_state {
             tick.state_changed = true;
             tick.position_changed = true;
@@ -1052,28 +1325,28 @@ impl PreviewSession {
     ) -> Result<(), String> {
         let surface_window_handle = self.surface_window_handle();
 
+        // Preroll the NEW pipeline before retiring the old one so a preroll/bind failure leaves
+        // the existing player untouched and the session still usable.
+        if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
+            let _ = preview_player.shutdown();
+            return Err(error);
+        }
+
         if let Some(surface) = self.native_surface.as_mut() {
-            if let Err(error) = surface.set_embedded_content_attached(false) {
-                let _ = preview_player.shutdown();
-                return Err(error);
-            }
+            let _ = surface.set_embedded_content_attached(false);
         }
 
         let mut existing = self.preview_player.take();
-
         if let Some(existing_player) = existing.as_mut() {
             if let Err(error) = existing_player.shutdown() {
+                // Keep the old player; discard the freshly prerolled one.
+                let _ = preview_player.shutdown();
                 self.preview_player = existing;
                 if let Some(surface) = self.native_surface.as_mut() {
                     let _ = surface.set_embedded_content_attached(surface_window_handle.is_some());
                 }
                 return Err(error);
             }
-        }
-
-        if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
-            let _ = preview_player.shutdown();
-            return Err(error);
         }
 
         if let Some(surface) = self.native_surface.as_mut() {
@@ -1111,11 +1384,17 @@ impl PreviewSession {
     }
 
     fn sync_playback_position(&mut self) {
+        // While a flushing seek is in flight the position is pinned at its target (I1); the
+        // pipeline still reports the pre-seek position until the flush lands.
+        if self.pending_seek.is_some() {
+            return;
+        }
+
         if let Some(preview_player) = self.preview_player.as_ref() {
-            self.position_ms = clamp_position(
-                preview_player.query_position_ms(),
-                preview_player.duration_ms(),
-            );
+            // A failed position query keeps the previous position instead of teleporting to 0.
+            if let Some(position_ms) = preview_player.query_position_ms() {
+                self.position_ms = clamp_position(position_ms, preview_player.duration_ms());
+            }
             return;
         }
 
@@ -1373,7 +1652,7 @@ mod tests {
             .expect("timeline should prepare");
 
         session
-            .set_rate(100.0)
+            .set_rate(100.0, 1)
             .expect("setting rate should succeed");
 
         assert_eq!(session.rate, 16.0);
@@ -1387,7 +1666,7 @@ mod tests {
             .set_timeline(build_snapshot())
             .expect("timeline should prepare");
 
-        session.play().expect("play should succeed");
+        session.play(1).expect("play should succeed");
 
         assert_eq!(session.state, PreviewSessionState::Playing);
     }
@@ -1597,9 +1876,14 @@ mod tests {
             .set_timeline(build_multi_clip_snapshot())
             .expect("timeline should prepare");
 
-        session.seek(100.0).expect("first seek should succeed");
-        session.seek(200.0).expect("second seek should succeed");
-        session.seek(1_200.0).expect("third seek should succeed");
+        // Seek latency is now measured dispatch -> seqnum-matched ASYNC_DONE, so each seek is
+        // completed by a tick before the metrics are recorded.
+        session.seek(100.0, 1).expect("first seek should succeed");
+        session.tick().expect("tick completes the first seek");
+        session.seek(200.0, 2).expect("second seek should succeed");
+        session.tick().expect("tick completes the second seek");
+        session.seek(1_200.0, 3).expect("third seek should succeed");
+        session.tick().expect("tick completes the third seek");
 
         let diagnostics = session.diagnostics();
         assert_eq!(diagnostics.metrics.seek_count, 3);
@@ -1621,7 +1905,7 @@ mod tests {
             .expect("timeline should prepare");
 
         session
-            .seek(1_000.0)
+            .seek(1_000.0, 1)
             .expect("seek to timeline end should succeed");
 
         assert_eq!(session.state, PreviewSessionState::Ended);
@@ -1637,7 +1921,7 @@ mod tests {
 
         session.position_ms = 980.0;
         session
-            .step_frame(1)
+            .step_frame(1, 1)
             .expect("stepping forward should succeed");
 
         assert_eq!(session.state, PreviewSessionState::Ended);
@@ -1681,7 +1965,7 @@ mod tests {
             .set_timeline(build_snapshot())
             .expect("timeline should prepare");
         session
-            .play_from(250.0)
+            .play_from(250.0, 1)
             .expect("preview playback should start");
 
         fail_next_bind_surface_and_preroll_for_tests(1);
@@ -1714,7 +1998,7 @@ mod tests {
             .expect("empty timeline should prepare");
 
         session
-            .play()
+            .play(1)
             .expect("play should succeed without preview backend");
         assert_eq!(session.state, PreviewSessionState::Playing);
         assert!(session.preview_player.is_none());
@@ -1742,7 +2026,7 @@ mod tests {
             .expect("fully empty timeline should prepare");
 
         session
-            .play()
+            .play(1)
             .expect("play should succeed for a fully empty timeline");
         assert_eq!(session.state, PreviewSessionState::Playing);
         assert!(session.preview_player.is_none());
@@ -1771,7 +2055,7 @@ mod tests {
             .set_timeline(build_empty_duration_snapshot(1_000.0))
             .expect("initial empty timeline should prepare");
         session
-            .play()
+            .play(1)
             .expect("play should succeed without preview backend");
 
         session.virtual_play_started_at =
@@ -1794,7 +2078,7 @@ mod tests {
             .set_timeline(build_empty_snapshot())
             .expect("initial fully empty timeline should prepare");
         session
-            .play()
+            .play(1)
             .expect("play should succeed without preview backend");
 
         session.virtual_play_started_at =
@@ -1817,9 +2101,9 @@ mod tests {
             .set_timeline(build_snapshot())
             .expect("timeline should prepare");
 
-        session.play().expect("play should succeed");
+        session.play(1).expect("play should succeed");
         session
-            .play_from(1_000.0)
+            .play_from(1_000.0, 2)
             .expect("play_from to timeline end should succeed");
 
         assert_eq!(session.state, PreviewSessionState::Ended);
@@ -1832,5 +2116,215 @@ mod tests {
         assert_eq!(session.state, PreviewSessionState::Ended);
         assert!(session.position_ms >= 999.0);
         assert!(session.position_ms <= 1_000.0);
+    }
+
+    fn build_missing_asset_snapshot() -> TimelinePreviewSnapshot {
+        // References a file that was never created, so asset discovery (path canonicalization)
+        // fails and the rebuild is rejected before any pipeline is touched.
+        let case_dir = temp_case_dir("missing-asset");
+        let missing_path = case_dir.join("missing.mp4");
+
+        TimelinePreviewSnapshot {
+            project_path: case_dir.to_string_lossy().to_string(),
+            duration_ms: 1_000.0,
+            fps: 25.0,
+            canvas_width: 1280,
+            canvas_height: 720,
+            tracks: vec![TimelinePreviewTrack {
+                id: "video-main".to_string(),
+                track_type: TimelineTrackType::Video,
+                muted: false,
+                order: 0,
+            }],
+            fragments: vec![TimelinePreviewFragment {
+                id: "clip-missing".to_string(),
+                track_id: "video-main".to_string(),
+                absolute_path: missing_path.to_string_lossy().to_string(),
+                start_ms: 0.0,
+                duration_ms: 1_000.0,
+                trim_start_ms: 0.0,
+                muted: false,
+                volume: None,
+                crop: None,
+                transform: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn tick_with_pending_seek_keeps_position_pinned() {
+        let mut session = PreviewSession::new("session-pin".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+
+        // Pin the position at a target with a seek whose ASYNC_DONE will not arrive this tick.
+        session.position_ms = 250.0;
+        session.pending_seek = Some(super::PendingSeek {
+            target_ms: 250.0,
+            seqnum: gst::Seqnum::next(),
+            issued_at: Instant::now(),
+            metrics: None,
+        });
+
+        session
+            .tick()
+            .expect("ticking with a pending seek should succeed");
+
+        assert_eq!(session.position_ms, 250.0);
+        assert!(session.pending_seek.is_some());
+    }
+
+    #[test]
+    fn stale_epoch_transport_command_is_a_no_op() {
+        let mut session =
+            PreviewSession::new("session-epoch".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+
+        session.seek(300.0, 5).expect("seek at epoch 5 should succeed");
+        let pinned_position_ms = session.position_ms;
+
+        session
+            .seek(0.0, 4)
+            .expect("a superseded (lower epoch) seek is dropped as a no-op");
+
+        assert_eq!(session.position_ms, pinned_position_ms);
+        assert_eq!(session.transport_epoch, 5);
+    }
+
+    #[test]
+    fn stale_generation_frame_sample_is_discarded() {
+        use crate::media::preview::player::FrameSample;
+
+        let mut session =
+            PreviewSession::new("session-generation".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+        session.play(1).expect("play should succeed");
+        session.tick().expect("tick completes the play seek");
+        let baseline_position_ms = session.position_ms;
+
+        // A sample stamped with an older generation predates the last flushing seek.
+        if let Some(player) = session.preview_player.as_mut() {
+            player.set_frame_sample_for_tests(FrameSample {
+                generation: 0,
+                pts_ms: 999.0,
+            });
+        }
+        session
+            .tick()
+            .expect("tick discarding the stale sample should succeed");
+        assert_eq!(session.position_ms, baseline_position_ms);
+
+        // A current-generation sample is accepted and advances the playhead.
+        let current_generation = session
+            .preview_player
+            .as_ref()
+            .expect("preview player should exist")
+            .seek_generation();
+        if let Some(player) = session.preview_player.as_mut() {
+            player.set_frame_sample_for_tests(FrameSample {
+                generation: current_generation,
+                pts_ms: 500.0,
+            });
+        }
+        session
+            .tick()
+            .expect("tick applying the fresh sample should succeed");
+        assert!((session.position_ms - 500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn transport_epoch_is_adopted_and_exposed() {
+        let mut session =
+            PreviewSession::new("session-epoch-adopt".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+
+        session.seek(100.0, 7).expect("seek at epoch 7 should succeed");
+
+        // Event helpers stamp `self.transport_epoch`; assert the adopted value it exposes.
+        assert_eq!(session.transport_epoch, 7);
+        let diagnostics = session.diagnostics();
+        assert_eq!(diagnostics.transport_epoch, 7);
+        assert!(diagnostics.pending_seek_target_ms.is_some());
+    }
+
+    #[test]
+    fn set_timeline_with_undiscoverable_asset_keeps_session_alive() {
+        let mut session =
+            PreviewSession::new("session-missing".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("initial timeline should prepare");
+        session
+            .play_from(200.0, 1)
+            .expect("preview playback should start");
+        assert!(session.preview_player.is_some());
+
+        let result = session.set_timeline(build_missing_asset_snapshot());
+
+        assert!(result.is_err());
+        // The failed rebuild never touched the pipeline: the old player and timeline are retained.
+        assert!(session.preview_player.is_some());
+        assert!(session.timeline.is_some());
+        assert!(session.last_error.is_some());
+    }
+
+    #[test]
+    fn play_clears_any_staged_frame_sample() {
+        use crate::media::preview::player::FrameSample;
+
+        let mut session =
+            PreviewSession::new("session-play-clear".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+
+        // Stage a sample as if a pre-play buffer had already been latched into the slot.
+        if let Some(player) = session.preview_player.as_mut() {
+            player.set_frame_sample_for_tests(FrameSample {
+                generation: 0,
+                pts_ms: 999.0,
+            });
+        }
+
+        session.play(1).expect("play should succeed");
+
+        // R6/I4: play() clears the frame slot so playback never resumes from a stale pre-seek PTS.
+        let residual = session
+            .preview_player
+            .as_ref()
+            .expect("preview player should exist")
+            .take_frame_sample();
+        assert!(residual.is_none());
+    }
+
+    #[test]
+    fn set_rate_while_playing_does_not_rewind_to_a_stale_frame_timestamp() {
+        let mut session =
+            PreviewSession::new("session-rate-pin".to_string(), "main".to_string(), false);
+        session
+            .set_timeline(build_snapshot())
+            .expect("timeline should prepare");
+        session.play_from(300.0, 1).expect("playback should start");
+        session.tick().expect("tick completes the play seek");
+
+        // A fresh pre-rate-change frame timestamp must not survive the rate change and rewind us.
+        session.position_ms = 300.0;
+        session.last_frame_timestamp_ms = 120.0;
+        session.last_frame_timestamp_at = Some(Instant::now());
+
+        session.set_rate(2.0, 2).expect("changing rate should succeed");
+        let target_ms = session.position_ms;
+        session
+            .tick()
+            .expect("tick after the rate change should succeed");
+
+        assert!((session.position_ms - target_ms).abs() < 1.0);
     }
 }

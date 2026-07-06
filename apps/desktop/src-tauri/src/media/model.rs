@@ -244,6 +244,7 @@ pub struct PreviewSessionPositionEvent {
     pub is_buffering: bool,
     pub drift_ms: f64,
     pub rate: f64,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,6 +252,7 @@ pub struct PreviewSessionPositionEvent {
 pub struct PreviewSessionFrameTimestampEvent {
     pub session_id: String,
     pub position_ms: f64,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,6 +265,7 @@ pub struct PreviewSessionStateEvent {
     pub native_surface_attached: bool,
     pub timeline_attached: bool,
     pub message: Option<String>,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -340,4 +343,6 @@ pub struct PreviewDiagnostics {
     pub runtime: PreviewRuntimeDiagnostics,
     pub last_error: Option<String>,
     pub metrics: PreviewSessionMetrics,
+    pub transport_epoch: u64,
+    pub pending_seek_target_ms: Option<f64>,
 }

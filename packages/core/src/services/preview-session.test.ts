@@ -8,6 +8,7 @@ const {
   setSurfacePresentingMock,
   setTimelineMock,
   playMock,
+  playFromMock,
   pauseMock,
   seekMock,
   stepFrameMock,
@@ -26,6 +27,7 @@ const {
     setSurfacePresentingMock: vi.fn(),
     setTimelineMock: vi.fn(),
     playMock: vi.fn(),
+    playFromMock: vi.fn(),
     pauseMock: vi.fn(),
     seekMock: vi.fn(),
     stepFrameMock: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock('./tauri-bridge', () => ({
       setSurfacePresenting: setSurfacePresentingMock,
       setTimeline: setTimelineMock,
       play: playMock,
+      playFrom: playFromMock,
       pause: pauseMock,
       seek: seekMock,
       stepFrame: stepFrameMock,
@@ -85,6 +88,7 @@ describe('PreviewSessionController', () => {
     setSurfacePresentingMock.mockReset();
     setTimelineMock.mockReset();
     playMock.mockReset();
+    playFromMock.mockReset();
     pauseMock.mockReset();
     seekMock.mockReset();
     stepFrameMock.mockReset();
@@ -160,6 +164,7 @@ describe('PreviewSessionController', () => {
       nativeSurfaceAttached: true,
       timelineAttached: true,
       message: 'timeline-attached',
+      epoch: 0,
     });
 
     expect(controller.info).toEqual({
@@ -244,11 +249,132 @@ describe('PreviewSessionController', () => {
       rate: 1,
       nativeSurfaceAttached: true,
       timelineAttached: true,
+      epoch: 0,
     });
 
     expect(controller.info?.state).toBe('idle');
     expect(controller.info?.nativeSurfaceAttached).toBe(false);
     expect(controller.info?.timelineAttached).toBe(false);
+  });
+
+  it('allocates a monotonic transport epoch per outgoing transport command', async () => {
+    const controller = new PreviewSessionController();
+    await controller.create('main');
+
+    await controller.play();
+    await controller.playFrom(1_000);
+    await controller.pause();
+    await controller.seek(2_000);
+    await controller.stepFrame(1);
+    await controller.setRate(2);
+
+    expect(playMock).toHaveBeenCalledWith('session-1', 1);
+    expect(playFromMock).toHaveBeenCalledWith('session-1', 1_000, 2);
+    expect(pauseMock).toHaveBeenCalledWith('session-1', 3);
+    expect(seekMock).toHaveBeenCalledWith('session-1', 2_000, 4);
+    expect(stepFrameMock).toHaveBeenCalledWith('session-1', 1, 5);
+    expect(setRateMock).toHaveBeenCalledWith('session-1', 2, 6);
+  });
+
+  it('drops position/state/frameTimestamp events whose epoch is not the latest sent epoch', async () => {
+    const controller = new PreviewSessionController();
+    const received: Array<{ type: string }> = [];
+    controller.subscribe((event) => {
+      received.push(event);
+    });
+
+    await controller.create('main');
+
+    const emitPosition = listenerRegistry.get('media-preview://position');
+    const emitState = listenerRegistry.get('media-preview://state');
+    const emitFrame = listenerRegistry.get('media-preview://frame-timestamp');
+
+    // Epoch 0 events are fresh before any transport command has been sent.
+    emitPosition?.({
+      sessionId: 'session-1',
+      positionMs: 0,
+      isPlaying: false,
+      isBuffering: false,
+      driftMs: 0,
+      rate: 1,
+      epoch: 0,
+    });
+    expect(received).toHaveLength(1);
+
+    await controller.seek(5_000); // transportEpoch -> 1
+
+    // Stale (pre-seek) events must be dropped.
+    emitPosition?.({
+      sessionId: 'session-1',
+      positionMs: 0,
+      isPlaying: false,
+      isBuffering: false,
+      driftMs: 0,
+      rate: 1,
+      epoch: 0,
+    });
+    emitFrame?.({ sessionId: 'session-1', positionMs: 0, epoch: 0 });
+    emitState?.({
+      sessionId: 'session-1',
+      state: 'paused',
+      positionMs: 0,
+      rate: 1,
+      nativeSurfaceAttached: true,
+      timelineAttached: true,
+      epoch: 0,
+    });
+    expect(received).toHaveLength(1);
+
+    // Fresh (matching-epoch) events pass through.
+    emitPosition?.({
+      sessionId: 'session-1',
+      positionMs: 5_000,
+      isPlaying: false,
+      isBuffering: false,
+      driftMs: 0,
+      rate: 1,
+      epoch: 1,
+    });
+    emitFrame?.({ sessionId: 'session-1', positionMs: 5_000, epoch: 1 });
+    emitState?.({
+      sessionId: 'session-1',
+      state: 'paused',
+      positionMs: 5_000,
+      rate: 1,
+      nativeSurfaceAttached: true,
+      timelineAttached: true,
+      epoch: 1,
+    });
+    expect(received).toHaveLength(4);
+    expect(received.map((event) => event.type)).toEqual([
+      'position',
+      'position',
+      'frameTimestamp',
+      'state',
+    ]);
+  });
+
+  it('passes error and metrics events through regardless of transport epoch', async () => {
+    const controller = new PreviewSessionController();
+    const received: Array<{ type: string }> = [];
+    controller.subscribe((event) => {
+      received.push(event);
+    });
+
+    await controller.create('main');
+    await controller.seek(1_000); // transportEpoch -> 1
+
+    listenerRegistry.get('media-preview://error')?.({
+      sessionId: 'session-1',
+      message: 'boom',
+    });
+    listenerRegistry.get('media-preview://metrics')?.({
+      sessionId: 'session-1',
+      state: 'error',
+      metrics: {},
+    });
+
+    expect(received.map((event) => event.type)).toEqual(['error', 'metrics']);
   });
 
   it('presents the native preview surface by default unless explicitly disabled', () => {
