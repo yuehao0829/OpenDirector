@@ -197,4 +197,39 @@ describe('project-media-metadata', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('re-hydrates audio assets that shipped without duration (e.g. MiniMax TTS output)', async () => {
+    // Generated audio can be persisted with mediaMetadataHydrated=false when the
+    // completion-time probe failed; project load must re-probe so duration is recovered.
+    const project = makeProject();
+    // Mark the referenced video as already hydrated so only the audio asset is in scope.
+    const videoAsset = project.assets.find((asset) => asset.id === 'asset-video-used')!;
+    videoAsset.mediaMetadataHydrated = true;
+    const audioAsset = project.assets.find((asset) => asset.id === 'asset-audio')!;
+    // Strip duration + mark unhydrated, mimicking a generated asset whose probe failed.
+    delete (audioAsset as Partial<typeof audioAsset>).duration;
+    audioAsset.mediaMetadataHydrated = false;
+
+    const fs = {
+      getMediaMetadata: vi.fn().mockResolvedValue({
+        duration: 3800,
+        audioChannels: 1,
+        sampleRate: 32000,
+      }),
+    };
+
+    expect(projectNeedsVideoSourceAudioMetadataHydration(project)).toBe(true);
+
+    const hydratedProject = await hydrateProjectVideoSourceAudioMetadata(project, fs);
+    const recovered = hydratedProject.assets.find((asset) => asset.id === 'asset-audio');
+
+    expect(fs.getMediaMetadata).toHaveBeenCalledTimes(1);
+    expect(recovered).toEqual(expect.objectContaining({
+      duration: 3800,
+      audioChannels: 1,
+      sampleRate: 32000,
+      mediaMetadataHydrated: true,
+    }));
+    expect(projectNeedsVideoSourceAudioMetadataHydration(hydratedProject)).toBe(false);
+  });
 });

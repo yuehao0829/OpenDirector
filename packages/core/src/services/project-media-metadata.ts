@@ -6,16 +6,24 @@ import { textToArrayBuffer } from '../utils/encoding';
 import { resolveProjectAssetPath } from './otio-io';
 import { ASSETS_XML_FILENAME } from './project-io';
 
-export async function hydrateProjectVideoSourceAudioMetadata(
-  project: Project,
-  fs: Pick<FileSystemAdapter, 'getMediaMetadata'>,
-): Promise<Project> {
-  const referencedAssetIds = new Set(
+const REQUIRED_FIELDS_BY_TYPE: Partial<Record<Asset['type'], (keyof Asset)[]>> = {
+  video: ['audioChannels'],
+  audio: ['duration'],
+};
+
+export function buildReferencedAssetIds(project: Project): Set<string> {
+  return new Set(
     project.fragments
       .map((fragment) => fragment.sourceAssetId ?? fragment.resultAssetId)
       .filter((assetId): assetId is string => !!assetId),
   );
+}
 
+export async function hydrateProjectVideoSourceAudioMetadata(
+  project: Project,
+  fs: Pick<FileSystemAdapter, 'getMediaMetadata'>,
+  referencedAssetIds: Set<string> = buildReferencedAssetIds(project),
+): Promise<Project> {
   let assetsChanged = false;
 
   const assets = await Promise.all(project.assets.map(async (asset) => {
@@ -57,13 +65,10 @@ export async function hydrateProjectVideoSourceAudioMetadata(
   return assetsChanged ? { ...project, assets } : project;
 }
 
-export function projectNeedsVideoSourceAudioMetadataHydration(project: Project): boolean {
-  const referencedAssetIds = new Set(
-    project.fragments
-      .map((fragment) => fragment.sourceAssetId ?? fragment.resultAssetId)
-      .filter((assetId): assetId is string => !!assetId),
-  );
-
+export function projectNeedsVideoSourceAudioMetadataHydration(
+  project: Project,
+  referencedAssetIds: Set<string> = buildReferencedAssetIds(project),
+): boolean {
   return project.assets.some((asset) =>
     shouldHydrateProjectVideoSourceAudioAsset(asset, referencedAssetIds),
   );
@@ -115,14 +120,26 @@ export async function persistProjectAssetsFile(
   );
 }
 
+/**
+ * Whether an asset's media metadata still needs to be hydrated on project load.
+ *
+ * - Video assets: re-probe when audio channels are missing (needed for mixing/export).
+ * - Audio assets (e.g. MiniMax TTS output): re-probe when duration is missing (drives
+ *   preview/export and GES clip sizing). A dragged-in wav that already carries duration
+ *   is left alone even if channels are absent.
+ *
+ * Generated assets can be persisted before their metadata was probed (the probe ran at
+ * completion time and may have failed transiently); re-hydrating on load fills the gaps.
+ */
 function shouldHydrateProjectVideoSourceAudioAsset(
   asset: Asset,
   referencedAssetIds: Set<string>,
 ): boolean {
-  return asset.type === 'video'
-    && referencedAssetIds.has(asset.id)
-    && asset.audioChannels === undefined
-    && asset.mediaMetadataHydrated !== true;
+  if (!referencedAssetIds.has(asset.id) || asset.mediaMetadataHydrated === true) {
+    return false;
+  }
+  const required = REQUIRED_FIELDS_BY_TYPE[asset.type];
+  return required ? required.some((field) => asset[field] === undefined) : false;
 }
 
 export function areAssetMetadataFieldsEqual(left: Asset, right: Asset): boolean {

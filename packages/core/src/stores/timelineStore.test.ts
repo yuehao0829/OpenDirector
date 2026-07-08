@@ -1352,12 +1352,12 @@ describe('timelineStore', () => {
         expect(useTimelineStore.getState().zoom).toBe(0.5);
       });
 
-      it('should enforce maximum zoom of 200', () => {
+      it('should enforce maximum zoom of 1000', () => {
         const store = useTimelineStore.getState();
 
-        store.setZoom(300);
+        store.setZoom(1500);
 
-        expect(useTimelineStore.getState().zoom).toBe(200);
+        expect(useTimelineStore.getState().zoom).toBe(1000);
       });
     });
 

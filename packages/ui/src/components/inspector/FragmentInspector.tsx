@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getGenerationService, getProviderTypeRegistry } from '@opendirector/core/services/service-locator';
+import { getGenerationService, getProviderRuntimeRegistry, getProviderTypeRegistry } from '@opendirector/core/services/service-locator';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useCurrentProjectGenerations } from '@opendirector/core/stores/generationStore';
 import { useProviderInstanceStore } from '@opendirector/core/stores/providerInstanceStore';
@@ -17,7 +17,7 @@ import type {
   ConstraintIndicator,
   ModelVariant,
 } from '@opendirector/core/types/provider-system';
-import { computeReferenceIndicators, isImageModel, validateInputRequirements } from '@opendirector/core/types/provider-system';
+import { computeReferenceIndicators, isAudioModel, isImageModel, validateInputRequirements } from '@opendirector/core/types/provider-system';
 import {
   buildContinuousPlan,
   fragmentMsToGenSeconds,
@@ -29,6 +29,7 @@ import { PromptBuilder } from './PromptBuilder';
 import { TaskOverview } from './TaskOverview';
 import { InspectorHeader } from './InspectorHeader';
 import { GenerationParamsSection, type GenerationParamsValue } from './GenerationParamsSection';
+import { ratesForFormat, pickSampleRate } from './audio-params';
 import { Panel } from '../layout/Panel';
 import { Button } from '../common/Button';
 import { X } from 'lucide-react';
@@ -77,7 +78,19 @@ function hasSameGenerationParamsValue(
     left.imageBackground === right.imageBackground &&
     left.imageModeration === right.imageModeration &&
     left.autoDuration === right.autoDuration &&
-    left.imageOutputCompression === right.imageOutputCompression
+    left.imageOutputCompression === right.imageOutputCompression &&
+    left.volume === right.volume &&
+    left.pitch === right.pitch &&
+    left.bitrate === right.bitrate &&
+    left.channel === right.channel &&
+    left.languageBoost === right.languageBoost &&
+    left.voiceModifyPitch === right.voiceModifyPitch &&
+    left.voiceModifyIntensity === right.voiceModifyIntensity &&
+    left.voiceModifyTimbre === right.voiceModifyTimbre &&
+    left.voiceModifySoundEffects === right.voiceModifySoundEffects &&
+    JSON.stringify(left.pronunciationTone) === JSON.stringify(right.pronunciationTone) &&
+    left.aigcWatermark === right.aigcWatermark &&
+    left.englishNormalization === right.englishNormalization
   );
 }
 
@@ -145,6 +158,8 @@ export function FragmentInspector() {
     ? scenes.find(s => s.id === selectedFragment.sceneId) ?? null
     : null;
   const selectedFragmentId = selectedFragment?.id ?? null;
+  // Computed early (before early returns) so the model-filtering useMemo can depend on it.
+  const resolvedTrackType = tracks.find(t => t.id === selectedFragment?.trackId)?.type ?? 'video';
   const selectedFragmentDuration = selectedFragment?.duration;
   const selectedFragmentProviderSelection = selectedFragment?.providerSelection;
   const selectedFragmentProviderInstanceId = selectedFragmentProviderSelection?.instanceId ?? null;
@@ -213,16 +228,38 @@ export function FragmentInspector() {
     return options;
   }, [instances]);
 
+  // Map compositeKey → outputType, used to filter models by track type.
+  const modelOutputType = useMemo(() => {
+    const map = new Map<string, 'video' | 'image' | 'audio' | undefined>();
+    for (const inst of instances) {
+      const typeDef = getProviderTypeRegistry().get(inst.typeId);
+      if (!typeDef || typeDef.providerType !== 'generation' || !inst.enabled) continue;
+      for (const m of typeDef.modelFamilies.flatMap((f) => f.models)) {
+        map.set(makeCompositeKey(inst.instanceId, m.modelId), m.params?.outputType);
+      }
+    }
+    return map;
+  }, [instances]);
+
+  // Filter models by track type: audio tracks only show audio-output models (TTS);
+  // video tracks exclude audio models.
+  const filteredModels = useMemo(() => {
+    return allModels.filter((m) => {
+      const outputType = modelOutputType.get(makeCompositeKey(m.instanceId, m.modelId));
+      return resolvedTrackType === 'audio' ? outputType === 'audio' : outputType !== 'audio';
+    });
+  }, [allModels, modelOutputType, resolvedTrackType]);
+
   // Map: compositeKey (instanceId::modelId) → { modelId, instanceId }
   // Uses composite key to avoid "last instance wins" when same modelId exists across providers
   const modelByKey = useMemo(() => {
     const map = new Map<string, { modelId: string; instanceId: string }>();
-    for (const opt of allModels) {
+    for (const opt of filteredModels) {
       const key = makeCompositeKey(opt.instanceId, opt.modelId);
       map.set(key, { modelId: opt.modelId, instanceId: opt.instanceId });
     }
     return map;
-  }, [allModels]);
+  }, [filteredModels]);
 
   // Derive isGenerating from generations (SSOT)
   const activeGeneration = generations.find(g =>
@@ -239,18 +276,18 @@ export function FragmentInspector() {
       return modelByKey.get(directKey);
     }
     if (ps?.instanceId) {
-      const firstModelInSameInstance = allModels.find((m) => m.instanceId === ps.instanceId);
+      const firstModelInSameInstance = filteredModels.find((m) => m.instanceId === ps.instanceId);
       if (firstModelInSameInstance) {
         return { modelId: firstModelInSameInstance.modelId, instanceId: firstModelInSameInstance.instanceId };
       }
     }
-    if (allModels.length > 0) {
-      return { modelId: allModels[0].modelId, instanceId: allModels[0].instanceId };
+    if (filteredModels.length > 0) {
+      return { modelId: filteredModels[0].modelId, instanceId: filteredModels[0].instanceId };
     }
     return undefined;
   }, [
     selectedFragmentProviderSelection,
-    allModels,
+    filteredModels,
     modelByKey,
   ]);
 
@@ -307,6 +344,16 @@ export function FragmentInspector() {
 
   const capabilityParams: CapabilityParams | undefined = currentModel?.params;
 
+  // Voice fetcher for MiniMax TTS — fetches cloud voices (cloned / designed) on demand.
+  // Password is read lazily at call time inside the provider (not captured in the closure) so
+  // that re-saving the MiniMax API key (which re-encrypts the .enc with a fresh password)
+  // doesn't leave a stale password that fails to decrypt.
+  const voiceFetcher = useMemo(() => {
+    if (!capabilityParams || !isAudioModel(capabilityParams) || !effectiveInstanceId) return undefined;
+    const instanceId = effectiveInstanceId;
+    return async () => getProviderRuntimeRegistry().fetchVoices(instanceId);
+  }, [capabilityParams, effectiveInstanceId]);
+
   // Degrade global defaults when provider doesn't support them (e.g. 1080p → 720p for Seedance)
   useEffect(() => {
     if (!capabilityParams || !selectedFragmentId) return;
@@ -333,10 +380,100 @@ export function FragmentInspector() {
       if (effectiveBackground === 'transparent' && effectiveFormat === 'jpeg') {
         updates.imageOutputFormat = 'png';
       }
+      // Audio (TTS) — set defaults on first selection, and degrade values the current model
+      // no longer supports (e.g. speech-2.6→2.8 drops fluent/whisper). Format-driven sample-rate
+      // degradation is handled in GenerationParamsSection's audioFormat onClick; here we cover
+      // model switches that change the emotion / rate set.
+      if (isAudioModel(capabilityParams)) {
+        const defaultEmotion = currentModel?.metadata?.defaultEmotion as string | undefined;
+        const defaultSampleRate = currentModel?.metadata?.defaultSampleRate as string | undefined;
+        const defaultVoiceId = currentModel?.metadata?.defaultVoiceId as string | undefined;
+
+        if (capabilityParams.voiceIds?.length && !prev.voiceId) {
+          updates.voiceId = defaultVoiceId ?? capabilityParams.voiceIds[0].value;
+        }
+        if (prev.speed === undefined) {
+          updates.speed = 1;
+        }
+        if (capabilityParams.emotions?.length) {
+          const fallbackEmotion = defaultEmotion ?? capabilityParams.emotions[0];
+          if (!prev.emotion || !capabilityParams.emotions.includes(prev.emotion)) {
+            updates.emotion = fallbackEmotion;
+          }
+        }
+        if (capabilityParams.audioFormats?.length) {
+          const fallbackFormat = capabilityParams.audioFormats.includes('mp3') ? 'mp3' : capabilityParams.audioFormats[0];
+          if (!prev.audioFormat || !capabilityParams.audioFormats.includes(prev.audioFormat)) {
+            updates.audioFormat = fallbackFormat;
+          }
+        }
+        // Sample rate is keyed by the selected audio format; degrade if the current rate
+        // isn't valid for it (also catches model switches that change the rate set). Use the
+        // effective format (post-update) so a freshly defaulted format picks a valid rate.
+        const effectiveAudioFormat = updates.audioFormat ?? prev.audioFormat ?? '';
+        const formatRates = ratesForFormat(capabilityParams.sampleRateByFormat, capabilityParams.sampleRates, effectiveAudioFormat);
+        if (formatRates?.length) {
+          if (!prev.sampleRate || !formatRates.includes(prev.sampleRate)) {
+            updates.sampleRate = pickSampleRate(formatRates, defaultSampleRate);
+          }
+        }
+        const defaultVolume = currentModel?.metadata?.defaultVolume as number | undefined;
+        const defaultPitch = currentModel?.metadata?.defaultPitch as number | undefined;
+        const defaultBitrate = currentModel?.metadata?.defaultBitrate as number | undefined;
+        const defaultChannel = currentModel?.metadata?.defaultChannel as number | undefined;
+        if (prev.volume === undefined) {
+          updates.volume = defaultVolume ?? 1;
+        }
+        if (prev.pitch === undefined) {
+          updates.pitch = defaultPitch ?? 0;
+        }
+        if (capabilityParams.bitrates?.length) {
+          const fallbackBitrate = defaultBitrate ?? capabilityParams.bitrates[capabilityParams.bitrates.length - 1];
+          if (prev.bitrate === undefined || !capabilityParams.bitrates.includes(prev.bitrate)) {
+            updates.bitrate = fallbackBitrate;
+          }
+        }
+        if (capabilityParams.channels?.length) {
+          const fallbackChannel = defaultChannel ?? 1;
+          if (prev.channel === undefined || !capabilityParams.channels.includes(prev.channel)) {
+            updates.channel = fallbackChannel;
+          }
+        }
+        // languageBoost 默认值 — select 下拉，默认 auto
+        if (capabilityParams.languageBoostOptions?.length) {
+          const defaultLanguageBoost = currentModel?.metadata?.defaultLanguageBoost as string | undefined;
+          if (!prev.languageBoost || !capabilityParams.languageBoostOptions.includes(prev.languageBoost)) {
+            updates.languageBoost = defaultLanguageBoost ?? 'auto';
+          }
+        }
+        // voiceModify 默认值
+        if (prev.voiceModifyPitch === undefined) {
+          updates.voiceModifyPitch = 0;
+        }
+        if (prev.voiceModifyIntensity === undefined) {
+          updates.voiceModifyIntensity = 0;
+        }
+        if (prev.voiceModifyTimbre === undefined) {
+          updates.voiceModifyTimbre = 0;
+        }
+        // pronunciationTone 默认值
+        if (capabilityParams.supportsPronunciationDict && prev.pronunciationTone === undefined) {
+          updates.pronunciationTone = [];
+        }
+        // aigcWatermark 默认值
+        if (capabilityParams.supportsAigcWatermark && prev.aigcWatermark === undefined) {
+          const defaultAigcWatermark = currentModel?.metadata?.defaultAigcWatermark as boolean | undefined;
+          updates.aigcWatermark = defaultAigcWatermark ?? false;
+        }
+        // englishNormalization 默认值
+        if (capabilityParams.supportsEnglishNormalization && prev.englishNormalization === undefined) {
+          updates.englishNormalization = false;
+        }
+      }
       if (Object.keys(updates).length === 0) return prev;
       return { ...prev, ...updates };
     });
-  }, [capabilityParams, selectedFragmentId]);
+  }, [capabilityParams, currentModel, selectedFragmentId]);
 
   // Sync degraded genParams to fragment after local state settles
   useEffect(() => {
@@ -462,8 +599,6 @@ export function FragmentInspector() {
     return <TaskOverview />;
   }
 
-  const resolvedTrackType = tracks.find(t => t.id === selectedFragment.trackId)?.type ?? 'video';
-
   const hasGenerated = !!selectedFragment.generatedUrl || generations.some(g => g.fragmentId === selectedFragment?.id && g.status === 'completed');
 
   const canGenerate = !!selectedFragment.prompt && !isGenerating && !!effectiveModelId;
@@ -506,6 +641,24 @@ export function FragmentInspector() {
       imageBackground: genParams.imageBackground,
       imageModeration: genParams.imageModeration,
       imageOutputCompression: genParams.imageOutputCompression,
+      // TTS (MiniMax)
+      voiceId: genParams.voiceId,
+      speed: genParams.speed,
+      emotion: genParams.emotion,
+      audioFormat: genParams.audioFormat,
+      sampleRate: genParams.sampleRate,
+      volume: genParams.volume,
+      pitch: genParams.pitch,
+      bitrate: genParams.bitrate,
+      channel: genParams.channel,
+      languageBoost: genParams.languageBoost,
+      voiceModifyPitch: genParams.voiceModifyPitch,
+      voiceModifyIntensity: genParams.voiceModifyIntensity,
+      voiceModifyTimbre: genParams.voiceModifyTimbre,
+      voiceModifySoundEffects: genParams.voiceModifySoundEffects,
+      pronunciationTone: genParams.pronunciationTone,
+      aigcWatermark: genParams.aigcWatermark,
+      englishNormalization: genParams.englishNormalization,
     }, options);
 
     // Clear selection to show TaskOverview dashboard
@@ -526,7 +679,7 @@ export function FragmentInspector() {
         isGenerating={isGenerating}
         onGenerate={handleGenerate}
         disabled={!canGenerate || !inputValidation.valid || !!referenceIndicators?.hasErrors}
-        models={allModels}
+        models={filteredModels}
         selectedCompositeKey={selectedCompositeKey}
         onModelChange={handleModelChange}
         trackType={resolvedTrackType}
@@ -561,6 +714,7 @@ export function FragmentInspector() {
             indicators={referenceIndicators?.indicators}
             assets={assets}
             trackType={resolvedTrackType}
+            voiceFetcher={voiceFetcher}
           />
         ) : (
           <PreviewModeContent
@@ -595,6 +749,7 @@ function EditModeContent({
   indicators,
   assets,
   trackType,
+  voiceFetcher,
 }: {
   fragment: Fragment;
   genParams: GenerationParamsValue;
@@ -608,6 +763,7 @@ function EditModeContent({
   indicators?: Map<string, ConstraintIndicator[]>;
   assets: Asset[];
   trackType: 'video' | 'audio';
+  voiceFetcher?: () => Promise<Array<{ value: string; label: string }>>;
 }) {
   const { t } = useTranslation();
   const isAudio = trackType === 'audio';
@@ -624,30 +780,28 @@ function EditModeContent({
           ))}
         </div>
       )}
-      {!isAudio && (
-        <GenerationParamsSection
-          value={genParams}
-          onChange={onGenParamsChange}
-          capabilityParams={capabilityParams}
-          continuousMode={continuousMode}
-          continuousPlan={continuousPlan}
-          totalDuration={totalDuration}
-        />
-      )}
+      <GenerationParamsSection
+        value={genParams}
+        onChange={onGenParamsChange}
+        capabilityParams={capabilityParams}
+        continuousMode={continuousMode}
+        continuousPlan={continuousPlan}
+        totalDuration={totalDuration}
+        voiceFetcher={voiceFetcher}
+      />
 
-      {!isAudio && (
-        <Panel title={t('inspector.labels.prompt')}>
-          <PromptBuilder
-            prompt={fragment.prompt}
-            onPromptChange={(prompt) => updateFragment(fragment.id, { prompt })}
-            enableWebSearch={genParams.enableWebSearch}
-            onWebSearchChange={(v) => onGenParamsChange({ ...genParams, enableWebSearch: v })}
-            warnings={validation?.promptWarnings}
-            references={fragment.references}
-            assets={assets}
-          />
-        </Panel>
-      )}
+      <Panel title={t('inspector.labels.prompt')}>
+        <PromptBuilder
+          prompt={fragment.prompt}
+          onPromptChange={(prompt) => updateFragment(fragment.id, { prompt })}
+          enableWebSearch={genParams.enableWebSearch}
+          onWebSearchChange={(v) => onGenParamsChange({ ...genParams, enableWebSearch: v })}
+          showWebSearch={capabilityParams?.enableWebSearch !== undefined}
+          warnings={validation?.promptWarnings}
+          references={fragment.references}
+          assets={assets}
+        />
+      </Panel>
 
       {!isAudio && (
         <Panel title={t('inspector.labels.referenceAssets')}>
@@ -695,7 +849,7 @@ function PreviewModeContent({
   firstFrameAsReference?: boolean;
   capabilityParams?: CapabilityParams;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const labelToRef = useMemo(() => {
     const refs = fragment.references ?? [];
     if (refs.length === 0) return new Map<string, { ref: Reference; asset: Asset }>();
@@ -761,7 +915,25 @@ function PreviewModeContent({
 
   return (
     <div className="p-3 space-y-3">
-      {!isAudio && (
+      {isAudio ? (
+        <div className="p-2 bg-zinc-800/50 rounded text-xs text-zinc-400">
+          <span className="font-medium text-zinc-300">{t('inspector.labels.params')}</span>
+          <span className="ml-2">{(() => {
+            const v = genParams.voiceId;
+            if (!v) return '—';
+            const matched = capabilityParams?.voiceIds?.find((vo) => vo.value === v);
+            if (matched) {
+              const isEnglish = i18n.language?.startsWith('en') ?? false;
+              return isEnglish && matched.labelEn ? matched.labelEn : matched.label;
+            }
+            return v;
+          })()}</span>
+          {genParams.speed !== undefined && <span className="ml-1">· {genParams.speed}x</span>}
+          {genParams.emotion && <span className="ml-1">· {genParams.emotion}</span>}
+          {genParams.audioFormat && <span className="ml-1">· {genParams.audioFormat.toUpperCase()}</span>}
+          {genParams.sampleRate && <span className="ml-1">· {genParams.sampleRate}Hz</span>}
+        </div>
+      ) : (
         <div className="p-2 bg-zinc-800/50 rounded text-xs text-zinc-400">
           <span className="font-medium text-zinc-300">{t('inspector.labels.params')}</span>
           {isImage ? (
@@ -775,7 +947,7 @@ function PreviewModeContent({
               {genParams.enableMusic && <span className="ml-1">· {t('inspector.previewSummary.musicOn')}</span>}
               {genParams.enableSubtitle && <span className="ml-1">· {t('inspector.previewSummary.subtitleOn')}</span>}
               {genParams.enableWatermark && <span className="ml-1">· {t('inspector.previewSummary.watermarkOn')}</span>}
-              {genParams.enableWebSearch && <span className="ml-1">· {t('inspector.previewSummary.webSearchOn')}</span>}
+              {genParams.enableWebSearch && capabilityParams?.enableWebSearch !== undefined && <span className="ml-1">· {t('inspector.previewSummary.webSearchOn')}</span>}
             </>
           )}
         </div>

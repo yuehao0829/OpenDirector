@@ -1,4 +1,5 @@
 pub mod asset_file;
+pub mod async_task_runner;
 pub mod asset_task;
 pub mod db;
 pub mod db_types;
@@ -8,6 +9,7 @@ pub mod media;
 pub mod media_exchange;
 pub mod media_preview;
 pub mod metadata;
+pub mod minimax_tts;
 pub mod openai_image;
 pub mod poll_utils;
 pub mod provider_config;

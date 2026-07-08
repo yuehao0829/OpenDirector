@@ -126,6 +126,25 @@ export interface GenerationParamDefaults {
   imageBackground?: string;
   imageModeration?: string;
   imageOutputCompression?: number;
+  // TTS (MiniMax) — optional, only relevant for audio-output models
+  voiceId?: string;
+  speed?: number;
+  emotion?: string;
+  audioFormat?: string;
+  sampleRate?: string;
+  volume?: number;      // 音量 (0, 10]，默认 1
+  pitch?: number;       // 语调 [-12, 12]，默认 0
+  bitrate?: number;     // 比特率 [32000, 64000, 128000, 256000]
+  channel?: number;     // 声道数 1=单声道, 2=双声道，默认 1
+  // TTS 高级参数 (MiniMax)
+  languageBoost?: string;     // 小语种增强，如 "auto", "Chinese", "English" 等
+  voiceModifyPitch?: number;  // [-100, 100] 音高调整
+  voiceModifyIntensity?: number; // [-100, 100] 强度调整
+  voiceModifyTimbre?: number;   // [-100, 100] 音色调整
+  voiceModifySoundEffects?: string; // 音效
+  pronunciationTone?: string[];   // 发音词典规则数组
+  aigcWatermark?: boolean;     // AIGC 水印
+  englishNormalization?: boolean; // 英语规范化
 }
 
 /**
@@ -147,6 +166,25 @@ export interface GenerationParams {
   imageBackground?: string;
   imageModeration?: string;
   imageOutputCompression?: number;
+  // TTS (MiniMax)
+  voiceId?: string;
+  speed?: number;
+  emotion?: string;
+  audioFormat?: string;
+  sampleRate?: string;
+  volume?: number;      // 音量 (0, 10]，默认 1
+  pitch?: number;       // 语调 [-12, 12]，默认 0
+  bitrate?: number;     // 比特率 [32000, 64000, 128000, 256000]
+  channel?: number;     // 声道数 1=单声道, 2=双声道，默认 1
+  // TTS 高级参数 (MiniMax)
+  languageBoost?: string;     // 小语种增强，如 "auto", "Chinese", "English" 等
+  voiceModifyPitch?: number;  // [-100, 100] 音高调整
+  voiceModifyIntensity?: number; // [-100, 100] 强度调整
+  voiceModifyTimbre?: number;   // [-100, 100] 音色调整
+  voiceModifySoundEffects?: string; // 音效
+  pronunciationTone?: string[];   // 发音词典规则数组
+  aigcWatermark?: boolean;     // AIGC 水印
+  englishNormalization?: boolean; // 英语规范化
 }
 
 /**

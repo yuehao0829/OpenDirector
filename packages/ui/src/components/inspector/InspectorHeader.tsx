@@ -34,57 +34,47 @@ export function InspectorHeader({
   selectedCompositeKey,
   onModelChange,
   modelDisabled,
-  trackType = 'video',
 }: InspectorHeaderProps) {
   const { t } = useTranslation();
-  const isAudio = trackType === 'audio';
 
   return (
     <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-      {!isAudio && (
-        <div className="flex gap-1">
-          <TabButton
-            label={t('inspector.tabs.edit')}
-            active={activeTab === 'edit'}
-            onClick={() => onTabChange('edit')}
-          />
-          <TabButton
-            label={t('inspector.tabs.preview')}
-            active={activeTab === 'preview'}
-            onClick={() => onTabChange('preview')}
-          />
-        </div>
-      )}
+      <div className="flex gap-1">
+        <TabButton
+          label={t('inspector.tabs.edit')}
+          active={activeTab === 'edit'}
+          onClick={() => onTabChange('edit')}
+        />
+        <TabButton
+          label={t('inspector.tabs.preview')}
+          active={activeTab === 'preview'}
+          onClick={() => onTabChange('preview')}
+        />
+      </div>
 
-      {!isAudio && (
-        <div className="flex items-center gap-2">
-          <ModelSelector
-            models={models}
-            selectedCompositeKey={selectedCompositeKey}
-            onModelChange={onModelChange}
-            disabled={modelDisabled || isGenerating}
-          />
-          <button
-            onClick={onGenerate}
-            disabled={disabled || isGenerating}
-            className={clsx(
-              'px-3 py-1 text-xs font-medium rounded-md transition-colors',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-              'bg-blue-600 text-white hover:bg-blue-700'
-            )}
-          >
-            {isGenerating
-              ? t('inspector.actions.generating')
-              : hasGenerated
-                ? t('inspector.actions.regenerate')
-                : t('inspector.actions.generate')}
-          </button>
-        </div>
-      )}
-
-      {isAudio && (
-        <span className="text-sm font-medium text-blue-400">{t('inspector.labels.audioFragment')}</span>
-      )}
+      <div className="flex items-center gap-2">
+        <ModelSelector
+          models={models}
+          selectedCompositeKey={selectedCompositeKey}
+          onModelChange={onModelChange}
+          disabled={modelDisabled || isGenerating}
+        />
+        <button
+          onClick={onGenerate}
+          disabled={disabled || isGenerating}
+          className={clsx(
+            'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+            'disabled:opacity-50 disabled:cursor-not-allowed',
+            'bg-blue-600 text-white hover:bg-blue-700'
+          )}
+        >
+          {isGenerating
+            ? t('inspector.actions.generating')
+            : hasGenerated
+              ? t('inspector.actions.regenerate')
+              : t('inspector.actions.generate')}
+        </button>
+      </div>
     </div>
   );
 }

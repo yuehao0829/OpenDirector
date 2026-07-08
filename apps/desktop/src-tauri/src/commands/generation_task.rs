@@ -1,16 +1,16 @@
+use super::async_task_runner::{
+    persist_and_emit_failed, resume_task, AsyncTaskHandle, AsyncPollingTaskRunner,
+    CredentialGroupKey, PollOutcome, RegisteredTask, TaskManager, TaskVerdict,
+};
 use super::util::MAX_DOWNLOAD_SIZE;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::JoinHandle;
 
 use super::generation_log::{GenerationLogManager, LogContext};
-use super::poll_utils::adaptive_poll_interval;
 use super::seedance_api::{
     url_encode_query, CreateTaskResult, DownloadResult, SeedanceContentItem, SeedanceState,
     TaskStatusResult, UploadResult,
@@ -83,78 +83,101 @@ pub enum GenerationEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Poll coordinator
+// Seedance runner impl
 // ---------------------------------------------------------------------------
 
-#[derive(Hash, Eq, PartialEq, Clone)]
-struct CredentialGroupKey {
-    api_key: String,
-    base_url: String,
+/// Terminal-success payload for Seedance — carries download inputs only
+/// (the presigned video URL + optional last-frame URL). No credentials.
+#[derive(Clone)]
+pub struct SeedanceOutcome {
+    pub video_url: String,
+    pub last_frame_url: Option<String>,
 }
 
-enum PollOutcome {
-    Succeeded {
-        video_url: String,
-        last_frame_url: Option<String>,
-    },
-    Failed(String), // error message
-    Cancelled,
-}
+/// Seedance-specific hooks for the generic async polling coordinator.
+pub struct SeedanceRunner;
 
-#[allow(dead_code)]
-struct RegisteredTask {
-    task_id: String,     // local JS task ID
-    api_task_id: String, // remote API task ID
-    cred_group: CredentialGroupKey,
-    /// When dropped without sending, the receiver treats it as a shutdown signal
-    /// (not cancellation) and exits gracefully, leaving the pending task file for recovery.
-    result_tx: oneshot::Sender<PollOutcome>,
-    cancel_rx: watch::Receiver<bool>,
-    registered_at: tokio::time::Instant,
-    project_path: String,
-}
+#[async_trait::async_trait]
+impl AsyncPollingTaskRunner for SeedanceRunner {
+    type Outcome = SeedanceOutcome;
+    type Status = TaskStatusResult;
 
-struct GenerationHandle {
-    cancel_tx: watch::Sender<bool>,
-    _join_handle: JoinHandle<()>,
-}
+    fn log_tag() -> &'static str {
+        "GenerationTask"
+    }
 
-pub struct GenerationTaskManager {
-    tasks: Arc<tokio::sync::Mutex<HashMap<String, GenerationHandle>>>,
-    coordinator_tasks: Arc<tokio::sync::Mutex<HashMap<String, RegisteredTask>>>,
-    coordinator_notify: mpsc::Sender<()>,
-    _coordinator_join: tauri::async_runtime::JoinHandle<()>,
-    log_manager: Arc<GenerationLogManager>,
-}
+    fn credentials(provider_id: &str, password: &str) -> Result<(String, String), String> {
+        super::seedance_api::get_ark_api_key_and_base_url(provider_id, password)
+    }
 
-impl GenerationTaskManager {
-    pub fn new(app: AppHandle, client: reqwest::Client, log_manager: GenerationLogManager) -> Self {
-        let (notify_tx, mut notify_rx) = mpsc::channel::<()>(32);
-        let coordinator_tasks: Arc<tokio::sync::Mutex<HashMap<String, RegisteredTask>>> =
-            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    async fn query_tasks(
+        client: &reqwest::Client,
+        api_key: &str,
+        base_url: &str,
+        api_task_ids: &[String],
+    ) -> Result<Vec<(String, TaskStatusResult)>, String> {
+        let results = batch_query_tasks(client, api_key, base_url, api_task_ids).await?;
+        Ok(results.into_iter().map(|s| (s.task_id.clone(), s)).collect())
+    }
 
-        let log_mgr = Arc::new(log_manager);
-        let coord_tasks = coordinator_tasks.clone();
-        let coord_log = log_mgr.clone();
-        let coord_join = tauri::async_runtime::spawn(async move {
-            coordinator_loop(app, client, coord_tasks, &mut notify_rx, coord_log).await;
-        });
-
-        Self {
-            tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            coordinator_tasks,
-            coordinator_notify: notify_tx,
-            _coordinator_join: coord_join,
-            log_manager: log_mgr,
+    fn classify(status: &TaskStatusResult) -> TaskVerdict<SeedanceOutcome> {
+        match status.status.as_str() {
+            "succeeded" => TaskVerdict::Succeeded(SeedanceOutcome {
+                video_url: status.result_url.clone().unwrap_or_default(),
+                last_frame_url: status.last_frame_url.clone(),
+            }),
+            "failed" => {
+                let err = status
+                    .error
+                    .as_ref()
+                    .map(|e| serde_json::to_string(e).unwrap_or_default())
+                    .unwrap_or_else(|| "Generation failed".to_string());
+                TaskVerdict::Failed(err)
+            }
+            _ => TaskVerdict::Processing,
         }
     }
+
+    fn status_display(status: &TaskStatusResult) -> String {
+        status.status.clone()
+    }
+
+    async fn try_recover_completed_missing_file(
+        _app: &AppHandle,
+        record: &PendingTaskRecord,
+        _client: &reqwest::Client,
+        _api_key: &str,
+        _base_url: &str,
+    ) -> Option<Result<(), String>> {
+        // Seedance falls through to re-poll — the coordinator re-derives a
+        // fresh presigned video URL on each poll.
+        eprintln!(
+            "[GenerationTask] Completed task {} has missing video file, re-downloading",
+            record.task_id
+        );
+        None
+    }
+
+    fn handle_outcome(
+        app: &AppHandle,
+        client: &reqwest::Client,
+        _api_key: &str,
+        _base_url: &str,
+        record: &PendingTaskRecord,
+        outcome: PollOutcome<SeedanceOutcome>,
+        log_mgr: &Arc<GenerationLogManager>,
+    ) {
+        handle_poll_outcome(app, client, record, outcome, log_mgr);
+    }
 }
+
+pub type GenerationTaskManager = TaskManager<SeedanceRunner>;
 
 // ---------------------------------------------------------------------------
 // Pending task persistence
 // ---------------------------------------------------------------------------
 
-fn pending_tasks_dir(app: &AppHandle) -> PathBuf {
+pub(crate) fn pending_tasks_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
         .expect("Cannot resolve app data dir")
@@ -205,10 +228,14 @@ pub struct PendingTaskRecord {
     pub outcome_file_size: Option<u64>,
     #[serde(default)]
     pub outcome_error: Option<String>,
+    /// MiniMax TTS — file_id of the generated audio (used to re-download after crash
+    /// if the audio file is missing). Unused by Seedance.
+    #[serde(default)]
+    pub outcome_file_id: Option<i64>,
 }
 
 /// Atomically write a pending task record (tmp + rename).
-fn write_pending_task(app: &AppHandle, record: &PendingTaskRecord) -> Result<(), String> {
+pub(crate) fn write_pending_task(app: &AppHandle, record: &PendingTaskRecord) -> Result<(), String> {
     let dir = pending_tasks_dir_ensure(app)?;
     let path = dir.join(format!("{}.json", record.task_id));
     let json = serde_json::to_string_pretty(record).map_err(|e| e.to_string())?;
@@ -218,14 +245,14 @@ fn write_pending_task(app: &AppHandle, record: &PendingTaskRecord) -> Result<(),
     Ok(())
 }
 
-fn delete_pending_task(app: &AppHandle, task_id: &str) -> Result<(), String> {
+pub(crate) fn delete_pending_task(app: &AppHandle, task_id: &str) -> Result<(), String> {
     let path = pending_tasks_dir(app).join(format!("{}.json", task_id));
     match std::fs::remove_file(&path) {
         Ok(()) | Err(_) => Ok(()), // NotFound is fine — already cleaned up
     }
 }
 
-fn load_pending_task(app: &AppHandle, task_id: &str) -> Result<PendingTaskRecord, String> {
+pub(crate) fn load_pending_task(app: &AppHandle, task_id: &str) -> Result<PendingTaskRecord, String> {
     let path = pending_tasks_dir(app).join(format!("{}.json", task_id));
     let json = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read pending task: {}", e))?;
@@ -273,7 +300,7 @@ pub async fn seedance_start_generation(
 
     manager.tasks.lock().await.insert(
         task_id.clone(),
-        GenerationHandle {
+        AsyncTaskHandle {
             cancel_tx,
             _join_handle: handle,
         },
@@ -287,17 +314,16 @@ pub async fn seedance_cancel_generation(
     manager: tauri::State<'_, GenerationTaskManager>,
     task_id: String,
 ) -> Result<bool, String> {
-    let tasks = manager.tasks.lock().await;
-    if let Some(handle) = tasks.get(&task_id) {
-        let _ = handle.cancel_tx.send(true);
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(manager.cancel(&task_id).await)
 }
 
+/// Scan the shared pending-tasks directory and return all records.
+///
+/// Provider-agnostic: every async generation provider (Seedance, MiniMax, …)
+/// persists its pending tasks to the same `generation_tasks/` dir, so a single
+/// scan recovers them all regardless of provider type.
 #[tauri::command]
-pub async fn seedance_list_pending_tasks(app: AppHandle) -> Result<Vec<PendingTaskRecord>, String> {
+pub async fn list_pending_tasks(app: AppHandle) -> Result<Vec<PendingTaskRecord>, String> {
     let dir = pending_tasks_dir(&app);
     let mut records = Vec::new();
     let entries = match std::fs::read_dir(&dir) {
@@ -325,129 +351,24 @@ pub async fn seedance_resume_generation(
     task_id: String,
     password: String,
 ) -> Result<bool, String> {
-    let record = load_pending_task(&app, &task_id)?;
-
-    // ── Status fast-path: skip re-polling for already-resolved tasks ──
-
-    if record.status == PendingTaskStatus::Completed {
-        if let Some(ref video_path) = record.outcome_video_path {
-            if std::path::Path::new(video_path).exists() {
-                eprintln!(
-                    "[GenerationTask] Re-emitting completed event for task {} (video exists)",
-                    record.task_id
-                );
-                let _ = app.emit(
-                    "generation:status",
-                    GenerationEvent::Completed {
-                        task_id: record.task_id.clone(),
-                        api_task_id: record.api_task_id.clone(),
-                        file_path: record.outcome_video_path.clone().unwrap_or_default(),
-                        file_size: record.outcome_file_size.unwrap_or(0),
-                        video_url: record.outcome_video_url.clone().unwrap_or_default(),
-                        last_frame_url: record.outcome_last_frame_url.clone(),
-                        project_path: Some(record.project_path.clone()),
-                    },
-                );
-                return Ok(true);
-            }
-        }
-        eprintln!(
-            "[GenerationTask] Completed task {} has missing video file, re-downloading",
-            record.task_id
-        );
-    }
-
-    if record.status == PendingTaskStatus::Failed {
-        eprintln!(
-            "[GenerationTask] Re-emitting failed event for task {}",
-            record.task_id
-        );
-        let _ = app.emit(
-            "generation:status",
-            GenerationEvent::Failed {
-                task_id: record.task_id.clone(),
-                error: record
-                    .outcome_error
-                    .clone()
-                    .unwrap_or_else(|| "Generation failed".to_string()),
-                project_path: Some(record.project_path.clone()),
-            },
-        );
-        return Ok(true);
-    }
-
-    let (api_key, base_url) =
-        super::seedance_api::get_ark_api_key_and_base_url(&record.provider_id, &password)?;
-
-    let cred_group = CredentialGroupKey { api_key, base_url };
-
-    let (cancel_tx, cancel_rx) = watch::channel(false);
-    let (result_tx, result_rx) = oneshot::channel();
-
-    // Compute registered_at from the original epoch to preserve adaptive
-    // poll interval behaviour (a task that already ran 5 min should use
-    // the 20 s interval, not start over from 10 s).
-    let registered_at: tokio::time::Instant = {
-        let elapsed_ms = chrono::Utc::now().timestamp_millis() - record.registered_at_epoch_ms;
-        let elapsed = Duration::from_millis(elapsed_ms.max(0) as u64);
-        tokio::time::Instant::now() - elapsed
-    };
-
-    let registered = RegisteredTask {
-        task_id: task_id.clone(),
-        api_task_id: record.api_task_id.clone(),
-        cred_group,
-        result_tx,
-        cancel_rx,
-        registered_at,
-        project_path: record.project_path.clone(),
-    };
-
-    {
-        let mut coord = manager.coordinator_tasks.lock().await;
-        coord.insert(task_id.clone(), registered);
-    }
-    let _ = manager.coordinator_notify.try_send(());
-
-    let client = state.http.clone();
-    let tasks = manager.tasks.clone();
-    let log_mgr = manager.log_manager.clone();
-    let app_clone = app.clone();
-    let record_for_outcome = record.clone();
-    let task_id_for_cleanup = task_id.clone();
-
-    let handle = tokio::spawn(async move {
-        let outcome = match result_rx.await {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                eprintln!(
-                    "[GenerationTask] result_tx dropped for resumed task {} — app shutdown, keeping pending file",
-                    task_id_for_cleanup
-                );
-                tasks.lock().await.remove(&task_id_for_cleanup);
-                return;
-            }
-        };
-
-        handle_poll_outcome(&app_clone, &client, &record_for_outcome, outcome, &log_mgr);
-        tasks.lock().await.remove(&task_id_for_cleanup);
-    });
-
-    manager.tasks.lock().await.insert(
-        task_id.clone(),
-        GenerationHandle {
-            cancel_tx,
-            _join_handle: handle,
-        },
-    );
-
-    Ok(true)
+    resume_task::<SeedanceRunner>(
+        app,
+        state.http.clone(),
+        manager.inner(),
+        task_id,
+        password,
+    )
+    .await
 }
 
 /// Called by the frontend after it has fully processed a completed/failed event.
 /// Deletes the persisted task record since the frontend no longer needs recovery.
+///
+/// Provider-agnostic: the pending-tasks dir is shared across all async generation
+/// providers, so a single command serves every provider type. The `task_id` is
+/// globally unique (UUID), so there is no risk of cross-provider collision.
 #[tauri::command]
-pub async fn seedance_acknowledge_task(app: AppHandle, task_id: String) -> Result<(), String> {
+pub async fn acknowledge_task(app: AppHandle, task_id: String) -> Result<(), String> {
     delete_pending_task(&app, &task_id)
 }
 
@@ -462,9 +383,7 @@ pub async fn seedance_batch_query_tasks(
     let (api_key, base_url) =
         super::seedance_api::get_ark_api_key_and_base_url(&provider_id, &password)?;
 
-    let cred_key = CredentialGroupKey { api_key, base_url };
-
-    batch_query_tasks(&state.http, &cred_key, &task_ids).await
+    batch_query_tasks(&state.http, &api_key, &base_url, &task_ids).await
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +397,7 @@ async fn run_generation_lifecycle(
     password: &str,
     params: StartGenerationParams,
     cancel_rx: watch::Receiver<bool>,
-    coordinator_tasks: Arc<tokio::sync::Mutex<HashMap<String, RegisteredTask>>>,
+    coordinator_tasks: Arc<tokio::sync::Mutex<HashMap<String, RegisteredTask<SeedanceOutcome>>>>,
     coordinator_notify: mpsc::Sender<()>,
     log_mgr: &Arc<GenerationLogManager>,
 ) {
@@ -650,6 +569,7 @@ async fn run_generation_lifecycle(
         outcome_last_frame_url: None,
         outcome_file_size: None,
         outcome_error: None,
+        outcome_file_id: None,
     };
     if let Err(e) = write_pending_task(&app, &pending_record) {
         eprintln!("[GenerationTask] Failed to save pending task record: {}", e);
@@ -702,38 +622,19 @@ async fn run_generation_lifecycle(
     handle_poll_outcome(&app, &client, &pending_record, outcome, log_mgr);
 }
 
-/// Persist a failed outcome to disk, then emit the Failed event.
-fn persist_and_emit_failed(app: &AppHandle, record: &PendingTaskRecord, error: String) {
-    let mut updated = record.clone();
-    updated.status = PendingTaskStatus::Failed;
-    updated.outcome_error = Some(error.clone());
-    if let Err(e) = write_pending_task(app, &updated) {
-        eprintln!("[GenerationTask] Failed to persist failed status: {}", e);
-    }
-    let _ = app.emit(
-        "generation:status",
-        GenerationEvent::Failed {
-            task_id: record.task_id.clone(),
-            error,
-            project_path: Some(record.project_path.clone()),
-        },
-    );
-}
-
 /// Persist outcome, then emit events. If the app crashes after persisting but
 /// before emitting, the next restart can recover from the record.
 fn handle_poll_outcome(
     app: &AppHandle,
     client: &reqwest::Client,
     record: &PendingTaskRecord,
-    outcome: PollOutcome,
+    outcome: PollOutcome<SeedanceOutcome>,
     log_mgr: &Arc<GenerationLogManager>,
 ) {
     match outcome {
-        PollOutcome::Succeeded {
-            video_url,
-            last_frame_url,
-        } => {
+        PollOutcome::Succeeded(outcome) => {
+            let video_url = outcome.video_url;
+            let last_frame_url = outcome.last_frame_url;
             let _ = app.emit(
                 "generation:status",
                 GenerationEvent::DownloadProgress {
@@ -816,6 +717,7 @@ fn handle_poll_outcome(
                             &app,
                             &updated_record,
                             format!("Download failed: {}", e),
+                            SeedanceRunner::log_tag(),
                         );
                     }
                 }
@@ -827,7 +729,7 @@ fn handle_poll_outcome(
                 .task_id(&record.task_id)
                 .data(serde_json::json!({ "error": err }))
                 .log();
-            persist_and_emit_failed(app, record, err);
+            persist_and_emit_failed(app, record, err, SeedanceRunner::log_tag());
         }
         PollOutcome::Cancelled => {
             LogContext::new(log_mgr, &record.project_path)
@@ -847,239 +749,56 @@ fn handle_poll_outcome(
 }
 
 // ---------------------------------------------------------------------------
-// Coordinator loop
-// ---------------------------------------------------------------------------
-
-struct TaskSnapshot {
-    task_id: String,
-    api_task_id: String,
-    registered_at: tokio::time::Instant,
-    project_path: String,
-}
-
-async fn coordinator_loop(
-    app: AppHandle,
-    client: reqwest::Client,
-    tasks: Arc<tokio::sync::Mutex<HashMap<String, RegisteredTask>>>,
-    notify_rx: &mut mpsc::Receiver<()>,
-    log_mgr: Arc<GenerationLogManager>,
-) {
-    // Track last known status + last log time per task_id
-    // to reduce log volume: log on status change, or at most every 60s otherwise
-    let mut last_status: HashMap<String, (String, std::time::Instant)> = HashMap::new();
-    let periodic_log_interval = std::time::Duration::from_secs(60);
-
-    loop {
-        // Wait until at least one task is registered
-        {
-            let t = tasks.lock().await;
-            if t.is_empty() {
-                drop(t);
-                match notify_rx.recv().await {
-                    Some(()) => {}
-                    None => return,
-                }
-            }
-        }
-
-        // Build snapshot, collect cancelled task IDs (deferred fs cleanup)
-        let (cancelled_task_ids, snapshot, group_map): (
-            Vec<(String, PathBuf)>, // (task_id, pending_file_path)
-            Vec<TaskSnapshot>,
-            HashMap<CredentialGroupKey, Vec<usize>>,
-        ) = {
-            let mut t = tasks.lock().await;
-            let mut cancelled = Vec::new();
-            let mut snap = Vec::new();
-            let mut groups: HashMap<CredentialGroupKey, Vec<usize>> = HashMap::new();
-
-            let keys: Vec<String> = t.keys().cloned().collect();
-            for key in &keys {
-                if let Some(reg) = t.get(key) {
-                    if *reg.cancel_rx.borrow() {
-                        let path = pending_tasks_dir(&app).join(format!("{}.json", key));
-                        cancelled.push((key.clone(), path));
-                    } else {
-                        let idx = snap.len();
-                        snap.push(TaskSnapshot {
-                            task_id: key.clone(),
-                            api_task_id: reg.api_task_id.clone(),
-                            registered_at: reg.registered_at,
-                            project_path: reg.project_path.clone(),
-                        });
-                        groups.entry(reg.cred_group.clone()).or_default().push(idx);
-                    }
-                }
-            }
-
-            // Remove cancelled tasks from the map — send Cancelled outcome first so
-            // the lifecycle handler emits the proper event (not a shutdown silent-return).
-            for (id, _) in &cancelled {
-                if let Some(reg) = t.remove(id) {
-                    let _ = reg.result_tx.send(PollOutcome::Cancelled);
-                }
-            }
-
-            (cancelled, snap, groups)
-        };
-
-        // Deferred fs cleanup — outside the lock
-        for (_, path) in &cancelled_task_ids {
-            let _ = std::fs::remove_file(path);
-        }
-
-        if snapshot.is_empty() {
-            continue;
-        }
-
-        eprintln!(
-            "[Coordinator] Polling {} tasks across {} credential groups",
-            snapshot.len(),
-            group_map.len()
-        );
-
-        // Log coordinator cycle using project path from snapshot (no extra lock needed)
-        if let Some(first_snap) = snapshot.first() {
-            LogContext::new(&log_mgr, &first_snap.project_path)
-                .info(
-                    "coordinator_poll_cycle",
-                    &format!(
-                        "Polling {} tasks across {} groups",
-                        snapshot.len(),
-                        group_map.len()
-                    ),
-                )
-                .data(serde_json::json!({
-                    "task_count": snapshot.len(),
-                    "group_count": group_map.len(),
-                }))
-                .log();
-        }
-
-        // Poll each credential group
-        let mut completed_tasks: Vec<(String, PollOutcome)> = Vec::new();
-        let mut min_registered_at = tokio::time::Instant::now();
-
-        for (cred_key, indices) in &group_map {
-            let cred_key = cred_key.clone();
-            let api_task_ids: Vec<String> = indices
-                .iter()
-                .map(|&i| snapshot[i].api_task_id.clone())
-                .collect();
-
-            match batch_query_tasks(&client, &cred_key, &api_task_ids).await {
-                Ok(statuses) => {
-                    for (i, status) in statuses.into_iter().enumerate() {
-                        let snap = &snapshot[*indices.get(i).unwrap_or(&0)];
-
-                        // Track oldest task for sleep duration
-                        if snap.registered_at < min_registered_at {
-                            min_registered_at = snap.registered_at;
-                        }
-
-                        eprintln!(
-                            "[Coordinator] Task {} (api: {}): status={}",
-                            snap.task_id, snap.api_task_id, status.status
-                        );
-
-                        // Log on status change, or periodically (every 60s) to avoid high log volume
-                        let status_key = status.status.clone();
-                        let now = std::time::Instant::now();
-                        let should_log = match last_status.get(&snap.task_id) {
-                            Some((prev_key, last_log_time)) => {
-                                prev_key != &status_key
-                                    || now.duration_since(*last_log_time) >= periodic_log_interval
-                            }
-                            None => true,
-                        };
-                        if should_log {
-                            last_status.insert(snap.task_id.clone(), (status_key, now));
-                            LogContext::new(&log_mgr, &snap.project_path)
-                                .info(
-                                    "coordinator_task_status",
-                                    &format!("Task status: {}", status.status),
-                                )
-                                .task_id(&snap.task_id)
-                                .data(serde_json::json!({
-                                    "api_task_id": snap.api_task_id,
-                                    "status": status.status,
-                                }))
-                                .log();
-                        }
-
-                        match status.status.as_str() {
-                            "succeeded" => {
-                                let url = status.result_url.unwrap_or_default();
-                                let last_frame = status.last_frame_url.clone();
-                                completed_tasks.push((
-                                    snap.task_id.clone(),
-                                    PollOutcome::Succeeded {
-                                        video_url: url,
-                                        last_frame_url: last_frame,
-                                    },
-                                ));
-                            }
-                            "failed" => {
-                                let err = status
-                                    .error
-                                    .map(|e| serde_json::to_string(&e).unwrap_or_default())
-                                    .unwrap_or_else(|| "Generation failed".to_string());
-                                completed_tasks
-                                    .push((snap.task_id.clone(), PollOutcome::Failed(err)));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[Coordinator] Batch query failed: {}", e);
-                    if let Some(first_snap) = snapshot.first() {
-                        LogContext::new(&log_mgr, &first_snap.project_path)
-                            .error(
-                                "coordinator_batch_query_error",
-                                &format!("Batch query failed: {}", e),
-                            )
-                            .data(serde_json::json!({ "error": e }))
-                            .log();
-                    }
-                }
-            }
-        }
-
-        // Send outcomes and remove completed tasks
-        if !completed_tasks.is_empty() {
-            let mut t = tasks.lock().await;
-            for (task_id, outcome) in completed_tasks {
-                last_status.remove(&task_id);
-                if let Some(reg) = t.remove(&task_id) {
-                    let _ = reg.result_tx.send(outcome);
-                }
-            }
-        }
-
-        // Sleep with adaptive interval, computed from snapshot (no re-lock needed)
-        let now = tokio::time::Instant::now();
-        let min_elapsed = now.saturating_duration_since(min_registered_at).as_secs();
-        let interval = adaptive_poll_interval(min_elapsed);
-        let sleep_duration = std::cmp::max(
-            Duration::from_secs(5),
-            std::cmp::min(interval, Duration::from_secs(60)),
-        );
-
-        tokio::select! {
-            _ = tokio::time::sleep(sleep_duration) => {}
-            _ = notify_rx.recv() => {}
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Batch query API
 // ---------------------------------------------------------------------------
 
+/// Map a parsed batch-query JSON response onto the requested `api_task_ids`.
+///
+/// Items are keyed by their `id` field; any requested id with no matching
+/// item gets a synthetic `unknown` status so the caller always receives one
+/// result per input id (preserving positional correspondence).
+fn map_batch_results(api_task_ids: &[String], data: &serde_json::Value) -> Vec<TaskStatusResult> {
+    let mut results_map: HashMap<String, TaskStatusResult> = HashMap::new();
+    if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
+        if items.len() != api_task_ids.len() {
+            eprintln!(
+                "[Coordinator] Batch query: requested {} tasks but got {} items",
+                api_task_ids.len(),
+                items.len(),
+            );
+        }
+        for item in items {
+            let item_id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let parsed = super::seedance_api::parse_single_task_status_from_value(item, &item_id);
+            results_map.insert(item_id, parsed);
+        }
+    }
+
+    api_task_ids
+        .iter()
+        .map(|id| {
+            results_map
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| TaskStatusResult {
+                    task_id: id.clone(),
+                    status: "unknown".to_string(),
+                    result_url: None,
+                    last_frame_url: None,
+                    error: None,
+                })
+        })
+        .collect()
+}
+
 async fn batch_query_tasks(
     client: &reqwest::Client,
-    cred_key: &CredentialGroupKey,
+    api_key: &str,
+    base_url: &str,
     api_task_ids: &[String],
 ) -> Result<Vec<TaskStatusResult>, String> {
     if api_task_ids.is_empty() {
@@ -1087,17 +806,11 @@ async fn batch_query_tasks(
     }
 
     if api_task_ids.len() == 1 {
-        let status = get_task_status_http(
-            client,
-            &cred_key.api_key,
-            &cred_key.base_url,
-            &api_task_ids[0],
-        )
-        .await?;
+        let status = get_task_status_http(client, api_key, base_url, &api_task_ids[0]).await?;
         return Ok(vec![status]);
     }
 
-    let mut url = format!("{}/api/v3/contents/generations/tasks", cred_key.base_url);
+    let mut url = format!("{}/api/v3/contents/generations/tasks", base_url);
     let query: String = api_task_ids
         .iter()
         .map(|id| format!("filter.task_ids={}", url_encode_query(id)))
@@ -1107,7 +820,7 @@ async fn batch_query_tasks(
 
     let resp = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", cred_key.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .send()
         .await
@@ -1122,50 +835,7 @@ async fn batch_query_tasks(
     let data: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("Invalid JSON: {}", e))?;
 
-    let items = data.get("items").and_then(|v| v.as_array());
-
-    if let Some(items) = items {
-        if items.len() != api_task_ids.len() {
-            eprintln!(
-                "[Coordinator] Batch query: requested {} tasks but got {} items",
-                api_task_ids.len(),
-                items.len(),
-            );
-            // Log mismatch — use empty project_path since we don't have context here
-            // The coordinator loop logs at a higher level with project context
-        }
-    }
-
-    let mut results_map: HashMap<String, TaskStatusResult> = HashMap::new();
-    if let Some(items) = items {
-        for item in items {
-            let item_id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let parsed = super::seedance_api::parse_single_task_status_from_value(item, &item_id);
-            results_map.insert(item_id, parsed);
-        }
-    }
-
-    let results: Vec<TaskStatusResult> = api_task_ids
-        .iter()
-        .map(|id| {
-            results_map
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| TaskStatusResult {
-                    task_id: id.clone(),
-                    status: "unknown".to_string(),
-                    result_url: None,
-                    last_frame_url: None,
-                    error: None,
-                })
-        })
-        .collect();
-
-    Ok(results)
+    Ok(map_batch_results(api_task_ids, &data))
 }
 
 // ---------------------------------------------------------------------------
@@ -1448,4 +1118,61 @@ async fn upload_file_to_base64(
         base64: base64_str,
         filename,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_batch_results_handles_mismatched_counts() {
+        // Requested 3 ids but the API returned only 1 — the missing ids get
+        // a synthetic "unknown" status, preserving one result per input id.
+        let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
+        let data = serde_json::json!({
+            "items": [
+                { "id": "t1", "status": "succeeded", "content": { "video_url": "https://example.com/v.mp4" } }
+            ]
+        });
+        let results = map_batch_results(&ids, &data);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].task_id, "t1");
+        assert_eq!(results[0].status, "succeeded");
+        assert_eq!(
+            results[0].result_url,
+            Some("https://example.com/v.mp4".to_string())
+        );
+        assert_eq!(results[1].task_id, "t2");
+        assert_eq!(results[1].status, "unknown");
+        assert!(results[1].result_url.is_none());
+        assert_eq!(results[2].task_id, "t3");
+        assert_eq!(results[2].status, "unknown");
+    }
+
+    #[test]
+    fn map_batch_results_handles_empty_items() {
+        // No "items" field at all — every requested id gets "unknown".
+        let ids = vec!["t1".to_string()];
+        let data = serde_json::json!({});
+        let results = map_batch_results(&ids, &data);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "unknown");
+    }
+
+    #[test]
+    fn map_batch_results_preserves_order_for_matching_counts() {
+        let ids = vec!["a".to_string(), "b".to_string()];
+        let data = serde_json::json!({
+            "items": [
+                { "id": "a", "status": "succeeded", "content": { "video_url": "https://a.mp4" } },
+                { "id": "b", "status": "failed", "error": { "code": 1 } }
+            ]
+        });
+        let results = map_batch_results(&ids, &data);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].task_id, "a");
+        assert_eq!(results[0].status, "succeeded");
+        assert_eq!(results[1].task_id, "b");
+        assert_eq!(results[1].status, "failed");
+    }
 }

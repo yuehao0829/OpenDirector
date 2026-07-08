@@ -44,6 +44,7 @@ import { failGeneration } from './store-sync';
 import { taskLog } from './task-log';
 import { safeCreateGeneration, safeSaveAsset } from './task-db-helpers';
 import { scheduleSaveAfterCompletion } from './completion-save';
+import { getTaskController } from './task-controller-registry';
 
 export async function submitGenerationTask(
   fragmentId: string,
@@ -53,9 +54,45 @@ export async function submitGenerationTask(
   options?: SubmitGenerationOptions,
 ): Promise<string> {
   const instance = useProviderInstanceStore.getState().get(instanceId);
-  if (instance?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
+  const typeId = instance?.typeId;
+
+  // Registry guard — no silent seedance fallback. If the typeId is known but
+  // has no registered TaskController, fail loudly instead of routing to the
+  // seedance submit path (which would mis-dispatch any future provider type).
+  if (typeId && !getTaskController(typeId)) {
+    taskLog.warn(undefined, 'submit_unregistered_type', 'No TaskController registered for provider type', {
+      typeId,
+      instanceId,
+    });
+    const taskId = generateId();
+    useTimelineStore.getState().updateFragment(fragmentId, { status: 'generating' });
+    await failGeneration(taskId, `Unsupported provider type: ${typeId}`);
+    resetFragmentIfGenerating(fragmentId, 'draft');
+    return taskId;
+  }
+
+  if (typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
     return submitGptImageTask(fragmentId, instanceId, modelId, params, options, instance);
   }
+  if (typeId === BUILTIN_TYPE_IDS.MINIMAX) {
+    return submitMiniMaxTtsTask(fragmentId, instanceId, modelId, params, instance);
+  }
+
+  return submitSeedanceTask(fragmentId, instanceId, modelId, params, options, instance);
+}
+
+/**
+ * Submit a Seedance video generation task.
+ * Exported so the Seedance TaskController can delegate to it.
+ */
+export async function submitSeedanceTask(
+  fragmentId: string,
+  instanceId: string,
+  modelId: string,
+  params: GenerationParams,
+  options?: SubmitGenerationOptions,
+  instance?: ProviderInstance,
+): Promise<string> {
 
   const continuousMeta = options?.continuousMode ? {
     continuousMode: true,
@@ -338,7 +375,11 @@ export async function submitGenerationTask(
   return taskId;
 }
 
-async function submitGptImageTask(
+/**
+ * Submit a GPT Image generation task (synchronous — no polling).
+ * Exported so the GPT Image TaskController can delegate to it.
+ */
+export async function submitGptImageTask(
   fragmentId: string,
   instanceId: string,
   modelId: string,
@@ -601,4 +642,166 @@ function normalizeGptImageParams(params: GenerationParams): GenerationParams {
     imageBackground: background,
     imageModeration: params.imageModeration ?? 'auto',
   };
+}
+
+/**
+ * Submit a MiniMax TTS task (async path).
+ * Exported so the MiniMax TaskController can delegate to it.
+ *
+ * Unlike Seedance, TTS has no reference content / TOS upload / local_references /
+ * continuous mode. Completion is driven by the Rust coordinator emitting
+ * `generation:status` events (created → download_progress → completed), which
+ * `bridge.ts` + `handleTaskComplete` process (outputType: 'audio').
+ */
+export async function submitMiniMaxTtsTask(
+  fragmentId: string,
+  instanceId: string,
+  modelId: string,
+  params: GenerationParams,
+  instance?: ProviderInstance,
+): Promise<string> {
+  const taskId = generateId();
+  useTimelineStore.getState().updateFragment(fragmentId, { status: 'generating' });
+
+  const ctx = resolveFragmentContext(fragmentId);
+  const providerInstance = instance ?? useProviderInstanceStore.getState().get(instanceId);
+  const providerLabel = providerInstance?.displayName ?? instanceId;
+  const modelName = resolveModelName(instanceId, modelId);
+  const project = useProjectStore.getState().currentProject;
+  const folderPath = project?.folderPath;
+
+  if (!folderPath) {
+    await failGeneration(taskId, 'No project folder path');
+    resetFragmentIfGenerating(fragmentId, 'draft');
+    return taskId;
+  }
+
+  const modelParams = providerTypeRegistry.findModelVariant(modelId)?.params;
+  const normalized = normalizeMinimaxTtsParams(params, modelParams?.voiceModifyFormats);
+  const providerParams = buildProviderParams(modelId, normalized, modelName);
+
+  const pendingGeneration: Generation = {
+    id: taskId,
+    projectId: project.id ?? '',
+    fragmentId,
+    fragmentName: ctx.fragmentName,
+    promptText: params.prompt,
+    references: [],
+    providerInstanceId: instanceId,
+    providerDisplayName: providerLabel,
+    providerParams,
+    outputType: 'audio',
+    status: 'pending',
+    queuedAt: new Date(),
+    isSelected: false,
+    createdAt: new Date(),
+  };
+  useGenerationStore.getState().addGeneration(pendingGeneration);
+
+  taskLog.info(folderPath, 'submit_pending', 'MiniMax TTS task submitted', {
+    taskId,
+    fragmentId,
+    providerId: instanceId,
+    model: modelId,
+  });
+
+  await updateGenerationsXml(folderPath, taskId, {
+    status: 'pending',
+    fragmentId,
+    fragmentName: ctx.fragmentName,
+    prompt: params.prompt,
+    references: [],
+    providerInstanceId: instanceId,
+    providerDisplayName: providerLabel,
+    providerParams,
+    outputType: 'audio',
+    isSelected: false,
+    createdAt: new Date().toISOString(),
+    queuedAt: new Date().toISOString(),
+  });
+
+  const password = getProviderPassword(providerInstance);
+
+  try {
+    await updateGenerationsXml(folderPath, taskId, {
+      status: 'processing',
+      startedAt: new Date().toISOString(),
+    });
+    useGenerationStore.getState().updateGeneration(taskId, {
+      status: 'processing',
+      startedAt: new Date(),
+    });
+
+    await tauriBridge.minimaxTtsApi.startGeneration({
+      task_id: taskId,
+      provider_id: instanceId,
+      password,
+      project_path: folderPath,
+      fragment_id: fragmentId,
+      model: modelId,
+      text: params.prompt,
+      voice_id: normalized.voiceId ?? '',
+      speed: normalized.speed,
+      emotion: normalized.emotion,
+      audio_format: normalized.audioFormat,
+      sample_rate: normalized.sampleRate ? Number(normalized.sampleRate) : undefined,
+      vol: normalized.volume,
+      pitch: normalized.pitch,
+      bitrate: normalized.bitrate,
+      channel: normalized.channel,
+      language_boost: normalized.languageBoost,
+      voice_modify_pitch: normalized.voiceModifyPitch,
+      voice_modify_intensity: normalized.voiceModifyIntensity,
+      voice_modify_timbre: normalized.voiceModifyTimbre,
+      voice_modify_sound_effects: normalized.voiceModifySoundEffects,
+      pronunciation_tone: normalized.pronunciationTone,
+      aigc_watermark: normalized.aigcWatermark,
+      english_normalization: normalized.englishNormalization,
+    });
+
+    taskLog.info(folderPath, 'submit_success', 'MiniMax TTS task submitted to Rust', { taskId });
+    // Completion is driven by Rust coordinator events (generation:status).
+  } catch (error) {
+    const errorMsg = getErrorMessage(error);
+    taskLog.error(folderPath, 'submit_error', 'Failed to start MiniMax TTS', {
+      taskId,
+      error: errorMsg,
+    });
+    await failGeneration(taskId, errorMsg, folderPath);
+    resetFragmentIfGenerating(fragmentId, 'draft');
+  }
+
+  return taskId;
+}
+
+/**
+ * Normalize generation params for MiniMax TTS.
+ * Ignores video-only fields (duration / aspectRatio / resolution) — TTS has no notion of these.
+ * `voiceModifyFormats` comes from the provider's CapabilityParams (single source of truth
+ * for which audio formats support voice_modify).
+ */
+function normalizeMinimaxTtsParams(
+  params: GenerationParams,
+  voiceModifyFormats: string[] = ['mp3', 'wav', 'flac'],
+): GenerationParams {
+  const result: GenerationParams = {
+    ...params,
+    references: [],
+    duration: 0,
+    aspectRatio: '',
+    resolution: undefined,
+  };
+  // Empty-string sound effects "none" → don't send to API
+  if (result.voiceModifySoundEffects === '') {
+    result.voiceModifySoundEffects = undefined;
+  }
+  // voice_modify only supported for formats declared by the provider — strip for others
+  const fmt = result.audioFormat ?? '';
+  if (!voiceModifyFormats.includes(fmt)) {
+    result.voiceModifyPitch = undefined;
+    result.voiceModifyIntensity = undefined;
+    result.voiceModifyTimbre = undefined;
+    result.voiceModifySoundEffects = undefined;
+  }
+  return result;
 }

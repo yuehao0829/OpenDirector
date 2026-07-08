@@ -45,6 +45,12 @@ export default defineConfig({
     warmup: {
       clientFiles: entryFiles,
     },
+    watch: {
+      // The Rust build output (src-tauri/target/) holds process-locked files on
+      // Windows — e.g. opendirector.pdb is locked while the app runs. Watching
+      // them throws EBUSY and crashes the dev server, so exclude the whole tree.
+      ignored: ['**/src-tauri/target/**'],
+    },
   },
   optimizeDeps: {
     entries: entryFiles,

@@ -6,7 +6,7 @@
 // ─── Provider Credentials (→ Rust Credentials) ───
 
 export interface ProviderCredentials {
-  ark_api_key: string;
+  api_key: string;
   ak: string;
   sk: string;
   region: string;
@@ -51,9 +51,46 @@ export interface OpenAiImageGenerationResult {
   revised_prompt?: string;
 }
 
-export interface CredentialValidation {
-  valid: boolean;
-  message: string;
+// ─── MiniMax TTS (→ Rust minimax_tts.rs) ───
+
+/** Parameters for minimax_tts_start_generation. */
+export interface MinimaxTtsStartGenerationParams {
+  provider_id: string;
+  password: string;
+  task_id: string;
+  project_path: string;
+  fragment_id: string;
+  model: string;
+  text: string;
+  voice_id: string;
+  speed?: number;
+  vol?: number;
+  pitch?: number;
+  emotion?: string;
+  audio_format?: string;
+  sample_rate?: number;
+  bitrate?: number;
+  channel?: number;
+  language_boost?: string;
+  voice_modify_pitch?: number;
+  voice_modify_intensity?: number;
+  voice_modify_timbre?: number;
+  voice_modify_sound_effects?: string;
+  pronunciation_tone?: string[];
+  aigc_watermark?: boolean;
+  english_normalization?: boolean;
+}
+
+export interface MinimaxVoice {
+  voice_id: string;
+  name?: string;
+  description?: string;
+  voice_type?: string;
+  status?: string;
+}
+
+export interface MinimaxGetVoicesResult {
+  voices: MinimaxVoice[];
 }
 
 // ─── Seedance Content & Task Params (→ Rust CreateTaskParams) ───
@@ -307,4 +344,6 @@ export interface PendingGenerationTask {
   outcome_last_frame_url?: string;
   outcome_file_size?: number;
   outcome_error?: string;
+  /** MiniMax TTS — file_id of the generated audio (used to re-download after crash if the audio file is missing). */
+  outcome_file_id?: number;
 }

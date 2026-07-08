@@ -13,6 +13,8 @@ import type {
 import { BUILTIN_TYPE_IDS } from '@opendirector/core/types/provider-system';
 import { GLOBAL_GENERATION_OPTIONS } from '@opendirector/core/types/generation';
 import { t } from '@opendirector/core/i18n';
+import type { ParamLayoutItem } from '@opendirector/core/types/param-layout';
+import { formatAsString } from '@opendirector/core/types/param-layout';
 
 function createSeedanceInputRequirements(): InputRequirements {
   return {
@@ -93,6 +95,110 @@ function createSeedanceInputRequirements(): InputRequirements {
   };
 }
 
+/** Fully declarative Seedance parameter layout. */
+const seedanceLayout: ParamLayoutItem[] = [
+  {
+    id: 'aspectRatio',
+    label: 'settings.generationDefaults.aspectRatio',
+    valueKey: 'aspectRatio',
+    summaryIcon: 'rectangle-horizontal',
+    summaryFormat: formatAsString,
+    visibleWhen: {
+      all: [
+        { paramsField: 'outputType', op: 'notEquals', value: 'audio' },
+        { paramsField: 'aspectRatios', op: 'truthy' },
+      ],
+    },
+    control: {
+      type: 'button-group',
+      optionsFrom: 'aspectRatios',
+      flexibleWidth: true,
+      extraWideValue: 'adaptive',
+      buttonClassName: 'px-1 py-2 text-sm',
+    },
+  },
+  {
+    id: 'resolution',
+    label: 'settings.generationDefaults.resolution',
+    valueKey: 'resolution',
+    summaryIcon: 'monitor',
+    summaryFormat: formatAsString,
+    visibleWhen: {
+      all: [
+        { paramsField: 'outputType', op: 'notEquals', value: 'audio' },
+        { paramsField: 'resolution', op: 'truthy' },
+      ],
+    },
+    control: {
+      type: 'button-group',
+      optionsFrom: 'resolution',
+      buttonSize: 'md',
+    },
+  },
+  {
+    id: 'toggles',
+    visibleWhen: {
+      all: [
+        { paramsField: 'outputType', op: 'notEquals', value: 'image' },
+        {
+          any: [
+            { paramsField: 'enableAudio', op: 'exists' },
+            { paramsField: 'enableMusic', op: 'exists' },
+            { paramsField: 'enableSubtitle', op: 'exists' },
+            { paramsField: 'enableWatermark', op: 'exists' },
+          ],
+        },
+      ],
+    },
+    control: {
+      type: 'toggle-pill-grid',
+      toggles: [
+        { key: 'enableAudio', icon: 'volume-2', iconOn: 'volume-2', iconOff: 'volume-x', labelKey: 'generation.toggle.audio', cascadesOffTo: 'enableMusic' },
+        { key: 'enableMusic', icon: 'music', iconOn: 'music', iconOff: 'music-off', labelKey: 'generation.toggle.music', disabledWhenOff: 'enableAudio', activeDependsOn: 'enableAudio' },
+        { key: 'enableSubtitle', icon: 'subtitles', labelKey: 'generation.toggle.subtitle' },
+        { key: 'enableWatermark', icon: 'stamp', labelKey: 'generation.toggle.watermark' },
+      ],
+    },
+  },
+  {
+    id: 'duration',
+    label: 'generationParams.duration',
+    valueKey: 'duration',
+    summaryIcon: 'clock',
+    summaryFormat: (v, _p, ctx) => {
+      if (ctx.continuousMode) {
+        return ctx.t('generationParams.secondsContinuousShort', { seconds: Math.ceil((ctx.totalDuration ?? 0) / 1000) });
+      }
+      if (ctx.allValues.autoDuration) {
+        return ctx.t('generationParams.adaptive');
+      }
+      return `${v}s`;
+    },
+    visibleWhen: {
+      all: [
+        { paramsField: 'outputType', op: 'notEquals', value: 'image' },
+        { paramsField: 'durationRange', op: 'exists' },
+      ],
+    },
+    control: {
+      type: 'slider',
+      rangeFrom: 'durationRange',
+      showRangeLabels: true,
+      rangeLabelUnit: 's',
+      decimals: 0,
+      headerToggle: {
+        key: 'autoDuration',
+        labelKey: 'generationParams.adaptive',
+      },
+      hideWhenHeaderToggleOn: true,
+      disabledWhenHeaderToggleOn: true,
+      disabledInContinuousMode: true,
+      continuousLabelKey: 'generationParams.durationContinuous',
+      valueInLabel: { formatKey: 'generationParams.duration' },
+    },
+  },
+];
+
 const seedanceBaseParams: CapabilityParams = {
   aspectRatios: [...GLOBAL_GENERATION_OPTIONS.aspectRatios],
   durationRange: { min: 4, max: 15, step: 1 },
@@ -101,6 +207,7 @@ const seedanceBaseParams: CapabilityParams = {
   enableSubtitle: GLOBAL_GENERATION_OPTIONS.enableSubtitle,
   enableWatermark: GLOBAL_GENERATION_OPTIONS.enableWatermark,
   enableWebSearch: GLOBAL_GENERATION_OPTIONS.enableWebSearch,
+  paramLayout: seedanceLayout,
 };
 
 const seedance20Params: CapabilityParams = {

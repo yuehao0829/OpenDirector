@@ -1,5 +1,5 @@
 use super::provider_key::get_credentials_internal;
-use super::util::MAX_DOWNLOAD_SIZE;
+use super::util::{enforce_https, extract_origin, MAX_DOWNLOAD_SIZE};
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use reqwest::Client;
@@ -157,37 +157,48 @@ pub struct AssetListResult {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: get ARK API Key + base_url for a provider
+// Helper: resolve a provider's API key + base_url
 // ---------------------------------------------------------------------------
 
-/// Enforce HTTPS on a base URL.
-fn enforce_https(url: &str) -> Result<String, String> {
-    if url.starts_with("https://") {
-        Ok(url.to_string())
-    } else if url.starts_with("http://") {
-        Err(format!(
-            "HTTP URLs are not allowed for security reasons: {}",
-            url
-        ))
-    } else {
-        Ok(format!("https://{}", url))
+/// Decrypt a provider's credentials and verify the `api_key` is non-empty.
+/// Shared by all API-key providers (Seedance / MiniMax / GPT-Image) so the
+/// "not configured" error message stays consistent. Returns the full
+/// `Credentials` so callers that need `base_url` / `auth_mode` / etc. can
+/// read them without a second decrypt.
+pub(crate) fn get_api_key_checked(
+    provider_id: &str,
+    password: &str,
+) -> Result<crate::commands::provider_key::Credentials, String> {
+    let creds = get_credentials_internal(provider_id, password)?;
+    if creds.api_key.trim().is_empty() {
+        return Err(format!(
+            "API key not configured for provider '{}'. Please re-enter your API key in Settings → Providers.",
+            provider_id
+        ));
     }
+    Ok(creds)
+}
+
+/// Resolve a provider's API key and origin base URL (scheme://host, path stripped).
+/// `default_base_url` is used when the provider config has no base_url.
+pub(crate) fn get_api_key_and_base_url(
+    provider_id: &str,
+    password: &str,
+    default_base_url: &str,
+) -> Result<(String, String), String> {
+    let creds = get_api_key_checked(provider_id, password)?;
+    let raw_url = creds.base_url.as_deref().unwrap_or(default_base_url);
+    let base_url = enforce_https(raw_url)?;
+    let origin = extract_origin(&base_url);
+    Ok((creds.api_key, origin))
 }
 
 /// Get the ARK API key and base URL for a provider.
-pub fn get_ark_api_key_and_base_url(
+pub(crate) fn get_ark_api_key_and_base_url(
     provider_id: &str,
     password: &str,
 ) -> Result<(String, String), String> {
-    let creds = get_credentials_internal(provider_id, password)?;
-    let raw_url = creds.base_url.as_deref().unwrap_or(DEFAULT_ARK_BASE_URL);
-    let base_url = enforce_https(raw_url)?;
-    // Strip path segments — keep only scheme://host (e.g. "https://ark.cn-beijing.volces.com/api/v3/..." → "https://ark.cn-beijing.volces.com")
-    let origin = base_url
-        .find("://")
-        .and_then(|i| base_url[i + 3..].find('/').map(|j| &base_url[..i + 3 + j]))
-        .unwrap_or(&base_url);
-    Ok((creds.ark_api_key, origin.to_string()))
+    get_api_key_and_base_url(provider_id, password, DEFAULT_ARK_BASE_URL)
 }
 
 // ---------------------------------------------------------------------------

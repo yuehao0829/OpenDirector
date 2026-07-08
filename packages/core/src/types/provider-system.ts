@@ -11,6 +11,7 @@ import { getEffectiveImageRole } from './asset';
 import { getProviderTypeRegistry } from '../services/service-locator';
 import { computeVisibleCropSize } from '../utils/crop';
 import { t as translate } from '../i18n';
+import type { ParamLayoutItem } from './param-layout';
 
 // ── Constraint Indicator Types ──
 
@@ -62,6 +63,7 @@ export const BUILTIN_TYPE_IDS = {
   VOLCENGINE: 'volcengine',
   SEEDANCE: 'seedance',
   OPENAI_IMAGE: 'openai-image',
+  MINIMAX: 'minimax',
 } as const;
 
 // ── Capability Definitions ──
@@ -579,11 +581,75 @@ export interface CapabilityParams {
   enableSubtitle?: boolean;
   enableWatermark?: boolean;
   enableWebSearch?: boolean;
+  /** TTS — selectable voice IDs (static defaults; cloud-fetched voices merge in at runtime). */
+  voiceIds?: Array<{ value: string; label: string; labelEn?: string }>;
+  /** TTS — selectable emotions. */
+  emotions?: string[];
+  /** TTS — selectable audio formats (mp3/wav/pcm/flac/opus). */
+  audioFormats?: string[];
+  /** TTS — selectable sample rates (flat list; used when sampleRateByFormat is absent). */
+  sampleRates?: string[];
+  /** TTS — sample rates keyed by audio format ('default' = fallback). When present,
+   *  the UI shows only rates valid for the currently selected audioFormat. */
+  sampleRateByFormat?: Record<string, string[]>;
+  /** TTS — speed slider bounds. */
+  speedRange?: { min: number; max: number; step: number };
+  /** TTS — volume slider bounds. */
+  volumeRange?: { min: number; max: number; step: number };
+  /** TTS — pitch slider bounds (semitones). */
+  pitchRange?: { min: number; max: number; step: number };
+  /** TTS — selectable bitrates (only effective for mp3 format). */
+  bitrates?: number[];
+  /** TTS — selectable channel counts [1, 2]. */
+  channels?: number[];
+  // TTS 高级参数 (MiniMax)
+  /** TTS — 支持的小语种增强列表，如 ["auto", "Chinese", "English"]。 */
+  languageBoostOptions?: string[];
+  /** TTS — 音高调整范围 [-100, 100]。 */
+  voiceModifyPitchRange?: { min: number; max: number; step: number };
+  /** TTS — 强度调整范围 [-100, 100]。 */
+  voiceModifyIntensityRange?: { min: number; max: number; step: number };
+  /** TTS — 音色调整范围 [-100, 100]。 */
+  voiceModifyTimbreRange?: { min: number; max: number; step: number };
+  /** TTS — 可选音效列表。 */
+  voiceModifySoundEffects?: Array<{ value: string; label: string }>;
+  /** TTS — 是否支持发音词典。 */
+  supportsPronunciationDict?: boolean;
+  /** TTS — 是否支持 AIGC 水印。 */
+  supportsAigcWatermark?: boolean;
+  /** TTS — 是否支持英语规范化。 */
+  supportsEnglishNormalization?: boolean;
+  /**
+   * Which param valueKeys to show in the inspector summary bar (Panel header).
+   * When undefined, all supported params are shown (Seedance / GPT Image behavior).
+   * When set, only the listed valueKeys appear — e.g. MiniMax TTS shows only
+   * the essentials: ['voiceId', 'emotion', 'audioFormat', 'channel', 'sampleRate'].
+   */
+  summaryFields?: string[];
+  /**
+   * Declarative parameter layout — defined by the provider. The array order
+   * determines display order. When present, the UI uses this instead of
+   * hardcoded layout logic.
+   */
+  paramLayout?: ParamLayoutItem[];
+  /**
+   * Audio formats that support voice_modify (pitch/intensity/timbre/sound effects).
+   * Per MiniMax API docs: mp3, wav, flac only — pcm/opus/etc. return param errors.
+   * When set, voice_modify params are only visible when the selected format
+   * is in this list. When undefined, defaults to ['mp3', 'wav', 'flac'].
+   */
+  voiceModifyFormats?: string[];
 }
 
 export function isImageModel(params: CapabilityParams): boolean {
   if (params.outputType === 'image') return true;
   if ((params.imageSizes?.length ?? 0) > 0) return true;
+  return false;
+}
+
+export function isAudioModel(params: CapabilityParams): boolean {
+  if (params.outputType === 'audio') return true;
+  if ((params.voiceIds?.length ?? 0) > 0) return true;
   return false;
 }
 

@@ -8,6 +8,7 @@ import { tauriBridge } from '@opendirector/core/services/tauri-bridge';
 import { useAssetStore } from '@opendirector/core/stores/assetStore';
 import { useGenerationStore } from '@opendirector/core/stores/generationStore';
 import { useProjectStore } from '@opendirector/core/stores/projectStore';
+import { useProviderInstanceStore } from '@opendirector/core/stores/providerInstanceStore';
 import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { Generation } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
@@ -28,6 +29,7 @@ import {
   extractProjectPath,
   buildGeneratedAsset,
   generatedVideoPath,
+  generatedAudioPath,
   generatedImagePath,
   GENERATED_VIDEO_DIR,
   recordToParams,
@@ -38,6 +40,7 @@ import { failGeneration, cancelGeneration, getGenerationById } from './store-syn
 import { taskLog } from './task-log';
 import { safeSaveAsset, safeCreateGeneration } from './task-db-helpers';
 import { scheduleSaveAfterCompletion } from './completion-save';
+import { cancelAcrossControllers, getTaskController } from './task-controller-registry';
 
 export interface TaskCompleteParams {
   taskId: string;
@@ -52,27 +55,86 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
   const { taskId, apiTaskId, localPath, fileSize, lastFrameUrl, projectPath } = params;
   const gen = getGenerationById(taskId);
 
+  const isAudioOutput = gen?.outputType === 'audio';
+  const outputPath = isAudioOutput ? generatedAudioPath(taskId) : generatedVideoPath(taskId);
+  const outputMime = isAudioOutput ? 'audio/mpeg' : 'video/mp4';
+
   const taskProjectPath = projectPath ?? extractProjectPath(localPath);
   taskLog.info(taskProjectPath, 'complete_start', 'Handling task completion', {
     taskId,
     fileSize,
   });
   if (!gen) {
-    // Generation was created at submit time, so still try to update it
-    useGenerationStore.getState().updateGeneration(taskId, {
-      status: 'completed',
-      providerTaskId: apiTaskId,
-      completedAt: new Date(),
-    });
-    const written = await updateGenerationsXml(taskProjectPath, taskId, {
-      status: 'completed',
-      providerTaskId: apiTaskId,
-      completedAt: new Date().toISOString(),
-    });
-    if (written) {
-      return true;
+    // Generation not in the in-memory store (e.g. it completed while a different project was
+    // open and was evicted on project switch). Recover outputType/fragmentId from the XML
+    // record and build the asset so the downloaded file is not orphaned, then acknowledge.
+    const fs = await getFs();
+    if (!taskProjectPath || !fs) {
+      return false;
     }
-    return false;
+    try {
+      const xmlRecord = await readGenerationFromXml(taskProjectPath, taskId, fs);
+      const isAudio = xmlRecord?.outputType === 'audio';
+      const isImage = xmlRecord?.outputType === 'image';
+      const relPath = isAudio
+        ? generatedAudioPath(taskId)
+        : isImage
+          ? generatedImagePath(taskId)
+          : generatedVideoPath(taskId);
+      const mime = isAudio ? 'audio/mpeg' : isImage ? 'image/jpeg' : 'video/mp4';
+
+      const assetId = generateId();
+      // fs.getMediaMetadata and getDb()->getProjectsByFolderPath have no data dependency,
+      // so run them concurrently. mediaMeta is null on failure (unchanged); projectId is ''
+      // on failure or null-db (matching the original try/catch); db stays in scope for safeSaveAsset.
+      const dbPromise = getDb();
+      const [mediaMeta, db, projectId] = await Promise.all([
+        fs.getMediaMetadata(localPath).catch(() => null),
+        dbPromise,
+        // await unwraps the inner Promise so ?? '' can convert null (getProjectsByFolderPath
+        // returns string | null) and undefined (null db) to '' — matching the original try/catch.
+        dbPromise.then(async (db) => (await db?.getProjectsByFolderPath(taskProjectPath)) ?? '').catch(() => ''),
+      ]);
+      const webviewUrl = toWebViewUrl(localPath);
+
+      const asset = buildGeneratedAsset({
+        taskId,
+        assetId,
+        relativePath: relPath,
+        fileSize,
+        videoUrl: webviewUrl,
+        thumbnailUrl: undefined,
+        duration: mediaMeta?.duration,
+        width: isAudio ? undefined : mediaMeta?.width,
+        height: isAudio ? undefined : mediaMeta?.height,
+        audioChannels: mediaMeta?.audioChannels,
+        sampleRate: mediaMeta?.sampleRate,
+        projectId: projectId ?? '',
+        outputType: isAudio ? 'audio' : isImage ? 'image' : 'video',
+        mimeType: mime,
+      });
+      safeSaveAsset(db, taskProjectPath, asset, 'db_save_asset_nogen');
+
+      const written = await updateGenerationsXml(taskProjectPath, taskId, {
+        status: 'completed',
+        providerTaskId: apiTaskId,
+        resultAssetId: assetId,
+        completedAt: new Date().toISOString(),
+        result: {
+          fileName: relPath,
+          fileSize,
+          duration: mediaMeta?.duration ?? 0,
+          width: mediaMeta?.width,
+          height: mediaMeta?.height,
+          mimeType: mime,
+        },
+      });
+      return written;
+    } catch (err) {
+      taskLog.warn(taskProjectPath, 'complete_nogen_error', 'Failed to build asset for out-of-store completion', { taskId, error: String(err) });
+      // Don't acknowledge — keep the pending record (with file_id) so it isn't silently lost.
+      return false;
+    }
   }
 
   if (gen.status === 'completed') {
@@ -125,8 +187,20 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
     const assetId = generateId();
 
     const [metadataResult, thumbnailResult] = await Promise.allSettled([
-      fs.getMediaMetadata(localPath).catch(() => null),
-      generateThumbnailForAsset(localPath, fs, 'video', effectiveFolderPath, assetId),
+      fs.getMediaMetadata(localPath).catch((error) => {
+        // Don't block completion, but surface the failure so it isn't silently swallowed —
+        // a missing duration here means the asset ships without media metadata and relies on
+        // project-load re-hydration to recover.
+        taskLog.warn(effectiveFolderPath, 'complete_media_metadata_error', 'Failed to probe generated media metadata', {
+          taskId,
+          localPath,
+          error: String(error),
+        });
+        return null;
+      }),
+      isAudioOutput
+        ? Promise.resolve(undefined)
+        : generateThumbnailForAsset(localPath, fs, 'video', effectiveFolderPath, assetId),
     ]);
 
     const mediaMeta = metadataResult.status === 'fulfilled' ? metadataResult.value : null;
@@ -147,16 +221,17 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
     const asset = buildGeneratedAsset({
       taskId,
       assetId,
-      relativePath: generatedVideoPath(taskId),
+      relativePath: outputPath,
       fileSize,
       videoUrl: webviewUrl,
       thumbnailUrl,
       duration: mediaMeta?.duration,
-      width: mediaMeta?.width,
-      height: mediaMeta?.height,
+      width: isAudioOutput ? undefined : mediaMeta?.width,
+      height: isAudioOutput ? undefined : mediaMeta?.height,
       audioChannels: mediaMeta?.audioChannels,
       sampleRate: mediaMeta?.sampleRate,
       projectId,
+      outputType: isAudioOutput ? 'audio' : 'video',
     });
 
     const fragment = isCurrentProject
@@ -217,12 +292,12 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
         status: 'completed',
         providerTaskId: apiTaskId,
         result: {
-          fileName: generatedVideoPath(taskId),
+          fileName: outputPath,
           fileSize,
           duration: mediaMeta?.duration ?? 0,
           width: mediaMeta?.width,
           height: mediaMeta?.height,
-          mimeType: 'video/mp4',
+          mimeType: outputMime,
           lastFrameUrl,
           lastFrameAssetId,
         },
@@ -247,12 +322,12 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
       ...(lastFrameAssetId ? { lastFrameAssetId } : {}),
       completedAt: new Date().toISOString(),
       result: {
-        fileName: generatedVideoPath(taskId),
+        fileName: outputPath,
         fileSize,
         duration: mediaMeta?.duration ?? 0,
         width: mediaMeta?.width,
         height: mediaMeta?.height,
-        mimeType: 'video/mp4',
+        mimeType: outputMime,
         lastFrameAssetId,
       },
     });
@@ -593,8 +668,25 @@ export async function cancelGenerationTask(taskId: string): Promise<void> {
   if (!gen) return;
   if (!isActiveGenerationStatus(gen.status)) return;
 
+  // Resolve the provider typeId from the generation's providerInstanceId, then
+  // dispatch cancel through the TaskController registry. No silent seedance
+  // fallback — if the typeId has no registered controller, skip with a warning.
+  const instance = useProviderInstanceStore.getState().get(gen.providerInstanceId);
+  const typeId = instance?.typeId;
+  const controller = typeId ? getTaskController(typeId) : undefined;
+
   try {
-    await tauriBridge.seedanceApi.cancelGeneration(taskId);
+    if (controller) {
+      await controller.cancel(taskId);
+    } else {
+      // The provider instance was deleted (typeId unknown) or no controller is
+      // registered for it. Cancel is keyed by task_id in the Rust managers and
+      // idempotent, so broadcast to every controller to ensure the signal
+      // reaches whichever manager holds the task — otherwise a running task
+      // whose instance was removed could never be cancelled.
+      taskLog.warn(undefined, 'cancel_no_controller', 'Provider instance/controller missing for task; broadcasting cancel to all controllers', { taskId });
+      await cancelAcrossControllers(taskId);
+    }
   } catch (err) {
     taskLog.warn(undefined, 'cancel_signal_error', 'Failed to send cancel signal', { taskId, error: String(err) });
   }

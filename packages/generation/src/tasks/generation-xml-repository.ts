@@ -25,10 +25,13 @@ export const GENERATIONS_XML = 'Generations.xml';
 
 export const GENERATED_VIDEO_DIR = 'Generated/Video';
 export const GENERATED_IMAGE_DIR = 'Generated/Image';
+export const GENERATED_AUDIO_DIR = 'Generated/Audio';
 export const generatedVideoPath = (id: string) => `${GENERATED_VIDEO_DIR}/${id}.mp4`;
 export const generatedImagePath = (id: string, extension = 'jpg') => `${GENERATED_IMAGE_DIR}/${id}.${extension}`;
+export const generatedAudioPath = (id: string, extension = 'mp3') => `${GENERATED_AUDIO_DIR}/${id}.${extension}`;
 export const formatGeneratedAssetName = (id: string) => `generation-${id.slice(0, 8)}.mp4`;
 export const formatGeneratedImageName = (id: string, extension = 'jpg') => `generation-${id.slice(0, 8)}.${extension}`;
+export const formatGeneratedAudioName = (id: string, extension = 'mp3') => `generation-${id.slice(0, 8)}.${extension}`;
 export const fragmentDisplayName = (id: string) => `Fragment ${id.slice(0, 8)}`;
 
 export function buildGeneratedAsset(params: {
@@ -45,7 +48,7 @@ export function buildGeneratedAsset(params: {
   sampleRate?: number;
   mediaMetadataHydrated?: boolean;
   projectId: string;
-  outputType?: 'video' | 'image';
+  outputType?: 'video' | 'image' | 'audio';
   mimeType?: string;
   fileExtension?: string;
 }): Asset {
@@ -68,23 +71,33 @@ export function buildGeneratedAsset(params: {
     fileExtension,
   } = params;
   const isImage = outputType === 'image';
+  const isAudio = outputType === 'audio';
   const imageExtension = fileExtension ?? mimeTypeToExtension(mimeType) ?? 'jpg';
   return {
     id: assetId,
-    name: isImage ? formatGeneratedImageName(taskId, imageExtension) : formatGeneratedAssetName(taskId),
-    type: isImage ? 'image' : 'video',
+    name: isImage
+      ? formatGeneratedImageName(taskId, imageExtension)
+      : isAudio
+        ? formatGeneratedAudioName(taskId)
+        : formatGeneratedAssetName(taskId),
+    type: isImage ? 'image' : isAudio ? 'audio' : 'video',
     source: 'generated',
     url: videoUrl,
     relativePath,
     fileSize,
-    mimeType: isImage ? (mimeType ?? 'image/jpeg') : 'video/mp4',
+    mimeType: isImage ? (mimeType ?? 'image/jpeg') : isAudio ? (mimeType ?? 'audio/mpeg') : 'video/mp4',
     thumbnailUrl,
     duration: isImage ? undefined : duration,
     width,
     height,
     audioChannels: isImage ? undefined : audioChannels,
     sampleRate: isImage ? undefined : sampleRate,
-    mediaMetadataHydrated: mediaMetadataHydrated ?? (isImage ? undefined : true),
+    // Mark hydrated only when we actually obtained media metadata. If the completion-time
+    // probe failed (duration undefined), leave it unhydrated so project load re-probes
+    // instead of permanently caching an asset with no duration (which breaks GES preview
+    // and exports). Images have no media streams, so they stay undefined.
+    mediaMetadataHydrated:
+      mediaMetadataHydrated ?? (isImage ? undefined : duration !== undefined),
     tags: [],
     favorite: false,
     usageCount: 0,
@@ -106,6 +119,18 @@ export function mimeTypeToExtension(mimeType: string | undefined): string | unde
     case 'jpeg':
     case 'jpg':
       return 'jpg';
+    case 'audio/mpeg':
+    case 'mp3':
+      return 'mp3';
+    case 'audio/wav':
+    case 'wav':
+      return 'wav';
+    case 'audio/pcm':
+    case 'pcm':
+      return 'pcm';
+    case 'audio/flac':
+    case 'flac':
+      return 'flac';
     default:
       return undefined;
   }
@@ -206,6 +231,12 @@ export function buildProviderParams(modelId: string, params: GenerationParams, m
     imageBackground: params.imageBackground,
     imageModeration: params.imageModeration,
     imageOutputCompression: params.imageOutputCompression,
+    // TTS (MiniMax)
+    voiceId: params.voiceId,
+    speed: params.speed,
+    emotion: params.emotion,
+    audioFormat: params.audioFormat,
+    sampleRate: params.sampleRate,
   };
 }
 
@@ -237,6 +268,12 @@ export function recordToParams(record: GenerationRecord): GenerationParams {
     imageBackground: pp.imageBackground as string | undefined,
     imageModeration: pp.imageModeration as string | undefined,
     imageOutputCompression: pp.imageOutputCompression as number | undefined,
+    // TTS (MiniMax)
+    voiceId: pp.voiceId as string | undefined,
+    speed: pp.speed as number | undefined,
+    emotion: pp.emotion as string | undefined,
+    audioFormat: pp.audioFormat as string | undefined,
+    sampleRate: pp.sampleRate as string | undefined,
   };
 }
 

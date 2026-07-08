@@ -202,16 +202,34 @@ function createFragmentElement(fragment: TimelineFragment): XmlElement {
   // GenParams
   if (fragment.genParams) {
     const gp = fragment.genParams;
+    const genParamsAttrs: Record<string, string | number | boolean> = {
+      resolution: gp.resolution,
+      aspectRatio: gp.aspectRatio,
+      enableAudio: gp.enableAudio,
+      enableMusic: gp.enableMusic,
+      enableSubtitle: gp.enableSubtitle,
+      enableWatermark: gp.enableWatermark,
+      enableWebSearch: gp.enableWebSearch,
+    };
+    if (gp.voiceId !== undefined) genParamsAttrs.voiceId = gp.voiceId;
+    if (gp.speed !== undefined) genParamsAttrs.speed = gp.speed;
+    if (gp.emotion !== undefined) genParamsAttrs.emotion = gp.emotion;
+    if (gp.audioFormat !== undefined) genParamsAttrs.audioFormat = gp.audioFormat;
+    if (gp.sampleRate !== undefined) genParamsAttrs.sampleRate = gp.sampleRate;
+    if (gp.volume !== undefined) genParamsAttrs.volume = gp.volume;
+    if (gp.pitch !== undefined) genParamsAttrs.pitch = gp.pitch;
+    if (gp.bitrate !== undefined) genParamsAttrs.bitrate = gp.bitrate;
+    if (gp.channel !== undefined) genParamsAttrs.channel = gp.channel;
+    if (gp.languageBoost !== undefined) genParamsAttrs.languageBoost = gp.languageBoost;
+    if (gp.voiceModifyPitch !== undefined) genParamsAttrs.voiceModifyPitch = gp.voiceModifyPitch;
+    if (gp.voiceModifyIntensity !== undefined) genParamsAttrs.voiceModifyIntensity = gp.voiceModifyIntensity;
+    if (gp.voiceModifyTimbre !== undefined) genParamsAttrs.voiceModifyTimbre = gp.voiceModifyTimbre;
+    if (gp.voiceModifySoundEffects !== undefined) genParamsAttrs.voiceModifySoundEffects = gp.voiceModifySoundEffects;
+    if (gp.pronunciationTone !== undefined) genParamsAttrs.pronunciationTone = JSON.stringify(gp.pronunciationTone);
+    if (gp.aigcWatermark !== undefined) genParamsAttrs.aigcWatermark = gp.aigcWatermark;
+    if (gp.englishNormalization !== undefined) genParamsAttrs.englishNormalization = gp.englishNormalization;
     fragmentElement.child(
-      createElement('genParams', {
-        resolution: gp.resolution,
-        aspectRatio: gp.aspectRatio,
-        enableAudio: gp.enableAudio,
-        enableMusic: gp.enableMusic,
-        enableSubtitle: gp.enableSubtitle,
-        enableWatermark: gp.enableWatermark,
-        enableWebSearch: gp.enableWebSearch,
-      }).build()
+      createElement('genParams', genParamsAttrs).build()
     );
   }
 
@@ -384,6 +402,61 @@ function parseFragmentElement(element: XmlElement): TimelineFragment {
       enableWatermark: genParamsElement.attributes.enableWatermark === 'true',
       enableWebSearch: genParamsElement.attributes.enableWebSearch === 'true',
     };
+    if (genParamsElement.attributes.voiceId !== undefined) {
+      genParams.voiceId = genParamsElement.attributes.voiceId;
+    }
+    if (genParamsElement.attributes.speed !== undefined) {
+      genParams.speed = Number(genParamsElement.attributes.speed);
+    }
+    if (genParamsElement.attributes.emotion !== undefined) {
+      genParams.emotion = genParamsElement.attributes.emotion;
+    }
+    if (genParamsElement.attributes.audioFormat !== undefined) {
+      genParams.audioFormat = genParamsElement.attributes.audioFormat;
+    }
+    if (genParamsElement.attributes.sampleRate !== undefined) {
+      genParams.sampleRate = genParamsElement.attributes.sampleRate;
+    }
+    if (genParamsElement.attributes.volume !== undefined) {
+      genParams.volume = Number(genParamsElement.attributes.volume);
+    }
+    if (genParamsElement.attributes.pitch !== undefined) {
+      genParams.pitch = Number(genParamsElement.attributes.pitch);
+    }
+    if (genParamsElement.attributes.bitrate !== undefined) {
+      genParams.bitrate = Number(genParamsElement.attributes.bitrate);
+    }
+    if (genParamsElement.attributes.channel !== undefined) {
+      genParams.channel = Number(genParamsElement.attributes.channel);
+    }
+    if (genParamsElement.attributes.languageBoost !== undefined) {
+      genParams.languageBoost = genParamsElement.attributes.languageBoost;
+    }
+    if (genParamsElement.attributes.voiceModifyPitch !== undefined) {
+      genParams.voiceModifyPitch = Number(genParamsElement.attributes.voiceModifyPitch);
+    }
+    if (genParamsElement.attributes.voiceModifyIntensity !== undefined) {
+      genParams.voiceModifyIntensity = Number(genParamsElement.attributes.voiceModifyIntensity);
+    }
+    if (genParamsElement.attributes.voiceModifyTimbre !== undefined) {
+      genParams.voiceModifyTimbre = Number(genParamsElement.attributes.voiceModifyTimbre);
+    }
+    if (genParamsElement.attributes.voiceModifySoundEffects !== undefined) {
+      genParams.voiceModifySoundEffects = genParamsElement.attributes.voiceModifySoundEffects;
+    }
+    if (genParamsElement.attributes.pronunciationTone !== undefined) {
+      try {
+        genParams.pronunciationTone = JSON.parse(genParamsElement.attributes.pronunciationTone);
+      } catch {
+        // parse failed, leave undefined
+      }
+    }
+    if (genParamsElement.attributes.aigcWatermark !== undefined) {
+      genParams.aigcWatermark = genParamsElement.attributes.aigcWatermark === 'true';
+    }
+    if (genParamsElement.attributes.englishNormalization !== undefined) {
+      genParams.englishNormalization = genParamsElement.attributes.englishNormalization === 'true';
+    }
   }
 
   return {

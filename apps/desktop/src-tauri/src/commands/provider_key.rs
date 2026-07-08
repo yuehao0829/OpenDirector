@@ -5,10 +5,28 @@ use std::path::PathBuf;
 use super::util::AuthMode;
 
 /// Credentials stored encrypted in local file per provider.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+///
+/// `#[serde(default)]` at the struct level means every field uses its
+/// `Default::default()` when missing from the JSON. This lets legacy `.enc`
+/// files written before a field existed (e.g. `api_key` absent from the
+/// original Volcengine-only saves) parse cleanly instead of failing with
+/// "missing field". Missing strings default to `""`, and the API-key
+/// consumers (`get_api_key_and_base_url`) treat an empty key as a clear
+/// "not configured" error rather than a parse failure.
+///
+/// `api_key` carries an `alias = "ark_api_key"` so `.enc` files written by
+/// the previous app version (which serialized this field as `ark_api_key`)
+/// deserialize correctly — without the alias the rename would silently
+/// discard every existing user's saved API key.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct Credentials {
-    /// Direct ARK API Key used as Bearer token for video generation APIs.
-    pub ark_api_key: String,
+    /// Provider API key used as Bearer token (or query-param value) for the
+    /// provider's generation APIs. Shared across all API-key providers
+    /// (Seedance / MiniMax / GPT-Image). Volcengine leaves this empty and
+    /// authenticates via the ak/sk signing fields below.
+    #[serde(alias = "ark_api_key")]
+    pub api_key: String,
     /// Access Key ID for HMAC-SHA256 signing of asset library APIs.
     pub ak: String,
     /// Secret Access Key for HMAC-SHA256 signing of asset library APIs.
@@ -16,26 +34,16 @@ pub struct Credentials {
     pub region: String,
     pub endpoint_id: Option<String>,
     pub base_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<AuthMode>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_query_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tos_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tos_bucket: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_project: Option<String>,
     pub asset_group_name: Option<String>,
     pub asset_group_id: Option<String>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct CredentialValidation {
-    pub valid: bool,
-    pub message: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,74 +119,6 @@ pub fn delete_provider_credentials(provider_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Read and decrypt credentials from local file (internal use only).
-
-/// Validate credentials by testing the API Key with a lightweight API call.
-#[tauri::command]
-pub async fn validate_provider_credentials(
-    provider_id: String,
-    password: String,
-) -> Result<CredentialValidation, String> {
-    let creds = match get_credentials_internal(&provider_id, &password) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(CredentialValidation {
-                valid: false,
-                message: format!("Credentials not found: {}", e),
-            });
-        }
-    };
-
-    let auth_mode = creds.auth_mode.unwrap_or_default();
-
-    if auth_mode == AuthMode::QueryParam {
-        let is_valid = !creds.ark_api_key.trim().is_empty();
-        return Ok(CredentialValidation {
-            valid: is_valid,
-            message: if is_valid {
-                "Credentials saved".to_string()
-            } else {
-                "API key is empty".to_string()
-            },
-        });
-    }
-
-    let base_url = creds
-        .base_url
-        .as_deref()
-        .unwrap_or("https://ark.cn-beijing.volces.com");
-
-    let client = reqwest::Client::new();
-    let result = client
-        .get(format!(
-            "{}/api/v3/contents/generations/tasks?limit=1",
-            base_url
-        ))
-        .header("Authorization", format!("Bearer {}", creds.ark_api_key))
-        .send()
-        .await;
-
-    match result {
-        Ok(resp) => {
-            let status = resp.status();
-            // 200 (success) or 404 (empty list but auth worked) both mean valid credentials
-            let is_valid = status.as_u16() == 200 || status.as_u16() == 404;
-            Ok(CredentialValidation {
-                valid: is_valid,
-                message: if is_valid {
-                    "Credentials valid".to_string()
-                } else {
-                    format!("Invalid credentials (HTTP {})", status)
-                },
-            })
-        }
-        Err(e) => Ok(CredentialValidation {
-            valid: false,
-            message: format!("Network error: {}", e),
-        }),
-    }
-}
-
 /// Update provider credentials in an existing encrypted credential file.
 /// Decrypts with the old password, merges `updates_json` into the credential JSON,
 /// then re-encrypts with a new random password and returns it.
@@ -211,6 +151,14 @@ pub fn update_provider_credentials(
     let merged_json = serde_json::to_string(&creds_value)
         .map_err(|e| format!("Failed to serialize credentials: {}", e))?;
 
+    // Validate the merged result parses as Credentials (symmetric with
+    // save_provider_credentials). With `#[serde(default)]` on the struct,
+    // missing fields no longer fail here — they default to "" / None and are
+    // caught later by `get_api_key_checked` when the api_key is empty. This
+    // check still catches type mismatches or malformed JSON from a bad update.
+    let _creds: Credentials = serde_json::from_str(&merged_json)
+        .map_err(|e| format!("Failed to parse merged credentials: {}", e))?;
+
     let new_password = {
         let mut buf = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut buf);
@@ -224,4 +172,35 @@ pub fn update_provider_credentials(
         .map_err(|e| format!("Failed to write credential file: {}", e))?;
 
     Ok(new_password)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ark_api_key_alias_deserializes_into_api_key() {
+        // A .enc file written by the previous app version serialized the key
+        // as `ark_api_key`. The rename to `api_key` must not silently discard
+        // it — the serde alias should map the old name onto the new field.
+        let json = r#"{"ark_api_key":"sk-legacy","ak":"","sk":"","region":""}"#;
+        let creds: Credentials = serde_json::from_str(json).expect("legacy .enc must parse");
+        assert_eq!(creds.api_key, "sk-legacy");
+    }
+
+    #[test]
+    fn missing_api_key_defaults_to_empty() {
+        // A Volcengine-only .enc file (no api_key) must parse with api_key = "".
+        let json = r#"{"ak":"ak1","sk":"sk1","region":"cn-beijing"}"#;
+        let creds: Credentials = serde_json::from_str(json).expect("volcengine .enc must parse");
+        assert_eq!(creds.api_key, "");
+        assert_eq!(creds.ak, "ak1");
+    }
+
+    #[test]
+    fn new_api_key_field_deserializes_directly() {
+        let json = r#"{"api_key":"sk-new","ak":"","sk":"","region":""}"#;
+        let creds: Credentials = serde_json::from_str(json).expect("new .enc must parse");
+        assert_eq!(creds.api_key, "sk-new");
+    }
 }

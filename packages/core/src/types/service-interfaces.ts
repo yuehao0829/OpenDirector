@@ -26,6 +26,7 @@ export interface IProviderRuntimeRegistry {
   getOrInitializeAssetProvider(instanceId: string): Promise<AssetProvider | undefined>;
   reinitializeInstance(instanceId: string): Promise<void>;
   dispose(instanceId: string): void;
+  fetchVoices(instanceId: string): Promise<Array<{ value: string; label: string }>>;
 }
 
 // ── Generation Service ──

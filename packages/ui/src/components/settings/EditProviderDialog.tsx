@@ -146,7 +146,11 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
     if (isVolcengine) setValidating(true);
 
     try {
-      if (typeDef?.typeId === BUILTIN_TYPE_IDS.SEEDANCE || typeDef?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE) {
+      if (
+        typeDef?.typeId === BUILTIN_TYPE_IDS.SEEDANCE ||
+        typeDef?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE ||
+        typeDef?.typeId === BUILTIN_TYPE_IDS.MINIMAX
+      ) {
         const apiKeyWasMasked = !credentials.apiKey?.trim() && (hasEncPassword || !!originalConfig.apiKey?.trim());
 
         if (apiKeyWasMasked) {

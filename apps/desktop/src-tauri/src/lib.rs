@@ -6,6 +6,7 @@ mod media;
 use commands::asset_task::AssetTaskManager;
 use commands::generation_log::GenerationLogManager;
 use commands::generation_task::GenerationTaskManager;
+use commands::minimax_tts::MinimaxTaskManager;
 use commands::seedance_api::SeedanceState;
 use db::DbState;
 use media::preview::PreviewSessionManager;
@@ -146,17 +147,20 @@ pub fn run() {
             commands::provider_key::has_provider_credentials,
             commands::provider_key::save_provider_credentials,
             commands::provider_key::delete_provider_credentials,
-            commands::provider_key::validate_provider_credentials,
             commands::provider_key::update_provider_credentials,
             commands::provider_config::export_multi_provider_config,
             commands::provider_config::verify_multi_provider_config,
             commands::provider_config::import_multi_provider_config,
             commands::generation_task::seedance_start_generation,
             commands::generation_task::seedance_cancel_generation,
-            commands::generation_task::seedance_list_pending_tasks,
+            commands::generation_task::list_pending_tasks,
             commands::generation_task::seedance_resume_generation,
-            commands::generation_task::seedance_acknowledge_task,
+            commands::generation_task::acknowledge_task,
             commands::generation_task::seedance_batch_query_tasks,
+            commands::minimax_tts::minimax_tts_start_generation,
+            commands::minimax_tts::minimax_tts_cancel_generation,
+            commands::minimax_tts::minimax_tts_resume_generation,
+            commands::minimax_tts::minimax_get_voices,
             commands::generation_log::write_generation_log,
             commands::seedance_api::seedance_create_task,
             commands::seedance_api::seedance_get_task_status,
@@ -247,6 +251,11 @@ pub fn run() {
             let client = app.state::<SeedanceState>().http.clone();
             let log_manager = GenerationLogManager::new();
             app.manage(GenerationTaskManager::new(
+                app.handle().clone(),
+                client.clone(),
+                log_manager.clone(),
+            ));
+            app.manage(MinimaxTaskManager::new(
                 app.handle().clone(),
                 client.clone(),
                 log_manager.clone(),

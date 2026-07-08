@@ -97,8 +97,13 @@ impl GenerationLogger {
         self.approx_bytes += line_bytes;
         self.entries_since_flush += 1;
 
-        // Periodic flush — every FLUSH_INTERVAL_ENTRIES entries
-        if self.entries_since_flush >= FLUSH_INTERVAL_ENTRIES {
+        // Periodic flush — every FLUSH_INTERVAL_ENTRIES entries.
+        // Error-level entries flush immediately so a fast-failing task (e.g. a
+        // create-task error that exits well before the threshold) never leaves
+        // its failure log stranded in the buffer.
+        let should_flush = self.entries_since_flush >= FLUSH_INTERVAL_ENTRIES
+            || entry.level == LogLevel::Error;
+        if should_flush {
             self.file
                 .flush()
                 .map_err(|e| format!("Log flush failed: {}", e))?;

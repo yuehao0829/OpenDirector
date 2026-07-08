@@ -40,6 +40,7 @@ import {
   hydrateImportedProjectAssetMetadata,
 } from './media-exchange-project';
 import {
+  buildReferencedAssetIds,
   hydrateProjectVideoSourceAudioMetadata,
   mergeProjectAssetMetadata,
   persistProjectAssetsFile,
@@ -244,7 +245,8 @@ async function syncHydratedProjectAssetsToCurrentProject(
 }
 
 export async function ensureProjectVideoSourceAudioMetadata(project: Project): Promise<Project> {
-  if (!projectNeedsVideoSourceAudioMetadataHydration(project)) {
+  const referencedAssetIds = buildReferencedAssetIds(project);
+  if (!projectNeedsVideoSourceAudioMetadataHydration(project, referencedAssetIds)) {
     return project;
   }
 
@@ -256,7 +258,11 @@ export async function ensureProjectVideoSourceAudioMetadata(project: Project): P
     createdHydrationPromise = true;
     hydrationPromise = (async () => {
       const adapter = await getPlatformAdapter();
-      const hydratedProject = await hydrateProjectVideoSourceAudioMetadata(project, adapter.fs);
+      const hydratedProject = await hydrateProjectVideoSourceAudioMetadata(
+        project,
+        adapter.fs,
+        referencedAssetIds,
+      );
 
       if (hydratedProject !== project) {
         try {

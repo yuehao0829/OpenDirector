@@ -8,6 +8,7 @@ export * from './duration';
 export * from './common';
 export * from './encoding';
 export * from './aspect-ratio';
+export * from './audio-params';
 export * from './crop';
 export * from './native-preview-occlusion';
 export * from './otio';

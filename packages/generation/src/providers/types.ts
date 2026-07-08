@@ -23,6 +23,9 @@ export interface GenerationProvider {
 
   checkStatus?(): Promise<ProviderStatus>;
   getQuota?(): Promise<QuotaInfo>;
+
+  /** Fetch voice options for TTS providers (e.g. MiniMax cloud voices). */
+  fetchVoices?(): Promise<Array<{ value: string; label: string }>>;
 }
 
 export interface ProviderStatus {

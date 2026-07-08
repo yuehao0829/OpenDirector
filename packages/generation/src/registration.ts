@@ -24,6 +24,10 @@ import {
   restoreProjectGenerations,
 } from './tasks/bridge';
 import { registerBuiltinProviderTypes } from './providers';
+// Importing the controllers index auto-registers all built-in TaskControllers
+// (seedance, minimax, gpt-image) at module load — mirrors the provider-type
+// registration pattern. This must run before any task is submitted/cancelled/recovered.
+import './tasks/controllers';
 
 // providerTypeRegistry satisfies IProviderTypeRegistry — direct assignment
 const typeRegistryAdapter: IProviderTypeRegistry = providerTypeRegistry;
@@ -35,6 +39,7 @@ const runtimeRegistryAdapter: IProviderRuntimeRegistry = {
     providerRuntimeRegistry.getOrInitializeAssetProvider.bind(providerRuntimeRegistry),
   reinitializeInstance: providerRuntimeRegistry.reinitializeInstance.bind(providerRuntimeRegistry),
   dispose: providerRuntimeRegistry.dispose.bind(providerRuntimeRegistry),
+  fetchVoices: (instanceId) => providerRuntimeRegistry.fetchVoices(instanceId),
 };
 
 const generationServiceAdapter: IGenerationService = {

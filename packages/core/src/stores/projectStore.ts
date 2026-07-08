@@ -297,9 +297,22 @@ export const useProjectStore = create<ProjectState & ProjectActions>()(
 // ============================================================================
 // Cross-store subscriptions
 // ============================================================================
+//
+// Wire up cross-store dirty tracking. The `as StoreWithSubscribe` cast +
+// optional chaining (`?.`) tolerates test environments where the stores are
+// replaced with mocks that don't expose `subscribe`. In production, zustand's
+// `subscribeWithSelector` middleware always provides `subscribe`.
+
+type StoreWithSubscribe = {
+  subscribe?: (
+    selector: (state: any) => unknown,
+    listener: () => void,
+    options?: { equalityFn?: (a: unknown, b: unknown) => boolean },
+  ) => void;
+};
 
 // Mark project dirty when timeline data changes
-useTimelineStore.subscribe(
+(useTimelineStore as StoreWithSubscribe).subscribe?.(
   (state) => [state.tracks, state.fragments, state.scenes, state.duration] as const,
   () => {
     if (!isDirtyTrackingSuppressed() && useProjectStore.getState().currentProject) {
@@ -307,11 +320,11 @@ useTimelineStore.subscribe(
       useProjectStore.getState().markDirty();
     }
   },
-  { equalityFn: shallow }
+  { equalityFn: shallow },
 );
 
 // Mark project dirty when assets change
-useAssetStore.subscribe(
+(useAssetStore as StoreWithSubscribe).subscribe?.(
   (state) => state.assets,
   () => {
     if (!isDirtyTrackingSuppressed() && useProjectStore.getState().currentProject) {
@@ -319,5 +332,5 @@ useAssetStore.subscribe(
       useProjectStore.getState().markDirty();
     }
   },
-  { equalityFn: shallow }
+  { equalityFn: shallow },
 );

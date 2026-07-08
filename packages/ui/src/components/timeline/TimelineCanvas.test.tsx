@@ -94,6 +94,7 @@ const snapUtilsState = vi.hoisted(() => ({
         }) as { time: number; snapLines: Array<{ time: number; type: string }> },
     ),
     findNearestValidGroupDelta: vi.fn((delta: number) => ({ delta, adjusted: false })),
+    pixelDistanceToTime: vi.fn((pixels: number, zoom: number) => (pixels * 1000) / zoom),
   },
 }));
 
@@ -122,6 +123,8 @@ vi.mock('@opendirector/core/utils/snap', () => ({
     snapUtilsState.current.findSnapPointsForDrag(startTime),
   findNearestValidGroupDelta: (delta: number) =>
     snapUtilsState.current.findNearestValidGroupDelta(delta),
+  pixelDistanceToTime: (pixels: number, zoom: number) =>
+    snapUtilsState.current.pixelDistanceToTime(pixels, zoom),
 }));
 
 vi.mock('../../hooks/useTimelineShortcuts', () => ({
@@ -133,7 +136,8 @@ vi.mock('./Toolbar', () => ({
 }));
 
 vi.mock('./Playhead', () => ({
-  Playhead: () => <div data-testid="timeline-playhead" />,
+  PlayheadHandle: () => <div data-testid="playhead-handle" />,
+  PlayheadLine: () => <div data-testid="playhead-line" />,
 }));
 
 vi.mock('./TimeRuler', () => ({
@@ -421,9 +425,10 @@ describe('TimelineCanvas', () => {
     expect(timelineState.current.pause).not.toHaveBeenCalled();
     expect(timelineState.current.setPlayhead).not.toHaveBeenCalled();
 
+    // handleRulerMouseUp is attached to window, so dispatch mouseup there
     await act(async () => {
-      timeRuler.dispatchEvent(
-        new MouseEvent('click', {
+      window.dispatchEvent(
+        new MouseEvent('mouseup', {
           bubbles: true,
           clientX: 300,
           clientY: 12,

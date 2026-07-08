@@ -21,6 +21,33 @@ pub(crate) fn strip_url_scheme(url: &str) -> &str {
         .unwrap_or(url)
 }
 
+/// Enforce HTTPS on a base URL. Returns an error for `http://` URLs and
+/// prepends `https://` when no scheme is present.
+pub(crate) fn enforce_https(url: &str) -> Result<String, String> {
+    if url.starts_with("https://") {
+        Ok(url.to_string())
+    } else if url.starts_with("http://") {
+        Err(format!(
+            "HTTP URLs are not allowed for security reasons: {}",
+            url
+        ))
+    } else {
+        Ok(format!("https://{}", url))
+    }
+}
+
+/// Extract the origin (scheme://host) from a URL, dropping any path segments.
+/// e.g. `"https://ark.cn-beijing.volces.com/api/v3/..."` → `"https://ark.cn-beijing.volces.com"`
+pub(crate) fn extract_origin(url: &str) -> String {
+    match url.find("://") {
+        Some(i) => match url[i + 3..].find('/') {
+            Some(j) => url[..i + 3 + j].to_string(),
+            None => url.to_string(),
+        },
+        None => url.to_string(),
+    }
+}
+
 /// Defaults to `"ak"`.
 pub(crate) fn resolve_auth_query_key(auth_query_key: Option<&str>) -> &str {
     auth_query_key

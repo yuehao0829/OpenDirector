@@ -213,10 +213,11 @@ describe('exportTimelineRenderProject', () => {
         { name: t('common.fileFilters.mp3Audio'), extensions: ['mp3'] },
       ]);
     expect(renderMock).toHaveBeenCalledWith({
+      backend: undefined,
       outputPath: 'C:/Exports/final-cut.mov',
       outputFormat: 'mov',
-      width: 1920,
-      height: 1080,
+      width: 1280,
+      height: 720,
       fps: 25,
       tracks: [
         { id: 'video-top', type: 'video', muted: false, order: 2 },
@@ -232,7 +233,9 @@ describe('exportTimelineRenderProject', () => {
           startMs: 1000,
           durationMs: 3000,
           trimStartMs: 250,
+          mute: undefined,
           crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 },
+          transform: undefined,
         },
         {
           id: 'audio-fragment',
@@ -241,6 +244,10 @@ describe('exportTimelineRenderProject', () => {
           inputPath: 'D:/Media/voice.wav',
           startMs: 0,
           durationMs: 2500,
+          trimStartMs: undefined,
+          mute: undefined,
+          crop: undefined,
+          transform: undefined,
         },
       ],
     });

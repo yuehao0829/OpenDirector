@@ -9,4 +9,5 @@ export * from './media-backend';
 export * from './media-preview';
 export * from './media-exchange';
 export * from './provider-system';
+export * from './param-layout';
 export * from './service-interfaces';

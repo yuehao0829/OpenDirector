@@ -79,7 +79,7 @@ export function PreviewPanel() {
 
   const addAsset = useAssetStore((s) => s.addAsset);
 
-  const projectFps = useProjectStore((s) => s.currentProject?.settings.fps);
+  const projectFps = useProjectStore((s) => s.currentProject?.settings?.fps);
 
   // Preview store for asset mode
   const previewIsPlaying = usePreviewStore((s) => s.isPlaying);

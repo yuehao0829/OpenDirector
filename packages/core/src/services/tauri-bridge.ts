@@ -7,7 +7,6 @@
 
 import type {
   ProviderCredentials,
-  CredentialValidation,
   SeedanceTaskParams,
   CreateTaskResult,
   TaskStatusResult,
@@ -22,6 +21,8 @@ import type {
   PendingGenerationTask,
   OpenAiImageGenerationParams,
   OpenAiImageGenerationResult,
+  MinimaxTtsStartGenerationParams,
+  MinimaxGetVoicesResult,
 } from '../types/ai-video';
 import type { FileUploadResult } from '../types/asset-provider';
 import type {
@@ -81,11 +82,6 @@ export const providerKey = {
     return invoke('delete_provider_credentials', { providerId });
   },
 
-  /** Validate credentials by testing the ARK API Key with a lightweight API call */
-  validate(providerId: string, password: string): Promise<CredentialValidation> {
-    return invoke('validate_provider_credentials', { providerId, password });
-  },
-
   /** Save Volcengine credentials: generate random password, encrypt and write .enc, return password */
   async saveVolcengineCredentials(
     providerId: string,
@@ -99,7 +95,7 @@ export const providerKey = {
     const password = generateRandomHexPassword();
 
     const credentials: ProviderCredentials = {
-      ark_api_key: '',
+      api_key: '',
       ak: params.ak,
       sk: params.sk,
       region: params.region,
@@ -126,7 +122,7 @@ export const providerKey = {
     const password = generateRandomHexPassword();
 
     const credentials: ProviderCredentials = {
-      ark_api_key: apiKey,
+      api_key: apiKey,
       ak: '',
       sk: '',
       region: '',
@@ -203,19 +199,9 @@ export const seedanceApi = {
     return invoke('seedance_cancel_generation', { taskId });
   },
 
-  /** List pending generation tasks that were in-flight when the app last closed */
-  listPendingTasks(): Promise<PendingGenerationTask[]> {
-    return invoke('seedance_list_pending_tasks');
-  },
-
   /** Resume a pending generation task after app restart */
   resumeGeneration(taskId: string, password: string): Promise<boolean> {
     return invoke('seedance_resume_generation', { taskId, password });
-  },
-
-  /** Acknowledge a completed/failed task - deletes the persisted record */
-  acknowledgeTask(taskId: string): Promise<void> {
-    return invoke('seedance_acknowledge_task', { taskId });
   },
 
   createTask(providerId: string, password: string, params: SeedanceTaskParams): Promise<CreateTaskResult> {
@@ -307,6 +293,30 @@ export const seedanceApi = {
 export const openAIImageApi = {
   generateImage(params: OpenAiImageGenerationParams): Promise<OpenAiImageGenerationResult> {
     return invoke('openai_generate_image', { params });
+  },
+};
+
+// ─── MiniMax TTS API (pure Bearer, async create/poll/download via Rust) ───
+
+export const minimaxTtsApi = {
+  /** Start a full TTS lifecycle (create + poll + download) in a Rust background task. Returns the local task_id. */
+  startGeneration(params: MinimaxTtsStartGenerationParams): Promise<string> {
+    return invoke('minimax_tts_start_generation', { params });
+  },
+
+  /** Cancel a running TTS task (stops local polling; the MiniMax-side task continues) */
+  cancelGeneration(taskId: string): Promise<boolean> {
+    return invoke('minimax_tts_cancel_generation', { taskId });
+  },
+
+  /** Resume a pending TTS task after app restart */
+  resumeGeneration(taskId: string, password: string): Promise<boolean> {
+    return invoke('minimax_tts_resume_generation', { taskId, password });
+  },
+
+  /** Fetch available voices (system / cloned / designed) from /v1/get_voice */
+  getVoices(providerId: string, password: string): Promise<MinimaxGetVoicesResult> {
+    return invoke('minimax_get_voices', { providerId, password });
   },
 };
 
@@ -500,6 +510,29 @@ export const previewApi = {
   },
 };
 
+// ─── Shared Generation Task API (provider-agnostic) ───
+
+/**
+ * Acknowledge a completed/failed task — deletes the persisted pending record.
+ *
+ * Provider-agnostic: the pending-tasks directory is shared across all async
+ * generation providers (Seedance, MiniMax, …), and `task_id` is a globally
+ * unique UUID, so a single command serves every provider type. This replaces
+ * the former per-provider `seedanceApi.acknowledgeTask` /
+ * `minimaxTtsApi.acknowledgeTask` wrappers (which were byte-identical).
+ */
+export async function acknowledgeTask(taskId: string): Promise<void> {
+  return invoke('acknowledge_task', { taskId });
+}
+
+/**
+ * List pending generation tasks (across all providers) that were in-flight
+ * when the app last closed. Scans the shared pending-tasks directory.
+ */
+export async function listPendingTasks(): Promise<PendingGenerationTask[]> {
+  return invoke('list_pending_tasks');
+}
+
 // ─── Singleton ───
 
 /** Subscribe to a Tauri event. Only works in the Tauri desktop shell. */
@@ -517,11 +550,15 @@ export const tauriBridge = {
   providerConfig,
   seedanceApi,
   openAIImageApi,
+  minimaxTtsApi,
   tosApi,
   assetTaskApi,
   mediaApi,
   previewApi,
   generationLogApi,
+  // Provider-agnostic generation task commands (shared pending-tasks dir)
+  acknowledgeTask,
+  listPendingTasks,
   listen,
   isTauri,
 };

@@ -70,6 +70,16 @@ class ProviderRuntimeRegistry {
     return this.assetProviders.get(instanceId);
   }
 
+  /**
+   * Fetch voice options for a generation provider instance.
+   * Returns [] for non-voice providers (Seedance/GPT-Image) and unknown /
+   * uninitialized instances.
+   */
+  async fetchVoices(instanceId: string): Promise<Array<{ value: string; label: string }>> {
+    const provider = await this.getOrInitializeGenerationProvider(instanceId);
+    return provider?.fetchVoices?.() ?? [];
+  }
+
   private async buildGenerationProvider(
     instance: ProviderInstance,
     typeDef: ProviderTypeDefinition,
@@ -83,6 +93,10 @@ class ProviderRuntimeRegistry {
         case BUILTIN_TYPE_IDS.OPENAI_IMAGE: {
           const { GptImageProvider } = await import('./gpt-image');
           return new GptImageProvider(instance.instanceId);
+        }
+        case BUILTIN_TYPE_IDS.MINIMAX: {
+          const { MiniMaxProvider } = await import('./minimax');
+          return new MiniMaxProvider(instance.instanceId);
         }
         default:
           throw new Error(`No constructor for built-in provider: ${typeDef.typeId}`);

@@ -33,13 +33,14 @@ import {
   buildGeneratedAsset,
   generatedImagePath,
   generatedVideoPath,
+  generatedAudioPath,
   mimeTypeToExtension,
 } from './generation-xml-repository';
-import { handleTaskComplete, markRecordTerminal, triggerNextSegmentIfNeeded } from './task-lifecycle';
+import { markRecordTerminal, triggerNextSegmentIfNeeded } from './task-lifecycle';
 import { resetFragmentIfGenerating } from './fragment-utils';
-import { failGeneration, cancelGeneration, expireGeneration } from './store-sync';
 import { taskLog } from './task-log';
 import { safeSaveAsset } from './task-db-helpers';
+import { getTaskController, type TaskController } from './task-controller-registry';
 
 /**
  * Restore project generations when opening a project.
@@ -52,7 +53,7 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
 
   const [file, pendingTasksResult] = await Promise.allSettled([
     readGenerationsFile(folderPath, fs),
-    tauriBridge.seedanceApi.listPendingTasks(),
+    tauriBridge.listPendingTasks(),
   ]);
 
   if (file.status !== 'fulfilled' || !file.value) return;
@@ -71,89 +72,170 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
     pendingTasksResult.status === 'fulfilled' ? pendingTasksResult.value : [];
 
   const activeTaskIds = new Set(pendingTasks.map((t) => t.task_id));
-  const seedanceInstance = getAnySeedanceInstance();
   const storeUpdates: Array<{ id: string; updates: { status: GenerationRecord['status']; errorMessage?: string } }> = [];
 
+  // Resolve the provider instance + TaskController for a transient record
+  // (falls back to the XML record's providerInstanceId when no pending task
+  // file exists). Returns the controller (or undefined if the typeId is
+  // unregistered — callers skip-with-warning, NO silent seedance fallback).
+  const resolveRecordController = (record: GenerationRecord): { instance: ProviderInstance | undefined; controller: TaskController | undefined } => {
+    const pendingRecord = pendingTasks.find((t) => t.task_id === record.id);
+    const providerId = pendingRecord?.provider_id ?? record.providerInstanceId;
+    const instance = useProviderInstanceStore.getState().get(providerId);
+    const typeId = instance?.typeId;
+    return { instance, controller: typeId ? getTaskController(typeId) : undefined };
+  };
+
+  // 1. Records with a pending task file → resume via the controller.
+  //    Each provider re-registers with its own Rust coordinator.
   for (const record of transientRecords) {
     if (!activeTaskIds.has(record.id)) continue;
-
-    const pendingRecord = pendingTasks.find((t) => t.task_id === record.id);
     restoreProcessingRecord(record);
 
-    const instance = useProviderInstanceStore.getState().get(pendingRecord?.provider_id ?? '');
+    const { instance, controller } = resolveRecordController(record);
     const password = getProviderPassword(instance);
+    if (!controller) {
+      taskLog.warn(folderPath, 'resume_no_controller', 'No TaskController for provider type', { taskId: record.id, typeId: instance?.typeId });
+      const idx = generationsFile.generations.findIndex((g) => g.id === record.id);
+      if (idx >= 0) {
+        markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.serviceNotConfigured'));
+        if (record.fragmentId) {
+          resetFragmentIfGenerating(record.fragmentId, 'failed');
+        }
+      }
+      continue;
+    }
     if (password) {
       try {
-        await tauriBridge.seedanceApi.resumeGeneration(record.id, password);
-        taskLog.info(folderPath, 'resume_task', 'Resuming Rust-tracked task', { taskId: record.id });
+        await controller.resume(record.id, password);
+        taskLog.info(folderPath, 'resume_task', 'Resuming Rust-tracked task', { taskId: record.id, typeId: instance?.typeId });
       } catch (err) {
         taskLog.warn(folderPath, 'resume_error', 'Failed to resume Rust-tracked task', { taskId: record.id, error: String(err) });
+      }
+    } else {
+      // No credentials (e.g. provider instance deleted) — cannot resume. Mark failed so the
+      // task + fragment are not stuck in 'processing'/'generating' forever.
+      const idx = generationsFile.generations.findIndex((g) => g.id === record.id);
+      if (idx >= 0) {
+        markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.serviceNotConfigured'));
+        if (record.fragmentId) {
+          resetFragmentIfGenerating(record.fragmentId, 'failed');
+        }
       }
     }
   }
 
   const staleRecords = transientRecords.filter((r) => !activeTaskIds.has(r.id));
   if (staleRecords.length > 0) {
-    if (!seedanceInstance) {
-      for (const record of staleRecords) {
-        const idx = generationsFile.generations.findIndex((g) => g.id === record.id);
-        if (idx < 0) continue;
-        const errorMsg = t('generation.task.serviceNotConfigured');
-        generationsFile.generations[idx] = {
-          ...generationsFile.generations[idx],
-          status: 'failed',
-          error: errorMsg,
-          completedAt: new Date().toISOString(),
-        };
-        storeUpdates.push({ id: record.id, updates: { status: 'failed', errorMessage: errorMsg } });
+    // Build index for O(1) lookups
+    const recordIndex = new Map<string, number>();
+    for (let i = 0; i < generationsFile.generations.length; i++) {
+      recordIndex.set(generationsFile.generations[i].id, i);
+    }
+
+    // Group stale records by controller. Controllers without `batchQuery`
+    // (MiniMax, GPT-Image) are unrecoverable from JS without a pending file
+    // → mark failed. Controllers with `batchQuery` (Seedance) get the
+    // server-status-query flow.
+    const pollableStale: Array<{ record: GenerationRecord; controller: TaskController; instance: ProviderInstance | undefined }> = [];
+    for (const record of staleRecords) {
+      const idx = recordIndex.get(record.id) ?? -1;
+      if (idx < 0) continue;
+
+      const { instance, controller } = resolveRecordController(record);
+      if (!controller) {
+        taskLog.warn(folderPath, 'stale_no_controller', 'No TaskController for stale record', { taskId: record.id, typeId: instance?.typeId });
+        markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.lostAfterRestart'));
+        continue;
       }
-    } else {
-      const providerTaskIds = staleRecords.map((r) => r.providerTaskId).filter((id): id is string => !!id);
-      const serverStatusMap = await batchQueryServerStatuses(providerTaskIds, seedanceInstance, folderPath);
-      const seedancePassword = getProviderPassword(seedanceInstance);
+      if (!controller.batchQuery) {
+        // Event-driven or synchronous provider with no JS-side polling —
+        // without a pending file there is no way to recover. Mark failed
+        // (matches the former minimaxStale behavior).
+        markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.lostAfterRestart'));
+        continue;
+      }
+      // Has batchQuery → collect for the server-query flow below.
+      pollableStale.push({ record, controller, instance });
+    }
 
-      // Build index for O(1) lookups
-      const recordIndex = new Map<string, number>();
-      for (let i = 0; i < generationsFile.generations.length; i++) {
-        recordIndex.set(generationsFile.generations[i].id, i);
+    // Server-query flow for controllers that support JS-side polling (Seedance).
+    // Group by controller so each controller's batchQuery is called once with
+    // all its stale task IDs.
+    if (pollableStale.length > 0) {
+      const byController = new Map<TaskController, typeof pollableStale>();
+      for (const item of pollableStale) {
+        const group = byController.get(item.controller) ?? [];
+        group.push(item);
+        byController.set(item.controller, group);
       }
 
-      for (const record of staleRecords) {
-        const idx = recordIndex.get(record.id) ?? -1;
-        if (idx < 0) continue;
+      for (const [controller, items] of byController) {
+        // Type guard — controllers without batchQuery were filtered out above,
+        // but TypeScript can't narrow through the Map iteration.
+        if (!controller.batchQuery) continue;
 
-        if (!record.providerTaskId) {
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.missingServerId'));
+        // Resolve an instance for credentials (use the first available).
+        const instance = items.find((i) => i.instance)?.instance;
+        if (!instance) {
+          for (const { record } of items) {
+            const idx = recordIndex.get(record.id) ?? -1;
+            if (idx < 0) continue;
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.serviceNotConfigured'));
+          }
           continue;
         }
 
-        const serverResult = serverStatusMap.get(record.providerTaskId);
-        const serverStatus = serverResult?.status;
+        const password = getProviderPassword(instance);
+        const providerTaskIds = items
+          .map((i) => i.record.providerTaskId)
+          .filter((id): id is string => !!id);
+        const serverResultsArray = await controller.batchQuery(instance, password, providerTaskIds);
+        const serverStatusMap = new Map<string, TaskStatusResult>();
+        for (const r of serverResultsArray) {
+          serverStatusMap.set(r.task_id, r);
+        }
+        if (folderPath) {
+          taskLog.info(folderPath, 'batch_query_result', 'Batch query succeeded', { count: serverResultsArray.length });
+        }
 
-        if (serverStatus === 'running' || serverStatus === 'pending') {
-          restoreProcessingRecord(record);
-          if (seedancePassword) {
-            try {
-              await tauriBridge.seedanceApi.resumeGeneration(record.id, seedancePassword);
-            } catch (err) {
-              taskLog.warn(folderPath, 'reregister_error', 'Failed to re-register server-tracked task with Rust', { taskId: record.id, error: String(err) });
+        for (const { record } of items) {
+          const idx = recordIndex.get(record.id) ?? -1;
+          if (idx < 0) continue;
+
+          if (!record.providerTaskId) {
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.missingServerId'));
+            continue;
+          }
+
+          const serverResult = serverStatusMap.get(record.providerTaskId);
+          const serverStatus = serverResult?.status;
+
+          if (serverStatus === 'running' || serverStatus === 'pending') {
+            restoreProcessingRecord(record);
+            if (password) {
+              try {
+                await controller.resume(record.id, password);
+              } catch (err) {
+                taskLog.warn(folderPath, 'reregister_error', 'Failed to re-register server-tracked task with Rust', { taskId: record.id, error: String(err) });
+              }
             }
+          } else if (serverStatus === 'succeeded') {
+            try {
+              const updatedRecord = await restoreSucceededTask(record, folderPath, fs, serverResult!, controller);
+              generationsFile.generations[idx] = updatedRecord;
+            } catch (error) {
+              taskLog.error(folderPath, 'restore_error', 'Failed to restore succeeded task', { taskId: record.id, error: getErrorMessage(error) });
+              markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.restoreSucceededFailed', { message: getErrorMessage(error) }));
+            }
+          } else if (serverStatus === 'cancelled') {
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'cancelled');
+          } else if (serverStatus === 'expired') {
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'expired', t('generation.task.resultExpired'));
+          } else {
+            const errorMsg = serverStatus === 'failed' ? t('generation.task.serverFailed') : t('generation.task.lostAfterRestart');
+            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', errorMsg);
           }
-        } else if (serverStatus === 'succeeded') {
-          try {
-            const updatedRecord = await restoreSucceededTask(record, folderPath, fs, serverResult!);
-            generationsFile.generations[idx] = updatedRecord;
-          } catch (error) {
-            taskLog.error(folderPath, 'restore_error', 'Failed to restore succeeded task', { taskId: record.id, error: getErrorMessage(error) });
-            markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', t('generation.task.restoreSucceededFailed', { message: getErrorMessage(error) }));
-          }
-        } else if (serverStatus === 'cancelled') {
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'cancelled');
-        } else if (serverStatus === 'expired') {
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'expired', t('generation.task.resultExpired'));
-        } else {
-          const errorMsg = serverStatus === 'failed' ? t('generation.task.serverFailed') : t('generation.task.lostAfterRestart');
-          markRecordTerminal(generationsFile, idx, storeUpdates, 'failed', errorMsg);
         }
       }
     }
@@ -173,68 +255,32 @@ export async function restoreProjectGenerations(folderPath: string): Promise<voi
 }
 
 /**
- * Batch query server statuses for multiple provider task IDs.
- * Returns a Map from providerTaskId to full TaskStatusResult.
- */
-async function batchQueryServerStatuses(
-  providerTaskIds: string[],
-  instance: ProviderInstance,
-  folderPath?: string,
-): Promise<Map<string, TaskStatusResult>> {
-  const result = new Map<string, TaskStatusResult>();
-  if (providerTaskIds.length === 0) return result;
-
-  const password = getProviderPassword(instance);
-  if (!password) return result;
-
-  try {
-    const results = await tauriBridge.seedanceApi.batchQueryTasks(instance.instanceId, password, providerTaskIds);
-    for (const r of results) {
-      result.set(r.task_id, r);
-    }
-    if (folderPath) {
-      taskLog.info(folderPath, 'batch_query_result', 'Batch query succeeded', {
-        count: results.length,
-      });
-    }
-  } catch {
-    if (folderPath) {
-      taskLog.warn(folderPath, 'batch_query_fallback', 'Batch query failed, falling back to individual queries', {
-        count: providerTaskIds.length,
-      });
-    }
-    const statuses = await Promise.allSettled(
-      providerTaskIds.map((id) =>
-        tauriBridge.seedanceApi.getTaskStatus(instance.instanceId, password, id)
-      ),
-    );
-    for (let i = 0; i < providerTaskIds.length; i++) {
-      const settled = statuses[i];
-      if (settled.status === 'fulfilled') {
-        result.set(providerTaskIds[i], settled.value);
-      }
-    }
-  }
-
-  return result;
-}
-
-/**
  * Restore a server-completed task that has no local result.
  * Downloads video, creates asset, and updates all stores.
+ *
+ * The `controller` provides the provider-specific `downloadResult` method
+ * (replacing the former direct `seedanceApi.downloadGenerationVideo` call).
  */
 async function restoreSucceededTask(
   record: GenerationRecord,
   folderPath: string,
   fs: NonNullable<Awaited<ReturnType<typeof getFs>>>,
   serverResult: TaskStatusResult,
+  controller: TaskController,
 ): Promise<GenerationRecord> {
   if (!record.providerTaskId) throw new Error('Missing providerTaskId');
 
   const videoUrl = serverResult.result_url;
   if (!videoUrl) throw new Error('Server task succeeded but no video_url returned');
 
-  const downloadResult = await tauriBridge.seedanceApi.downloadGenerationVideo(videoUrl, folderPath, record.id);
+  if (!controller.downloadResult) {
+    throw new Error('Controller does not support downloadResult');
+  }
+  const downloadResult = await controller.downloadResult({
+    url: videoUrl,
+    projectPath: folderPath,
+    generationId: record.id,
+  });
   const localPath = downloadResult.file_path;
   const fileSize = downloadResult.file_size;
 
@@ -346,110 +392,54 @@ function restoreProcessingRecord(record: GenerationRecord): void {
   }
 }
 
-function getAnySeedanceInstance(): ProviderInstance | undefined {
-  return useProviderInstanceStore.getState().getByType('seedance')[0];
-}
-
 /**
- * Manually refresh active generation tasks by querying the server.
- * Uses batch query API for multiple tasks, single query for one.
- * Triggers completion/download flow on status changes.
+ * Manually refresh active generation tasks.
+ *
+ * Groups active generations by their provider's TaskController and delegates
+ * to `controller.refreshActive?.()` for each. Only Seedance implements
+ * `refreshActive` (it has a JS-side batch query endpoint). Event-driven
+ * providers (MiniMax) and synchronous providers (GPT Image) are skipped with
+ * a warning — their state is driven by Rust coordinator events, not JS polling.
  */
 export async function refreshActiveGenerations(): Promise<void> {
   const store = useGenerationStore.getState();
   const activeGenerations = store.generations.filter((g) => isActiveGenerationStatus(g.status));
   if (activeGenerations.length === 0) return;
 
-  const instance = getAnySeedanceInstance();
-
-  if (!instance) {
-    taskLog.warn(undefined, 'refresh_no_provider', 'No Seedance provider configured');
-    return;
-  }
-
-  const gensWithApiId = activeGenerations.filter((g) => g.providerTaskId);
-  if (gensWithApiId.length === 0) {
-    taskLog.info(undefined, 'refresh_no_tasks', 'No active generations with providerTaskId to query');
-    return;
-  }
-
-  const project = useProjectStore.getState().currentProject;
-  const folderPath = project?.folderPath;
-
-  const apiTaskIds = gensWithApiId.map((g) => g.providerTaskId!);
-  const serverResults = await batchQueryServerStatuses(apiTaskIds, instance, folderPath);
-  taskLog.info(folderPath, 'refresh_results', 'Query results', { results: Object.fromEntries(serverResults) });
-
-  const password = getProviderPassword(instance);
-
-  for (const gen of gensWithApiId) {
-    const serverResult = serverResults.get(gen.providerTaskId!);
-    if (!serverResult) continue;
-
-    const serverStatus = serverResult.status;
-
-    if (serverStatus === 'succeeded') {
-      const videoUrl = serverResult.result_url;
-      if (!videoUrl) continue;
-      // Server already finished — resumeGeneration only re-registers with Rust,
-      // it won't produce further events. Always perform JS-side download + completion.
-      try {
-        await tauriBridge.seedanceApi.resumeGeneration(gen.id, password);
-      } catch (err) {
-        taskLog.warn(folderPath, 'refresh_resume_error', 'resumeGeneration failed', { taskId: gen.id, error: String(err) });
-      }
-      await refreshSucceededTaskFromServer(gen, serverResult, folderPath);
-    } else if (serverStatus === 'failed') {
-      const error = serverResult.error
-        ? (typeof serverResult.error === 'string' ? serverResult.error : JSON.stringify(serverResult.error))
-        : t('generation.task.serverFailed');
-      if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
-      const written = await failGeneration(gen.id, error, folderPath);
-      if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
-    } else if (serverStatus === 'cancelled') {
-      if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'draft');
-      const written = await cancelGeneration(gen.id, folderPath);
-      if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
-    } else if (serverStatus === 'expired') {
-      const error = t('generation.task.resultExpired');
-      if (gen.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
-      const written = await expireGeneration(gen.id, error, folderPath);
-      if (written) { try { await tauriBridge.seedanceApi.acknowledgeTask(gen.id); } catch { /* acknowledgement is best-effort */ } }
+  // Group active generations by controller (resolved via typeId).
+  const gensByController = new Map<TaskController, Generation[]>();
+  for (const gen of activeGenerations) {
+    const instance = useProviderInstanceStore.getState().get(gen.providerInstanceId);
+    const typeId = instance?.typeId;
+    if (!typeId) {
+      taskLog.warn(undefined, 'refresh_no_type', 'Active generation has no provider type', { taskId: gen.id });
+      continue;
     }
+    const controller = getTaskController(typeId);
+    if (!controller) {
+      taskLog.warn(undefined, 'refresh_no_controller', 'No TaskController for active generation', { taskId: gen.id, typeId });
+      continue;
+    }
+    if (!controller.refreshActive) {
+      // Event-driven (MiniMax) or synchronous (GPT Image) — no JS-side polling.
+      taskLog.info(undefined, 'refresh_skip_event_driven', 'Skipping refresh for provider without JS polling', { taskId: gen.id, typeId });
+      continue;
+    }
+    const group = gensByController.get(controller) ?? [];
+    group.push(gen);
+    gensByController.set(controller, group);
   }
-}
 
-/**
- * Handle a succeeded task discovered by refresh, using JS-side download + asset creation.
- * Used when Rust resumeGeneration fails (coordinator lost track of the task).
- */
-async function refreshSucceededTaskFromServer(
-  gen: Generation,
-  serverResult: TaskStatusResult,
-  folderPath?: string,
-): Promise<void> {
-  const videoUrl = serverResult.result_url;
-  if (!videoUrl || !folderPath) return;
+  if (gensByController.size === 0) return;
 
-  try {
-    const downloadResult = await tauriBridge.seedanceApi.downloadGenerationVideo(videoUrl, folderPath, gen.id);
-    const localPath = downloadResult.file_path;
-    const fileSize = downloadResult.file_size;
+  const folderPath = useProjectStore.getState().currentProject?.folderPath;
 
-    // Delegate to handleTaskComplete for the full completion flow
-    await handleTaskComplete({
-      taskId: gen.id,
-      apiTaskId: gen.providerTaskId ?? '',
-      localPath,
-      fileSize,
-      lastFrameUrl: serverResult.last_frame_url,
-      projectPath: folderPath,
-    });
-  } catch (err) {
-    taskLog.error(folderPath, 'refresh_download_error', 'Failed to download/complete task', { taskId: gen.id, error: getErrorMessage(err) });
-    const errorMsg = t('generation.task.restoreSucceededFailed', { message: getErrorMessage(err) });
-    await failGeneration(gen.id, errorMsg, folderPath);
-  }
+  // Dispatch each controller's refreshActive concurrently.
+  await Promise.all(
+    Array.from(gensByController.entries()).map(([controller, gens]) =>
+      controller.refreshActive!(gens, folderPath),
+    ),
+  );
 }
 
 /**
@@ -496,13 +486,16 @@ async function reconcileCompletedGenerations(
     const mediaAbsPath = `${folderPath}/${mediaRelPath}`;
     const idx = recordIndex.get(record.id);
     const isImageOutput = record.outputType === 'image';
+    const isAudioOutput = record.outputType === 'audio';
 
     const mediaInfo = await readGeneratedMediaInfo(record, mediaAbsPath, fs);
 
     if (mediaInfo !== null) {
       const assetId = generateId();
       const [thumbnailSettled] = await Promise.allSettled([
-        generateThumbnailForAsset(mediaAbsPath, fs, isImageOutput ? 'image' : 'video', folderPath, assetId),
+        isAudioOutput
+          ? Promise.resolve(undefined)
+          : generateThumbnailForAsset(mediaAbsPath, fs, isImageOutput ? 'image' : 'video', folderPath, assetId),
       ]);
       const thumbnailUrl = thumbnailSettled.status === 'fulfilled' ? thumbnailSettled.value?.thumbnailUrl : undefined;
 
@@ -517,13 +510,17 @@ async function reconcileCompletedGenerations(
         videoUrl: webviewUrl,
         thumbnailUrl,
         duration: isImageOutput ? undefined : mediaInfo.duration,
-        width: mediaInfo.width,
-        height: mediaInfo.height,
+        width: isAudioOutput ? undefined : mediaInfo.width,
+        height: isAudioOutput ? undefined : mediaInfo.height,
         audioChannels: isImageOutput ? undefined : mediaInfo.audioChannels,
         sampleRate: isImageOutput ? undefined : mediaInfo.sampleRate,
         projectId: project?.id ?? '',
-        outputType: isImageOutput ? 'image' : 'video',
-        mimeType: isImageOutput ? (record.result?.mimeType ?? 'image/jpeg') : undefined,
+        outputType: isImageOutput ? 'image' : isAudioOutput ? 'audio' : 'video',
+        mimeType: isImageOutput
+          ? (record.result?.mimeType ?? 'image/jpeg')
+          : isAudioOutput
+            ? (record.result?.mimeType ?? 'audio/mpeg')
+            : undefined,
         fileExtension: isImageOutput ? inferExtensionFromPath(mediaRelPath) : undefined,
       });
       const newAssetId = asset.id;
@@ -626,6 +623,9 @@ function resolveGeneratedMediaPath(record: GenerationRecord): string {
   if (record.result?.fileName) return record.result.fileName;
   if (record.outputType === 'image') {
     return generatedImagePath(record.id, mimeTypeToExtension(record.result?.mimeType) ?? 'jpg');
+  }
+  if (record.outputType === 'audio') {
+    return generatedAudioPath(record.id);
   }
   return generatedVideoPath(record.id);
 }

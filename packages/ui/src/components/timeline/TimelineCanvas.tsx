@@ -640,10 +640,24 @@ export function TimelineCanvas() {
     return null;
   }, [clientXToTime, zoom]);
 
+  // Finalize a pending draft fragment on any canvas mousedown (ruler or content).
+  // Returns true if a draft was consumed (caller should return early).
+  const finalizeDraftIfNeeded = useCallback((): boolean => {
+    if (!draftFragment) return false;
+    if (draftPrompt.trim()) {
+      confirmDraftFragment(draftPrompt.trim());
+    } else {
+      setDraftFragment(null);
+    }
+    return true;
+  }, [draftFragment, draftPrompt, confirmDraftFragment, setDraftFragment]);
+
   // Handle ruler mousedown: starts range selection or marker drag
   const handleRulerMouseDown = useCallback((e: React.MouseEvent) => {
     // Only primary button
     if (e.button !== 0) return;
+
+    if (finalizeDraftIfNeeded()) return;
 
     const hitMarker = findHitMarker(e.clientX);
     const rawTime = clientXToTime(e.clientX, rulerScrollRef);
@@ -669,7 +683,7 @@ export function TimelineCanvas() {
     }
 
     e.preventDefault();
-  }, [findHitMarker, clientXToTime]);
+  }, [findHitMarker, clientXToTime, finalizeDraftIfNeeded]);
 
   // Helper: snap time to frame boundary and optionally to fragment/scene edges
   const snapTime = useCallback((rawTime: number): number => {
@@ -868,29 +882,17 @@ export function TimelineCanvas() {
     setContextMenu(null);
   }, []);
 
-  // Handle mouse down for selection box
+  // Handle mouse down for selection box.
+  // Note: this is bound to the content scroll area, which is a CSS-grid sibling of
+  // the ruler scroll area — ruler-originated events never reach here, so there is
+  // no need to guard against time-ruler targets.
   const handleMouseDown = (e: React.MouseEvent) => {
     setContextMenu(null);
 
-    const isTimeRulerMouseDown =
-      e.target instanceof HTMLElement && e.target.closest('[data-testid="time-ruler"]');
+    if (finalizeDraftIfNeeded()) return;
 
-    // Ruler mousedown is handled by handleRulerMouseDown
-    if (isTimeRulerMouseDown) {
-      return;
-    }
-
-    if (!isTimeRulerMouseDown && isPlaying) {
+    if (isPlaying) {
       pause();
-    }
-
-    if (draftFragment) {
-      if (draftPrompt.trim()) {
-        confirmDraftFragment(draftPrompt.trim());
-      } else {
-        setDraftFragment(null);
-      }
-      return;
     }
 
     if (toolMode !== 'select') return;

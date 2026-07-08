@@ -13,10 +13,52 @@ import type { GenerationReference, GenerationStatus } from '../../types/generati
 import type { Generation } from '../../types/generation';
 import type { AssetType } from '../../types/persistence';
 
-const PROVIDER_PARAM_KNOWN_KEYS = new Set([
-  'model', 'modelName', 'duration', 'aspectRatio', 'resolution', 'generateAudio', 'generateWatermark', 'style', 'negativePrompt',
-  'imageSize', 'imageQuality', 'imageOutputFormat', 'imageBackground', 'imageModeration', 'imageOutputCompression',
-]);
+// Single schema table driving BOTH serialize and parse of providerParams.
+// Every provider-param field declared on GenerationParams MUST appear here —
+// adding a field here is the only change needed to make it round-trip.
+const PROVIDER_PARAM_SCHEMA = [
+  { key: 'model', type: 'string' },
+  { key: 'modelName', type: 'string' },
+  { key: 'duration', type: 'number' },
+  { key: 'aspectRatio', type: 'string' },
+  { key: 'resolution', type: 'string' },
+  { key: 'generateAudio', type: 'boolean' },
+  { key: 'generateWatermark', type: 'boolean' },
+  { key: 'style', type: 'string' },
+  { key: 'negativePrompt', type: 'string' },
+  { key: 'imageSize', type: 'string' },
+  { key: 'imageQuality', type: 'string' },
+  { key: 'imageOutputFormat', type: 'string' },
+  { key: 'imageBackground', type: 'string' },
+  { key: 'imageModeration', type: 'string' },
+  { key: 'imageOutputCompression', type: 'number' },
+  // TTS (MiniMax)
+  { key: 'voiceId', type: 'string' },
+  { key: 'speed', type: 'number' },
+  { key: 'emotion', type: 'string' },
+  { key: 'audioFormat', type: 'string' },
+  { key: 'sampleRate', type: 'string' },
+  { key: 'volume', type: 'number' },
+  { key: 'pitch', type: 'number' },
+  { key: 'bitrate', type: 'number' },
+  { key: 'channel', type: 'number' },
+  // TTS 高级参数 (MiniMax)
+  { key: 'languageBoost', type: 'string' },
+  { key: 'voiceModifyPitch', type: 'number' },
+  { key: 'voiceModifyIntensity', type: 'number' },
+  { key: 'voiceModifyTimbre', type: 'number' },
+  { key: 'voiceModifySoundEffects', type: 'string' },
+  { key: 'pronunciationTone', type: 'array' },
+  { key: 'aigcWatermark', type: 'boolean' },
+  { key: 'englishNormalization', type: 'boolean' },
+] as const;
+
+// Derive the known-key set from the schema so the fallback exclusion list can
+// never drift from the serialize/parse coverage (the original source of the
+// 6-dropped-image-fields bug).
+// Typed as Set<string> (not the narrow literal union) so .has() accepts
+// arbitrary string keys from Object.entries without a cast.
+const PROVIDER_PARAM_KNOWN_KEYS: Set<string> = new Set(PROVIDER_PARAM_SCHEMA.map((s) => s.key));
 
 // ─── Types ───
 
@@ -34,6 +76,25 @@ export interface GenerationProviderParams {
   generateWatermark?: boolean;
   style?: string;
   negativePrompt?: string;
+  // TTS (MiniMax)
+  voiceId?: string;
+  speed?: number;
+  emotion?: string;
+  audioFormat?: string;
+  sampleRate?: string;
+  volume?: number;
+  pitch?: number;
+  bitrate?: number;
+  channel?: number;
+  // TTS 高级参数 (MiniMax)
+  languageBoost?: string;
+  voiceModifyPitch?: number;
+  voiceModifyIntensity?: number;
+  voiceModifyTimbre?: number;
+  voiceModifySoundEffects?: string;
+  pronunciationTone?: string[];
+  aigcWatermark?: boolean;
+  englishNormalization?: boolean;
   [key: string]: unknown;
 }
 
@@ -217,16 +278,21 @@ function createGenerationElement(gen: GenerationRecord): XmlElement {
 
   const pp = gen.providerParams;
   const ppAttrs: Record<string, string | number | boolean> = {};
-  if (pp.model) ppAttrs.model = pp.model;
-  if (pp.modelName) ppAttrs.modelName = pp.modelName;
-  if (pp.duration !== undefined) ppAttrs.duration = pp.duration;
-  if (pp.aspectRatio) ppAttrs.aspectRatio = pp.aspectRatio;
-  if (pp.resolution) ppAttrs.resolution = pp.resolution;
-  if (pp.generateAudio !== undefined) ppAttrs.generateAudio = pp.generateAudio;
-  if (pp.generateWatermark !== undefined) ppAttrs.generateWatermark = pp.generateWatermark;
-  if (pp.style) ppAttrs.style = pp.style;
-  if (pp.negativePrompt) ppAttrs.negativePrompt = pp.negativePrompt;
+  for (const { key, type } of PROVIDER_PARAM_SCHEMA) {
+    const value = pp[key];
+    // Guard is `!== undefined` (NOT truthy) so that boolean false and 0 are
+    // preserved — `String(false)` === 'false', `String(0)` === '0'.
+    if (value !== undefined) {
+      if (type === 'array') {
+        ppAttrs[key] = JSON.stringify(value);
+      } else {
+        ppAttrs[key] = String(value);
+      }
+    }
+  }
 
+  // Forward-compat fallback: provider-specific extras not in the schema are
+  // still serialized as raw strings (objects/functions skipped).
   for (const [key, value] of Object.entries(pp)) {
     if (!PROVIDER_PARAM_KNOWN_KEYS.has(key) && value !== undefined && typeof value !== 'object') {
       ppAttrs[key] = String(value);
@@ -300,15 +366,29 @@ function parseGenerationElement(element: XmlElement): GenerationRecord {
   const ppElement = getChildElement(element, 'providerParams');
   const providerParams: GenerationProviderParams = {};
   if (ppElement) {
-    if (ppElement.attributes.model) providerParams.model = ppElement.attributes.model;
-    if (ppElement.attributes.modelName) providerParams.modelName = ppElement.attributes.modelName;
-    if (ppElement.attributes.duration) providerParams.duration = parseInt(ppElement.attributes.duration, 10);
-    if (ppElement.attributes.aspectRatio) providerParams.aspectRatio = ppElement.attributes.aspectRatio;
-    if (ppElement.attributes.resolution) providerParams.resolution = ppElement.attributes.resolution;
-    if (ppElement.attributes.generateAudio !== undefined) providerParams.generateAudio = ppElement.attributes.generateAudio === 'true';
-    if (ppElement.attributes.generateWatermark !== undefined) providerParams.generateWatermark = ppElement.attributes.generateWatermark === 'true';
-    if (ppElement.attributes.style) providerParams.style = ppElement.attributes.style;
-    if (ppElement.attributes.negativePrompt) providerParams.negativePrompt = ppElement.attributes.negativePrompt;
+    for (const { key, type } of PROVIDER_PARAM_SCHEMA) {
+      const attr = ppElement.attributes[key];
+      if (attr === undefined) continue;
+      // number → Number(attr) preserves fractional values (e.g. duration=5.5);
+      // the previous parseInt() truncated 5.5 → 5.
+      // boolean → attr === 'true' (false persists, unlike a truthy-coalesced
+      // pattern that would collapse false to undefined).
+      if (type === 'boolean') {
+        providerParams[key] = attr === 'true';
+      } else if (type === 'number') {
+        providerParams[key] = Number(attr);
+      } else if (type === 'array') {
+        try {
+          const parsed = JSON.parse(attr);
+          providerParams[key] = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          providerParams[key] = [];
+        }
+      } else {
+        providerParams[key] = attr;
+      }
+    }
+    // Forward-compat fallback: unknown keys are kept as raw strings.
     for (const [key, value] of Object.entries(ppElement.attributes)) {
       if (!PROVIDER_PARAM_KNOWN_KEYS.has(key)) {
         providerParams[key] = value;

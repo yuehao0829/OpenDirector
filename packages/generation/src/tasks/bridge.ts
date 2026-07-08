@@ -86,7 +86,7 @@ export async function initTaskBridge(): Promise<void> {
           lastFrameUrl: payload.last_frame_url,
           projectPath: payload.project_path,
         })
-          .then((ack) => { if (ack) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
+          .then((ack) => { if (ack) tauriBridge.acknowledgeTask(payload.task_id); })
           .catch((err) => taskLog.warn(projectPath, 'completed_handler_error', 'Completed handler failed', { error: String(err) }));
         break;
 
@@ -101,7 +101,7 @@ export async function initTaskBridge(): Promise<void> {
           if (gen?.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'failed');
         }
         failGeneration(payload.task_id, payload.error, payload.project_path)
-          .then((written) => { if (written) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
+          .then((written) => { if (written) tauriBridge.acknowledgeTask(payload.task_id); })
           .catch((err) => taskLog.warn(projectPath, 'failed_handler_error', 'Failed handler failed', { error: String(err) }));
         break;
 
@@ -115,7 +115,7 @@ export async function initTaskBridge(): Promise<void> {
           if (gen?.fragmentId) resetFragmentIfGenerating(gen.fragmentId, 'draft');
         }
         cancelGeneration(payload.task_id, payload.project_path)
-          .then((written) => { if (written) tauriBridge.seedanceApi.acknowledgeTask(payload.task_id); })
+          .then((written) => { if (written) tauriBridge.acknowledgeTask(payload.task_id); })
           .catch((err) => taskLog.warn(projectPath, 'cancelled_handler_error', 'Cancelled handler failed', { error: String(err) }));
         break;
     }

@@ -3,8 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use super::provider_key::get_credentials_internal;
-use super::util::{AuthMode, resolve_auth_query_key, MAX_DOWNLOAD_SIZE};
+use super::util::{enforce_https, resolve_auth_query_key, AuthMode, MAX_DOWNLOAD_SIZE};
 
 const DEFAULT_OPENAI_IMAGE_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 
@@ -64,16 +63,12 @@ async fn generate_image(
     client: &Client,
     params: OpenAiImageGenerationParams,
 ) -> Result<OpenAiImageGenerationResult, String> {
-    let creds = get_credentials_internal(&params.provider_id, &params.password)?;
+    let creds = super::seedance_api::get_api_key_checked(&params.provider_id, &params.password)?;
 
     let auth_mode = creds.auth_mode.unwrap_or_default();
     let use_query_auth = auth_mode == AuthMode::QueryParam;
 
-    let api_key = creds.ark_api_key;
-    if api_key.trim().is_empty() {
-        return Err("OpenAI API key is empty".to_string());
-    }
-
+    let api_key = creds.api_key;
     let endpoint = normalize_images_endpoint(creds.base_url.as_deref())?;
 
     let output_format = params
@@ -183,13 +178,7 @@ fn normalize_images_endpoint(raw: Option<&str>) -> Result<String, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_OPENAI_IMAGE_ENDPOINT);
-    let with_scheme = if value.starts_with("https://") {
-        value.to_string()
-    } else if value.starts_with("http://") {
-        return Err(format!("HTTP URLs are not allowed for security reasons: {}", value));
-    } else {
-        format!("https://{}", value)
-    };
+    let with_scheme = enforce_https(value)?;
 
     let trimmed = with_scheme.trim_end_matches('/');
 
