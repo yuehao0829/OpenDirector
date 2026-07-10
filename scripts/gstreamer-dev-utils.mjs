@@ -213,9 +213,15 @@ export function configureRuntimeEnvironment(targetEnv, root, tauriDir) {
   const pluginDir = path.join(root, 'lib', 'gstreamer-1.0');
   const pkgConfigDir = path.join(root, 'lib', 'pkgconfig');
   const typelibDir = path.join(root, 'lib', 'girepository-1.0');
-  const pkgConfigExecutable = resolvePkgConfigExecutable(targetEnv);
 
+  // Prepend bin/ to PATH *before* resolving the pkg-config executable so the
+  // repo-local gstreamer-dev/bin/pkg-config.exe wins over a stale
+  // pkg-config-lite (e.g. winget 0.28) already on PATH. Resolving first locks
+  // in the wrong binary, whose `pc_path` then pollutes PKG_CONFIG_LIBDIR and
+  // trips the pkg-config crate's unwrap-None panic. Affects both `pnpm dev`
+  // and `pnpm rust:*`, which share this function.
   prependPathEntry(targetEnv, 'PATH', binDir);
+  const pkgConfigExecutable = resolvePkgConfigExecutable(targetEnv);
 
   if (existsSync(pluginDir)) {
     prependPathEntry(targetEnv, 'GST_PLUGIN_PATH', pluginDir);
