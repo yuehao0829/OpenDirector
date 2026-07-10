@@ -178,7 +178,7 @@ export function createGptImageTypeDefinition(): ProviderTypeDefinition {
         description: 'OpenAI-compatible endpoint, or a third-party proxy URL.',
       },
       {
-        key: 'apiKey',
+        key: 'api_key',
         label: 'API Key',
         type: 'password',
         required: true,

@@ -48,7 +48,7 @@ interface TOSPresignResult {
   expires_at: string;
 }
 
-interface TOSValidationResult {
+export interface TOSValidationResult {
   valid: boolean;
   message: string;
 }
@@ -68,71 +68,29 @@ export const providerKey = {
     return invoke('has_provider_credentials', { providerId });
   },
 
-  /** Save credentials encrypted to local file. */
-  save(providerId: string, credentials: ProviderCredentials, password: string): Promise<void> {
-    return invoke('save_provider_credentials', {
+  /**
+   * Save credentials encrypted to a local file.
+   *
+   * Generates a fresh random encryption password internally and returns it so
+   * the caller can store it in the instance config (`_encPassword`). The
+   * `credentials` object is serialized verbatim — it is already a flat
+   * `{ storageKey: value }` map built from the provider's declarative
+   * `credentialFields`, so no provider-specific shaping happens here. The
+   * bridge is therefore type-agnostic: adding a provider requires no change.
+   */
+  async save(providerId: string, credentials: ProviderCredentials): Promise<string> {
+    const password = generateRandomHexPassword();
+    await invoke('save_provider_credentials', {
       providerId,
       credentialsJson: JSON.stringify(credentials),
       password,
     });
+    return password;
   },
 
   /** Delete credentials file */
   remove(providerId: string): Promise<void> {
     return invoke('delete_provider_credentials', { providerId });
-  },
-
-  /** Save Volcengine credentials: generate random password, encrypt and write .enc, return password */
-  async saveVolcengineCredentials(
-    providerId: string,
-    params: {
-      ak: string; sk: string; region: string;
-      tosEndpoint?: string; tosBucket?: string;
-      assetEndpoint?: string; assetProject?: string;
-      assetGroupName?: string; assetGroupId?: string;
-    },
-  ): Promise<string> {
-    const password = generateRandomHexPassword();
-
-    const credentials: ProviderCredentials = {
-      api_key: '',
-      ak: params.ak,
-      sk: params.sk,
-      region: params.region,
-      tos_endpoint: params.tosEndpoint || undefined,
-      tos_bucket: params.tosBucket || undefined,
-      asset_endpoint: params.assetEndpoint || undefined,
-      asset_project: params.assetProject || undefined,
-      asset_group_name: params.assetGroupName || undefined,
-      asset_group_id: params.assetGroupId || undefined,
-    };
-
-    await this.save(providerId, credentials, password);
-    return password;
-  },
-
-  /** Save API-key credentials (Seedance, OpenAI Image, etc.): generate random password, encrypt and write .enc, return password */
-  async saveApiCredentials(
-    providerId: string,
-    apiKey: string,
-    baseUrl: string,
-    authMode?: string,
-    authQueryKey?: string,
-  ): Promise<string> {
-    const password = generateRandomHexPassword();
-
-    const credentials: ProviderCredentials = {
-      api_key: apiKey,
-      ak: '',
-      sk: '',
-      region: '',
-      base_url: baseUrl,
-      auth_mode: authMode,
-      auth_query_key: authQueryKey,
-    };
-
-    await this.save(providerId, credentials, password);
-    return password;
   },
 
   /** Update fields in existing encrypted credentials. Returns new password. */

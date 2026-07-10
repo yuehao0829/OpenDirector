@@ -39,12 +39,6 @@ export interface QuotaInfo {
   resetAt?: Date;
 }
 
-export interface ProviderConfig {
-  apiKey: string;
-  baseUrl?: string;
-  timeout?: number;
-}
-
 /** Build ProviderModel[] from a ProviderTypeDefinition */
 export function buildProviderModels(typeDef: { modelFamilies: Array<{ models: Array<{ modelId: string; name: string; params?: CapabilityParams }> }> }): ProviderModel[] {
   return typeDef.modelFamilies.flatMap((family) =>

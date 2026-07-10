@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
 import {
-  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,15 +13,10 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  configureRuntimeEnvironment,
   delay,
-  getEnvValue,
-  inferRuntimeRootFromPath,
-  MAC_FRAMEWORK_ROOTS,
+  resolveDefaultRuntimeRoot,
   resolveExecutableOnPath,
-  resolvePkgConfigExecutable,
-  resolveReadyRuntimeRoot,
-  runtimeRootLooksReady,
-  setEnvValue,
 } from './gstreamer-dev-utils.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,7 +40,7 @@ const windowsChildExitTimeoutMs = gracefulChildExitTimeoutMs;
 const unixChildExitTimeoutMs = gracefulChildExitTimeoutMs;
 const unixForceKillWaitMs = 1000;
 
-const runtimeRoot = resolveRuntimeRoot();
+const runtimeRoot = resolveDefaultRuntimeRoot(process.env, localRuntimeRoot);
 const env = { ...process.env };
 prepareProcessLogFile(tauriPidFilePath);
 writeFileSync(tauriPidFilePath, '', 'utf8');
@@ -63,7 +56,7 @@ const isTauriInfoCommand = tauriCliArgs.some((arg) =>
 );
 
 if (runtimeRoot) {
-  configureRuntimeEnvironment(env, runtimeRoot);
+  configureRuntimeEnvironment(env, runtimeRoot, tauriDir);
   console.log(`[GStreamer] Using runtime root: ${runtimeRoot}`);
 } else {
   console.warn(
@@ -1456,184 +1449,4 @@ function tauriResourceSourceExists(resourceSource) {
 
 function tauriResourceSourceLooksLikeGlob(resourceSource) {
   return /[*?[\]{}]/.test(resourceSource);
-}
-
-function resolveRuntimeRoot() {
-  return resolveReadyRuntimeRoot(
-    [
-      getEnvValue(process.env, 'OPENDIRECTOR_GSTREAMER_RUNTIME_ROOT'),
-      getEnvValue(process.env, 'GSTREAMER_1_0_ROOT_MSVC_X86_64'),
-      getEnvValue(process.env, 'GSTREAMER_1_0_ROOT_X86_64'),
-      localRuntimeRoot,
-      inferRuntimeRootFromPath(getEnvValue(process.env, 'PATH')),
-    ],
-    process.platform,
-  );
-}
-
-function configureRuntimeEnvironment(targetEnv, root) {
-  const binDir = path.join(root, 'bin');
-  const pluginDir = path.join(root, 'lib', 'gstreamer-1.0');
-  const pkgConfigDir = path.join(root, 'lib', 'pkgconfig');
-  const typelibDir = path.join(root, 'lib', 'girepository-1.0');
-  const pkgConfigExecutable = resolvePkgConfigExecutable(targetEnv);
-
-  prependPathEntry(targetEnv, 'PATH', binDir);
-
-  if (existsSync(pluginDir)) {
-    prependPathEntry(targetEnv, 'GST_PLUGIN_PATH', pluginDir);
-    prependPathEntry(targetEnv, 'GST_PLUGIN_SYSTEM_PATH', pluginDir);
-  }
-
-  if (process.platform === 'darwin') {
-    const libDir = path.join(root, 'lib');
-    prependPathEntry(targetEnv, 'DYLD_LIBRARY_PATH', libDir);
-    prependPathEntry(targetEnv, 'DYLD_FALLBACK_LIBRARY_PATH', libDir);
-    prependPathEntry(targetEnv, 'GI_TYPELIB_PATH', typelibDir);
-    const pluginScannerWrapper = ensureMacosPluginScannerWrapper(root, libDir, typelibDir);
-    if (pluginScannerWrapper) {
-      setEnvValue(targetEnv, 'GST_PLUGIN_SCANNER', pluginScannerWrapper);
-      setEnvValue(targetEnv, 'GST_PLUGIN_SCANNER_1_0', pluginScannerWrapper);
-    }
-
-    if (pkgConfigExecutable) {
-      setEnvValue(targetEnv, 'PKG_CONFIG', pkgConfigExecutable);
-    }
-
-    if (existsSync(pkgConfigDir)) {
-      prependPathEntry(targetEnv, 'PKG_CONFIG_PATH', pkgConfigDir);
-      const pkgConfigLibdir = resolvePkgConfigLibdir(pkgConfigExecutable, pkgConfigDir);
-      if (pkgConfigLibdir) {
-        setEnvValue(targetEnv, 'PKG_CONFIG_LIBDIR', pkgConfigLibdir);
-      }
-    }
-  }
-
-  if (process.platform === 'win32') {
-    setEnvValue(targetEnv, 'GSTREAMER_1_0_ROOT_MSVC_X86_64', root);
-    setEnvValue(targetEnv, 'GSTREAMER_1_0_ROOT_X86_64', root);
-
-    if (pkgConfigExecutable) {
-      setEnvValue(targetEnv, 'PKG_CONFIG', pkgConfigExecutable);
-      prependPathEntry(targetEnv, 'PATH', path.dirname(pkgConfigExecutable));
-
-      if (existsSync(pkgConfigDir)) {
-        prependPathEntry(targetEnv, 'PKG_CONFIG_PATH', pkgConfigDir);
-        const pkgConfigLibdir = resolvePkgConfigLibdir(pkgConfigExecutable, pkgConfigDir);
-        if (pkgConfigLibdir) {
-          setEnvValue(targetEnv, 'PKG_CONFIG_LIBDIR', pkgConfigLibdir);
-        }
-      }
-    } else if (existsSync(pkgConfigDir)) {
-      console.warn(
-        '[GStreamer] pkg-config executable not found; Rust/Tauri builds may fail on Windows.',
-      );
-    }
-  }
-}
-
-function ensureMacosPluginScannerWrapper(root, libDir, typelibDir) {
-  const scannerPath = resolveMacosPluginScanner(root);
-  if (!scannerPath) {
-    return null;
-  }
-
-  const wrapperDir = path.join(tauriDir, 'target', 'gstreamer-runtime');
-  mkdirSync(wrapperDir, { recursive: true });
-  const wrapperPath = path.join(wrapperDir, 'gst-plugin-scanner-macos.sh');
-  const content = [
-    '#!/bin/sh',
-    `export DYLD_LIBRARY_PATH=${shellSingleQuote(libDir)}\${DYLD_LIBRARY_PATH:+":$DYLD_LIBRARY_PATH"}`,
-    `export DYLD_FALLBACK_LIBRARY_PATH=${shellSingleQuote(libDir)}\${DYLD_FALLBACK_LIBRARY_PATH:+":$DYLD_FALLBACK_LIBRARY_PATH"}`,
-    `export GI_TYPELIB_PATH=${shellSingleQuote(typelibDir)}\${GI_TYPELIB_PATH:+":$GI_TYPELIB_PATH"}`,
-    `exec ${shellSingleQuote(scannerPath)} "$@"`,
-    '',
-  ].join('\n');
-
-  const existingContent = existsSync(wrapperPath)
-    ? readFileSync(wrapperPath, 'utf8')
-    : null;
-  if (existingContent !== content) {
-    writeFileSync(wrapperPath, content, 'utf8');
-  }
-  chmodSync(wrapperPath, 0o755);
-  return wrapperPath;
-}
-
-function resolveMacosPluginScanner(root) {
-  const inspectPath = path.join(root, 'bin', 'gst-inspect-1.0');
-  if (existsSync(inspectPath)) {
-    try {
-      const resolvedInspectPath = realpathSync(inspectPath);
-      const prefixDir = path.dirname(path.dirname(resolvedInspectPath));
-      const scannerPath = path.join(prefixDir, 'libexec', 'gstreamer-1.0', 'gst-plugin-scanner');
-      if (existsSync(scannerPath)) {
-        return scannerPath;
-      }
-    } catch {
-      // continue to fallback candidates
-    }
-  }
-
-  const candidates = [
-    path.join(root, 'libexec', 'gstreamer-1.0', 'gst-plugin-scanner'),
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
-
-function shellSingleQuote(value) {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
-}
-
-function prependPathEntry(targetEnv, key, entry) {
-  if (!existsSync(entry)) {
-    return;
-  }
-
-  const existingValue = getEnvValue(targetEnv, key) ?? '';
-  const existing = existingValue
-    ? existingValue.split(path.delimiter).filter(Boolean)
-    : [];
-  const normalizedEntry = path.resolve(entry);
-  const nextEntries = [
-    normalizedEntry,
-    ...existing.filter((value) => path.resolve(value) !== normalizedEntry),
-  ];
-
-  setEnvValue(targetEnv, key, nextEntries.join(path.delimiter));
-}
-
-function resolvePkgConfigLibdir(pkgConfigExecutable, preferredEntry) {
-  const defaultEntries = [];
-
-  if (pkgConfigExecutable) {
-    const result = spawnSync(
-      pkgConfigExecutable,
-      ['--variable', 'pc_path', 'pkg-config'],
-      {
-        stdio: 'pipe',
-        encoding: 'utf8',
-      },
-    );
-
-    if (result.status === 0) {
-      defaultEntries.push(
-        ...result.stdout
-          .trim()
-          .split(path.delimiter)
-          .filter(Boolean),
-      );
-    }
-  }
-
-  const mergedEntries = [
-    preferredEntry,
-    ...defaultEntries,
-  ].filter(Boolean);
-
-  if (mergedEntries.length === 0) {
-    return null;
-  }
-
-  return [...new Set(mergedEntries.map((entry) => path.resolve(entry)))].join(path.delimiter);
 }

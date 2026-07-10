@@ -11,4 +11,14 @@ describe('seedanceTypeDefinition', () => {
     expect(seedance20?.params?.resolution).toContain('1080p');
     expect(seedance20Fast?.params?.resolution).not.toContain('1080p');
   });
+
+  it('uses snake_case `api_key` as the storage key for the API Key password field', () => {
+    // The credentials object is serialized verbatim into the Rust pure-KV
+    // Credentials map, so the field key must match what the backend reads
+    // (`require("api_key")`). Guard against a regression to `apiKey`.
+    const apiKeyField = seedanceTypeDefinition.credentialFields?.find(
+      (f) => f.type === 'password',
+    );
+    expect(apiKeyField?.key).toBe('api_key');
+  });
 });

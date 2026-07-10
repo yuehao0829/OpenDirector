@@ -68,23 +68,15 @@ pub(crate) struct TosParams {
 pub(crate) fn get_tos_params(
     creds: &super::provider_key::Credentials,
 ) -> Result<TosParams, String> {
-    let endpoint = creds
-        .tos_endpoint
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "TOS not configured for this provider (missing tos_endpoint)".to_string())?;
-    let bucket = creds
-        .tos_bucket
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "TOS not configured for this provider (missing tos_bucket)".to_string())?;
+    let endpoint = creds.require("tos_endpoint")?;
+    let bucket = creds.require("tos_bucket")?;
 
     Ok(TosParams {
-        ak: creds.ak.clone(),
-        sk: creds.sk.clone(),
-        bucket: bucket.to_string(),
-        endpoint: endpoint.to_string(),
-        region: creds.region.clone(),
+        ak: creds.get_or_empty("ak"),
+        sk: creds.get_or_empty("sk"),
+        bucket,
+        endpoint,
+        region: creds.get_or_empty("region"),
     })
 }
 

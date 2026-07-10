@@ -5,22 +5,13 @@
 
 // ─── Provider Credentials (→ Rust Credentials) ───
 
-export interface ProviderCredentials {
-  api_key: string;
-  ak: string;
-  sk: string;
-  region: string;
-  endpoint_id?: string;
-  base_url?: string;
-  auth_mode?: string;
-  auth_query_key?: string;
-  tos_endpoint?: string;
-  tos_bucket?: string;
-  asset_endpoint?: string;
-  asset_project?: string;
-  asset_group_name?: string;
-  asset_group_id?: string;
-}
+/**
+ * Provider credentials, serialized to a flat `{"key": "value"}` object that
+ * maps 1:1 to the Rust `Credentials` pure-KV map. Field names are declared
+ * per provider type (`credentialFields[].key`); the storage layer is
+ * field-name-agnostic, so this type is just `Record<string, string>`.
+ */
+export type ProviderCredentials = Record<string, string>;
 
 export interface OpenAiImageGenerationParams {
   provider_id: string;

@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use super::util::{enforce_https, resolve_auth_query_key, AuthMode, MAX_DOWNLOAD_SIZE};
+use super::util::{enforce_https, resolve_auth_query_key, MAX_DOWNLOAD_SIZE};
 
 const DEFAULT_OPENAI_IMAGE_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 
@@ -65,11 +65,10 @@ async fn generate_image(
 ) -> Result<OpenAiImageGenerationResult, String> {
     let creds = super::seedance_api::get_api_key_checked(&params.provider_id, &params.password)?;
 
-    let auth_mode = creds.auth_mode.unwrap_or_default();
-    let use_query_auth = auth_mode == AuthMode::QueryParam;
+    let use_query_auth = creds.get_field("auth_mode") == Some("query_param");
 
-    let api_key = creds.api_key;
-    let endpoint = normalize_images_endpoint(creds.base_url.as_deref())?;
+    let api_key = creds.require("api_key")?;
+    let endpoint = normalize_images_endpoint(creds.get_field("base_url"))?;
 
     let output_format = params
         .output_format
@@ -100,7 +99,7 @@ async fn generate_image(
         .header("Content-Type", "application/json");
 
     if use_query_auth {
-        let query_key = resolve_auth_query_key(creds.auth_query_key.as_deref());
+        let query_key = resolve_auth_query_key(creds.get_field("auth_query_key"));
         req = req.query(&[(query_key, &api_key)]);
     } else {
         req = req.header("Authorization", format!("Bearer {}", api_key));

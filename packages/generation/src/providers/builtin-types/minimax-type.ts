@@ -455,7 +455,7 @@ export function createMinimaxTypeDefinition(): ProviderTypeDefinition {
         description: 'MiniMax API base URL (pure Bearer auth).',
       },
       {
-        key: 'apiKey',
+        key: 'api_key',
         label: 'API Key',
         type: 'password',
         required: true,

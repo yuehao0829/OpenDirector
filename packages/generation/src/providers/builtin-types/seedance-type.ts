@@ -237,7 +237,7 @@ export function createSeedanceTypeDefinition(): ProviderTypeDefinition {
         defaultValue: 'https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks',
       },
       {
-        key: 'apiKey',
+        key: 'api_key',
         label: 'API Key',
         type: 'password',
         required: true,

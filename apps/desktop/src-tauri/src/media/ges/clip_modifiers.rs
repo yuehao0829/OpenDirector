@@ -46,7 +46,7 @@ pub fn resolve_clip_modifier_plan(
     transform: Option<&PreviewTransform>,
 ) -> MediaResult<GesClipModifierPlan> {
     let (resolved_crop, resolved_transform) =
-        resolve_visual_modifiers(track_type.clone(), source_path, crop, transform)?;
+        resolve_visual_modifiers(track_type.clone(), source_path, crop, transform);
 
     Ok(GesClipModifierPlan {
         clip_id: clip_id.into(),
@@ -209,34 +209,46 @@ fn resolve_visual_modifiers(
     source_path: &str,
     crop: Option<&TimelineRenderCrop>,
     transform: Option<&PreviewTransform>,
-) -> MediaResult<(Option<ResolvedCrop>, Option<ResolvedTransform>)> {
+) -> (Option<ResolvedCrop>, Option<ResolvedTransform>) {
     if track_type != TimelineTrackType::Video {
-        return Ok((None, None));
+        return (None, None);
     }
 
     let dimensions = if crop.is_some() || transform_needs_source_dimensions(transform) {
-        probe_source_dimensions(source_path)?
+        probe_source_dimensions(source_path)
     } else {
         None
     };
 
-    Ok((
+    (
         crop.and_then(|crop| {
             dimensions.map(|(width, height)| resolve_crop_bounds(crop, width, height))
         }),
         transform.and_then(|transform| resolve_transform(transform, dimensions)),
-    ))
+    )
 }
 
-fn probe_source_dimensions(source_path: &str) -> MediaResult<Option<(u32, u32)>> {
-    let metadata = crate::media::gstreamer::discoverer::probe_media(&MediaProbeRequest {
-        path: source_path.to_string(),
-    })?;
+/// Best-effort source-dimension probe for the preview builder.
+///
+/// Returns `None` when dimensions can't be obtained — whether because the media
+/// is unreadable, the probe errored, or GStreamer isn't initialized (e.g. in
+/// unit tests, where `gst::init` is never called). The preview degrades the
+/// modifier in that case rather than failing the whole build. `catch_unwind`
+/// converts the gstreamer crate's "not initialized" assert (a panic, not a
+/// `Result`) into a graceful `None`.
+fn probe_source_dimensions(source_path: &str) -> Option<(u32, u32)> {
+    let metadata = std::panic::catch_unwind(|| {
+        crate::media::gstreamer::discoverer::probe_media(&MediaProbeRequest {
+            path: source_path.to_string(),
+        })
+    })
+    .ok() // None if GStreamer panicked (not initialized)
+    .and_then(|probe_result| probe_result.ok())?; // None if the probe errored
 
-    Ok(match (metadata.width, metadata.height) {
+    match (metadata.width, metadata.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
         _ => None,
-    })
+    }
 }
 
 fn transform_needs_source_dimensions(transform: Option<&PreviewTransform>) -> bool {

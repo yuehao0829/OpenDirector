@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { getProviderRuntimeRegistry, getProviderTypeRegistry } from '@opendirector/core/services/service-locator';
 import { tauriBridge } from '@opendirector/core/services/tauri-bridge';
 import { useProviderInstanceStore } from '@opendirector/core/stores/providerInstanceStore';
-import { BUILTIN_TYPE_IDS } from '@opendirector/core/types/provider-system';
 import type { AssetGroup } from '@opendirector/core/types/ai-video';
 import type { ProviderInstance } from '@opendirector/core/types/provider-system';
 import { Modal } from '../common/Modal';
@@ -10,6 +9,8 @@ import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { CredentialFormField } from './CredentialFormField';
 import { AssetGroupSelector } from './AssetGroupSelector';
+import { validateTosIfPresent } from './tos-validation';
+import { clearSecretFields } from './credential-config';
 import { Panel } from '../layout/Panel';
 import { useTranslation } from 'react-i18next';
 
@@ -37,7 +38,6 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
     [instance],
   );
 
-  const isVolcengine = typeDef?.typeId === BUILTIN_TYPE_IDS.VOLCENGINE;
   const encPassword = (instance?.config as Record<string, string>)?._encPassword ?? '';
   const hasEncPassword = !!encPassword;
 
@@ -118,17 +118,12 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
       }
     }
 
-    // Build config: restore masked password fields that were not explicitly changed
+    // Build config from current credential state + per-model config.
+    // Password fields are NOT restored from originalConfig: secrets live only
+    // in the .enc file (instance config stores them as ''), so there is nothing
+    // to restore — unchanged secrets are preserved by merging into the existing
+    // .enc, not by repopulating config.
     const config: Record<string, string> = { ...credentials };
-    for (const field of typeDef?.credentialFields ?? []) {
-      if (
-        field.type === 'password' &&
-        !credentials[field.key]?.trim() &&
-        originalConfig[field.key]?.trim()
-      ) {
-        config[field.key] = originalConfig[field.key];
-      }
-    }
     if (typeDef?.modelConfigFields?.length) {
       for (const family of typeDef.modelFamilies) {
         for (const model of family.models) {
@@ -143,88 +138,68 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
       }
     }
 
-    if (isVolcengine) setValidating(true);
+    setValidating(true);
 
     try {
-      if (
-        typeDef?.typeId === BUILTIN_TYPE_IDS.SEEDANCE ||
-        typeDef?.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE ||
-        typeDef?.typeId === BUILTIN_TYPE_IDS.MINIMAX
-      ) {
-        const apiKeyWasMasked = !credentials.apiKey?.trim() && (hasEncPassword || !!originalConfig.apiKey?.trim());
+      const credFields = typeDef?.credentialFields ?? [];
+      const secretFields = credFields.filter((f) => f.type === 'password');
+      // A secret is "rewritten" only when the user typed a new value (masked
+      // unchanged secrets render as empty). Unchanged secrets are intentionally
+      // left out of the update payload so the existing .enc value is preserved —
+      // a full overwrite would blank them, which loses data for provider types
+      // with more than one password field.
+      const rewritingSecret = secretFields.some((f) => credentials[f.key]?.trim());
 
-        if (apiKeyWasMasked) {
-          const updates: Record<string, unknown> = {};
-          if (config.base_url !== undefined) updates.base_url = config.base_url;
-          if (credentials.auth_mode !== undefined) updates.auth_mode = credentials.auth_mode;
-          if (credentials.auth_query_key !== undefined) updates.auth_query_key = credentials.auth_query_key;
-
-          if (Object.keys(updates).length > 0) {
-            const newEncPassword = await tauriBridge.providerKey.updateCredentials(
-              instance.instanceId, encPassword, updates,
-            );
-            config._encPassword = newEncPassword;
-          }
-        } else {
-          const newEncPassword = await tauriBridge.providerKey.saveApiCredentials(
-              instance.instanceId, credentials.apiKey, config.base_url ?? '',
-              credentials.auth_mode, credentials.auth_query_key,
-            );
-          config._encPassword = newEncPassword;
-          config.apiKey = '';
+      // TOS validation when rewriting a signing secret and both TOS fields are
+      // present (typeId-agnostic: gated on field existence). Reported via the
+      // shared i18n key, consistent with AddProviderDialog.
+      if (rewritingSecret) {
+        const tosOutcome = await validateTosIfPresent(config);
+        if (!tosOutcome.valid) {
+          setError(t('settings.providerErrors.tosValidationFailed', { message: tosOutcome.message }));
+          return;
         }
-      } else if (isVolcengine) {
-        const skWasMasked = !credentials.sk?.trim() && (hasEncPassword || !!originalConfig.sk?.trim());
+      }
 
-        if (skWasMasked) {
-          // Update only — SK not changed
-          const updates: Record<string, unknown> = {};
-          if (config.asset_project !== undefined) updates.asset_project = config.asset_project;
-          if (config.asset_group_name !== undefined) updates.asset_group_name = config.asset_group_name;
-          if (config.asset_group_id !== undefined) updates.asset_group_id = config.asset_group_id;
-          if (config.ak !== undefined) updates.ak = config.ak;
-          if (config.region !== undefined) updates.region = config.region;
-          if (config.tos_endpoint !== undefined) updates.tos_endpoint = config.tos_endpoint;
-          if (config.tos_bucket !== undefined) updates.tos_bucket = config.tos_bucket;
-          if (config.asset_endpoint !== undefined) updates.asset_endpoint = config.asset_endpoint;
+      // Payload = all non-secret fields + any re-entered secret.
+      const updates: Record<string, unknown> = {};
+      for (const field of credFields) {
+        if (field.type === 'password') {
+          if (credentials[field.key]?.trim()) updates[field.key] = credentials[field.key];
+        } else if (config[field.key] !== undefined) {
+          updates[field.key] = config[field.key];
+        }
+      }
 
+      if (hasEncPassword) {
+        // Merge into the existing .enc — unchanged secrets are preserved.
+        if (Object.keys(updates).length > 0) {
           const newEncPassword = await tauriBridge.providerKey.updateCredentials(
             instance.instanceId, encPassword, updates,
           );
           config._encPassword = newEncPassword;
-        } else {
-          // Full re-save with new SK
-          const ak = config.ak ?? '';
-          const sk = config.sk ?? '';
-          const region = config.region ?? '';
-          const tosEndpoint = config.tos_endpoint || undefined;
-          const tosBucket = config.tos_bucket || undefined;
-          const assetEndpoint = config.asset_endpoint || undefined;
-          const assetProject = config.asset_project || undefined;
-          const assetGroupName = config.asset_group_name || undefined;
-          const assetGroupId = config.asset_group_id || undefined;
-
-          // Only validate TOS if TOS fields are filled
-          const tosFilled = !!(tosEndpoint && tosBucket);
-          if (tosFilled) {
-            setError('');
-            const result = await tauriBridge.tosApi.validateTosCredentials(
-              ak, sk, tosBucket!, tosEndpoint!, region,
-            );
-            if (!result.valid) {
-              setError(result.message);
-              return;
-            }
-          }
-
-          const newEncPassword = await tauriBridge.providerKey.saveVolcengineCredentials(
-            instance.instanceId,
-            { ak, sk, region, tosEndpoint, tosBucket, assetEndpoint, assetProject, assetGroupName, assetGroupId },
-          );
-          config._encPassword = newEncPassword;
-          config.sk = '';
         }
+      } else {
+        // No existing .enc (e.g. imported without secrets) — full save of all
+        // declared credential fields (excludes _encPassword / model keys).
+        const credentialsToSave: Record<string, string> = {};
+        for (const field of credFields) {
+          const val = config[field.key];
+          if (val !== undefined && val !== null) {
+            credentialsToSave[field.key] = val;
+          }
+        }
+        const newEncPassword = await tauriBridge.providerKey.save(
+          instance.instanceId,
+          credentialsToSave,
+        );
+        config._encPassword = newEncPassword;
       }
+
+      // Clear re-entered secrets from the persisted config (now in .enc).
+      // Unconditional clear matches the prior "only non-empty" guard:
+      // unchanged secrets already hold '' in the masked form state.
+      clearSecretFields(config, credFields);
 
       updateInstance(instance.instanceId, {
         displayName: displayName.trim(),
@@ -255,6 +230,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
   const hasDeclarativeFields = credFields.length > 0 || modelFields.length > 0;
 
   const hasSections = credFields.some((f) => f.section);
+  const hasAssetGroupField = credFields.some((f) => f.key === 'asset_group_id');
 
   const commonFields = credFields.filter((f) => f.section === 'common' || (!f.section && f.type !== 'hidden'));
   const tosFields = credFields.filter((f) => f.section === 'tos');
@@ -349,7 +325,7 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
                     />
                   ))}
 
-                  {isVolcengine && (
+                  {hasAssetGroupField && (
                     <AssetGroupSelector
                       groups={groups}
                       selectedGroupId={credentials.asset_group_id ?? ''}
@@ -451,8 +427,8 @@ export function EditProviderDialog({ isOpen, onClose, instance }: EditProviderDi
             <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             <CredentialFormField
               label={t('settings.provider.apiKeyLabel')}
-              fieldKey="apiKey"
-              value={credentials.apiKey ?? ''}
+              fieldKey="api_key"
+              value={credentials.api_key ?? ''}
               onChange={handleCredentialChange}
               masked
               configured={hasEncPassword}

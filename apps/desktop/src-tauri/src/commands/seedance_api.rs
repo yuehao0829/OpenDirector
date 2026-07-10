@@ -170,7 +170,10 @@ pub(crate) fn get_api_key_checked(
     password: &str,
 ) -> Result<crate::commands::provider_key::Credentials, String> {
     let creds = get_credentials_internal(provider_id, password)?;
-    if creds.api_key.trim().is_empty() {
+    // Validate presence without allocating: callers that need the owned
+    // `api_key` call `creds.require("api_key")` themselves, so this only
+    // needs the borrowed `is_present` predicate (mirrors `require`).
+    if !creds.is_present("api_key") {
         return Err(format!(
             "API key not configured for provider '{}'. Please re-enter your API key in Settings → Providers.",
             provider_id
@@ -187,10 +190,10 @@ pub(crate) fn get_api_key_and_base_url(
     default_base_url: &str,
 ) -> Result<(String, String), String> {
     let creds = get_api_key_checked(provider_id, password)?;
-    let raw_url = creds.base_url.as_deref().unwrap_or(default_base_url);
+    let raw_url = creds.get_field("base_url").unwrap_or(default_base_url);
     let base_url = enforce_https(raw_url)?;
     let origin = extract_origin(&base_url);
-    Ok((creds.api_key, origin))
+    Ok((creds.require("api_key")?, origin))
 }
 
 /// Get the ARK API key and base URL for a provider.
@@ -262,22 +265,15 @@ pub(crate) async fn ark_signed_request(
 ) -> Result<serde_json::Value, String> {
     let creds = get_credentials_internal(provider_id, password)?;
 
-    if creds.ak.is_empty() || creds.sk.is_empty() {
-        return Err("No AK/SK configured for this provider".to_string());
-    }
-    let signing_ak = creds.ak.clone();
-    let signing_sk = creds.sk.clone();
-    let region = if creds.region.is_empty() {
-        super::util::DEFAULT_REGION.to_string()
-    } else {
-        creds.region.clone()
-    };
+    let signing_ak = creds.require("ak")?;
+    let signing_sk = creds.require("sk")?;
+    let region = creds.get_or("region", super::util::DEFAULT_REGION);
 
     let ark_host = creds
-        .asset_endpoint
-        .as_deref()
+        .get_field("asset_endpoint")
+        .map(super::util::strip_url_scheme)
         .filter(|s| !s.is_empty())
-        .map(|s| super::util::strip_url_scheme(s).to_string())
+        .map(|s| s.to_string())
         .unwrap_or_else(|| DEFAULT_ARK_HOST.to_string());
 
     let now = Utc::now();

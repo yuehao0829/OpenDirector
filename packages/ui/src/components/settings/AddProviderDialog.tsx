@@ -11,6 +11,8 @@ import { Select } from '../common/Select';
 import { Button } from '../common/Button';
 import { CredentialFormField } from './CredentialFormField';
 import { AssetGroupSelector } from './AssetGroupSelector';
+import { validateTosIfPresent } from './tos-validation';
+import { clearSecretFields } from './credential-config';
 import { Panel } from '../layout/Panel';
 import { AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -82,6 +84,18 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
     setModelConfig((prev) => ({ ...prev, [key]: value }));
   };
 
+  // Build the persisted instance config from `base`, stamping in the encrypted
+  // password and clearing every password-type field (secrets live in the .enc
+  // file). TypeId-agnostic: iterates the selected type's declarative fields.
+  const configWithSecretsCleared = (
+    base: Record<string, string>,
+    encPassword: string,
+  ): Record<string, string> => {
+    const next: Record<string, string> = { ...base, _encPassword: encPassword };
+    clearSecretFields(next, selectedType?.credentialFields ?? []);
+    return next;
+  };
+
   const handleRefreshGroups = async () => {
     // Validate required fields for asset
     const ak = credentials.ak?.trim();
@@ -104,17 +118,11 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
     setError('');
 
     try {
-      // If TOS fields are filled, validate with HeadBucket first
-      const tosEndpoint = credentials.tos_endpoint?.trim();
-      const tosBucket = credentials.tos_bucket?.trim();
-      if (tosEndpoint && tosBucket) {
-        const result = await tauriBridge.tosApi.validateTosCredentials(
-          ak, sk, tosBucket, tosEndpoint, region,
-        );
-        if (!result.valid) {
-          setError(t('settings.providerErrors.tosValidationFailed', { message: result.message }));
-          return;
-        }
+      // If TOS fields are filled, validate with HeadBucket first.
+      const tosOutcome = await validateTosIfPresent(credentials);
+      if (!tosOutcome.valid) {
+        setError(t('settings.providerErrors.tosValidationFailed', { message: tosOutcome.message }));
+        return;
       }
 
       // Create instance + save .enc if not already created
@@ -141,21 +149,13 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
 
         instanceId = instance.instanceId;
 
-        // Save .enc file
-        encPassword = await tauriBridge.providerKey.saveVolcengineCredentials(
-          instanceId,
-          {
-            ak, sk, region,
-            tosEndpoint,
-            tosBucket,
-            assetEndpoint: assetEndpoint || undefined,
-            assetProject: assetProject || undefined,
-          },
-        );
+        // Save .enc file. Type-agnostic: `credentials` already uses storage
+        // keys, so it serializes directly to a valid credentials JSON.
+        encPassword = await tauriBridge.providerKey.save(instanceId, credentials);
 
-        // Update instance config with enc password
+        // Update instance config with enc password, clearing secret fields.
         useProviderInstanceStore.getState().updateInstance(instanceId, {
-          config: { ...credentials, _encPassword: encPassword, sk: '' },
+          config: configWithSecretsCleared(credentials, encPassword),
         });
 
         // Initialize runtime
@@ -195,17 +195,12 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
     }
 
     if (pendingInstanceId) {
-      // Update display name if changed
-      if (pendingInstanceId) {
-        useProviderInstanceStore.getState().updateInstance(pendingInstanceId, {
-          displayName: displayName.trim(),
-          config: {
-            ...credentials,
-            _encPassword: pendingEncPassword,
-            sk: '',
-          },
-        });
-      }
+      // Instance + .enc already created during the asset-group refresh flow;
+      // just persist the (secret-cleared) config + display name.
+      useProviderInstanceStore.getState().updateInstance(pendingInstanceId, {
+        displayName: displayName.trim(),
+        config: configWithSecretsCleared(credentials, pendingEncPassword),
+      });
       resetAndClose();
       return;
     }
@@ -236,23 +231,16 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
       }
     }
 
-    const isVolcengine = selectedType.typeId === BUILTIN_TYPE_IDS.VOLCENGINE;
-    if (isVolcengine) setValidating(true);
+    setValidating(true);
 
     try {
-      if (isVolcengine) {
-        // TOS validation: only if TOS fields are filled
-        const tosEndpoint = credentials.tos_endpoint?.trim();
-        const tosBucket = credentials.tos_bucket?.trim();
-        if (tosEndpoint && tosBucket) {
-          const result = await tauriBridge.tosApi.validateTosCredentials(
-            credentials.ak, credentials.sk, tosBucket, tosEndpoint, credentials.region,
-          );
-          if (!result.valid) {
-            setError(result.message);
-            return;
-          }
-        }
+      // TOS validation, typeId-agnostic: gated on both TOS fields being present
+      // (only Volcengine declares them today). The helper trims consistently
+      // with handleRefreshGroups.
+      const tosOutcome = await validateTosIfPresent(credentials);
+      if (!tosOutcome.valid) {
+        setError(t('settings.providerErrors.tosValidationFailed', { message: tosOutcome.message }));
+        return;
       }
 
       addInstance({
@@ -269,33 +257,16 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
       if (!instance) return;
 
       try {
-        if (isVolcengine) {
-          const encPassword = await tauriBridge.providerKey.saveVolcengineCredentials(
-            instance.instanceId,
-            {
-              ak: credentials.ak,
-              sk: credentials.sk,
-              region: credentials.region,
-              tosEndpoint: credentials.tos_endpoint || undefined,
-              tosBucket: credentials.tos_bucket || undefined,
-              assetEndpoint: credentials.asset_endpoint || undefined,
-              assetProject: credentials.asset_project || undefined,
-              assetGroupName: credentials.asset_group_name || undefined,
-              assetGroupId: credentials.asset_group_id || undefined,
-            },
-          );
-          useProviderInstanceStore.getState().updateInstance(instance.instanceId, {
-            config: { ...config, _encPassword: encPassword, sk: '' },
-          });
-        } else if (selectedType.typeId === BUILTIN_TYPE_IDS.SEEDANCE || selectedType.typeId === BUILTIN_TYPE_IDS.OPENAI_IMAGE || selectedType.typeId === BUILTIN_TYPE_IDS.MINIMAX) {
-          const encPassword = await tauriBridge.providerKey.saveApiCredentials(
-            instance.instanceId, credentials.apiKey, credentials.base_url,
-            credentials.auth_mode, credentials.auth_query_key,
-          );
-          useProviderInstanceStore.getState().updateInstance(instance.instanceId, {
-            config: { ...config, _encPassword: encPassword, apiKey: '' },
-          });
-        }
+        // Type-agnostic full save: `credentials` already uses storage keys, so
+        // it serializes directly to a valid credentials JSON. save() generates
+        // the encryption password internally and returns it.
+        const encPassword = await tauriBridge.providerKey.save(
+          instance.instanceId,
+          credentials,
+        );
+        useProviderInstanceStore.getState().updateInstance(instance.instanceId, {
+          config: configWithSecretsCleared(config, encPassword),
+        });
       } catch (err: unknown) {
         // .enc save failed — remove orphaned instance
         useProviderInstanceStore.getState().removeInstance(instance.instanceId);
@@ -350,7 +321,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
   const hasDeclarativeFields = credFields.length > 0 || modelFields.length > 0;
 
   const hasSections = credFields.some((f) => f.section);
-  const isVolcengine = selectedType?.typeId === BUILTIN_TYPE_IDS.VOLCENGINE;
+  const hasAssetGroupField = credFields.some((f) => f.key === 'asset_group_id');
 
   const commonFields = credFields.filter((f) => f.section === 'common' || (!f.section && f.type !== 'hidden'));
   const tosFields = credFields.filter((f) => f.section === 'tos');
@@ -451,7 +422,7 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
                     />
                   ))}
 
-                  {isVolcengine && (
+                  {hasAssetGroupField && (
                     <AssetGroupSelector
                       groups={groups}
                       selectedGroupId={credentials.asset_group_id ?? ''}
@@ -550,8 +521,8 @@ export function AddProviderDialog({ isOpen, onClose }: AddProviderDialogProps) {
             <h3 className="text-sm font-medium text-zinc-300">{t('settings.provider.credentialConfig')}</h3>
             <CredentialFormField
               label={t('settings.provider.apiKeyLabel')}
-              fieldKey="apiKey"
-              value={credentials.apiKey ?? ''}
+              fieldKey="api_key"
+              value={credentials.api_key ?? ''}
               onChange={handleCredentialChange}
               placeholder={t('settings.provider.apiKeyPlaceholder')}
               required

@@ -247,16 +247,13 @@ async fn run_asset_upload_lifecycle(
         region: tos_params.region.clone(),
     };
 
-    let project_name = creds
-        .asset_project
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let asset_group_id = creds.asset_group_id.clone();
+    let project_name = creds.get_or("asset_project", "default");
+    let asset_group_id = creds.get_field("asset_group_id").map(|s| s.to_string());
     eprintln!(
         "[AssetTask] Credentials loaded: project_name={}, asset_group_id={:?}, ak={}",
         project_name,
         asset_group_id,
-        &creds.ak[..8.min(creds.ak.len())]
+        &tos_params.ak[..8.min(tos_params.ak.len())]
     );
 
     // Full upload lifecycle
