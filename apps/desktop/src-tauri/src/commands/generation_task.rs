@@ -865,16 +865,14 @@ async fn resolve_local_references(
     local_refs: &[LocalReference],
     project_path: &str,
 ) -> Result<(), String> {
-    // Build allowed_dirs once — canonicalize project_path a single time
-    let project_canonical = std::path::Path::new(project_path).canonicalize().ok();
-    let allowed_dirs: [Option<PathBuf>; 6] = [
-        dirs::data_dir(),
-        dirs::home_dir(),
-        dirs::desktop_dir(),
-        dirs::download_dir(),
-        Some(std::env::temp_dir()),
-        project_canonical,
-    ];
+    // Build the allowed-dir set once, including each reference file's nearest
+    // standard-user-dir ancestor so a reference on a non-system drive (e.g.
+    // D:\Downloads\…) is accepted — `dirs::*` only resolve the system-drive user
+    // dir on Windows. Shared with the SeedAudio base64 path
+    // (util::build_allowed_dirs); previously this used a fixed 6-entry set with
+    // no ancestor walk, which rejected non-system-drive references.
+    let allowed_dirs: Vec<PathBuf> =
+        super::util::build_allowed_dirs(project_path, local_refs.iter().map(|r| r.file_path.as_str()));
 
     for local_ref in local_refs {
         if local_ref.content_index >= content.len() {
@@ -1070,14 +1068,11 @@ async fn download_video_http(
 /// Read a local file, base64-encode it, and return a SHA-256 file_id.
 async fn upload_file_to_base64(
     file_path: &str,
-    allowed_dirs: &[Option<PathBuf>; 6],
+    allowed_dirs: &[PathBuf],
 ) -> Result<UploadResult, String> {
     let canonical = super::util::validate_local_path(file_path)?;
 
-    let is_allowed = allowed_dirs
-        .iter()
-        .filter_map(|d| d.as_ref())
-        .any(|dir| canonical.starts_with(dir));
+    let is_allowed = allowed_dirs.iter().any(|dir| canonical.starts_with(dir));
     if !is_allowed {
         return Err(format!(
             "File must be in a user directory: {}",

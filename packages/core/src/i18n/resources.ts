@@ -167,7 +167,18 @@ export const resources = {
       },
       generation: {
         toggle: { audio: '音频', music: '音乐', subtitle: '字幕', watermark: '水印' },
+        // NOTE: the `[图片{{index}}]` prefix must stay in sync with
+        // `referenceMarker.seedance.template` (image form) below — the hint
+        // cites the first-frame image using the same marker the UI inserts.
         prompt: { firstFrameHint: '[图片{{index}}]为首帧' },
+        // Per-provider reference-citation templates. {{type}}/{{index}} are
+        // resolved by the UI (renderMarker), NOT by i18next — placeholders are
+        // preserved verbatim (i18next skipOnVariables). Seedance: bracketed,
+        // no space (中文紧凑). SeedAudio: `@` prefix, no brackets.
+        referenceMarker: {
+          seedance: { template: '[{{type}}{{index}}]' },
+          seedaudio: { template: '@{{type}}{{index}}' },
+        },
         task: {
           uploadFailed: '{{type}}参考资源上传失败，请检查云存储(TOS)配置',
           videoReferenceNeedsStorage:
@@ -194,6 +205,7 @@ export const resources = {
           seedanceDescription: '字节跳动 Seedance AI 视频生成',
           volcengineDescription: '火山引擎 - TOS 云存储 + Ark Asset 素材管理',
           minimaxDescription: 'MiniMax 语音合成 (TTS) — 异步语音生成',
+          seedaudioDescription: '字节跳动 SeedAudio 语音合成 (TTS) — 非流式语音生成',
           apiKeyLabel: 'API Key',
           apiKeyPlaceholder: '输入 API Key',
           endpointModelLabel: 'Model ID / EP (Endpoint ID)，二选一即可',
@@ -215,6 +227,7 @@ export const resources = {
           totalReferencesTooHigh: '参考素材总数超出限制: {{count}} > {{max}}',
           totalVideoDurationTooHigh: '参考视频总时长超出限制: {{actual}}s > {{max}}s',
           totalAudioDurationTooHigh: '参考音频总时长超出限制: {{actual}}s > {{max}}s',
+          imageAudioMixForbidden: '参考图片与参考音频不能同时使用，请二选一',
           totalReferenceSizeTooHigh:
             '参考素材总体积超限: {{actual}}MB > {{max}}MB，将从最大文件开始压缩',
           imageRoleConflict: '首帧/尾帧与参考图不能同时使用',
@@ -435,6 +448,7 @@ export const resources = {
         },
         referenceSelector: {
           noReferences: '暂无参考资源',
+          dropHint: '拖拽资产到片段上添加参考',
           onlyOneFirstFrame: '只能指定一张首帧图片',
           onlyOneLastFrame: '只能指定一张尾帧图片',
           needFirstFrame: '需要先指定首帧图片',
@@ -683,6 +697,14 @@ export const resources = {
       generation: {
         toggle: { audio: 'Audio', music: 'Music', subtitle: 'Subtitles', watermark: 'Watermark' },
         prompt: { firstFrameHint: '[Image {{index}}] is the first frame' },
+        // Per-provider reference-citation templates. {{type}}/{{index}} are
+        // resolved by the UI (renderMarker), NOT by i18next — placeholders are
+        // preserved verbatim (i18next skipOnVariables). Seedance: bracketed,
+        // with a space (English reads better). SeedAudio: `@` prefix, no space.
+        referenceMarker: {
+          seedance: { template: '[{{type}} {{index}}]' },
+          seedaudio: { template: '@{{type}}{{index}}' },
+        },
         task: {
           uploadFailed: '{{type}} reference upload failed. Check cloud storage (TOS) settings',
           videoReferenceNeedsStorage:
@@ -711,6 +733,7 @@ export const resources = {
           seedanceDescription: 'ByteDance Seedance AI video generation',
           volcengineDescription: 'Volcengine - TOS cloud storage + Ark Asset management',
           minimaxDescription: 'MiniMax speech synthesis (TTS) — async voice generation',
+          seedaudioDescription: 'ByteDance SeedAudio speech synthesis (TTS) — non-streaming voice generation',
           apiKeyLabel: 'API Key',
           apiKeyPlaceholder: 'Enter API Key',
           endpointModelLabel: 'Model ID / EP (Endpoint ID), fill either one',
@@ -734,6 +757,8 @@ export const resources = {
             'Total reference video duration exceeds limit: {{actual}}s > {{max}}s',
           totalAudioDurationTooHigh:
             'Total reference audio duration exceeds limit: {{actual}}s > {{max}}s',
+          imageAudioMixForbidden:
+            'Reference images and audio cannot be used together; pick one',
           totalReferenceSizeTooHigh:
             'Total reference size exceeds limit: {{actual}}MB > {{max}}MB; largest files will be compressed first',
           imageRoleConflict: 'First/last frames cannot be used together with reference images',
@@ -958,6 +983,7 @@ export const resources = {
         },
         referenceSelector: {
           noReferences: 'No reference assets',
+          dropHint: 'Drag an asset onto the fragment to add a reference',
           onlyOneFirstFrame: 'Only one first-frame image can be selected',
           onlyOneLastFrame: 'Only one last-frame image can be selected',
           needFirstFrame: 'Select a first-frame image first',

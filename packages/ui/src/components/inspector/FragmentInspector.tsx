@@ -15,9 +15,10 @@ import type { Fragment, Scene } from '@opendirector/core/types/timeline';
 import type {
   CapabilityParams,
   ConstraintIndicator,
+  InputRequirements,
   ModelVariant,
 } from '@opendirector/core/types/provider-system';
-import { computeReferenceIndicators, isAudioModel, isImageModel, validateInputRequirements } from '@opendirector/core/types/provider-system';
+import { computeReferenceIndicators, isAudioModel, isImageModel, supportsAnyReference, validateInputRequirements } from '@opendirector/core/types/provider-system';
 import {
   buildContinuousPlan,
   fragmentMsToGenSeconds,
@@ -40,7 +41,7 @@ import {
   getImageRoleLabel,
   type GroupedReference,
 } from './ReferenceSelector.shared';
-import { getReferenceLabels, parsePromptLabels } from './prompt-editor';
+import { getReferenceLabels, parsePromptLabels, resolveMarkerForUi } from './prompt-editor';
 import { PlaybackSourceSelector } from './PlaybackSourceSelector';
 import { makeCompositeKey } from './compositeKey';
 
@@ -141,6 +142,16 @@ export function FragmentInspector() {
   const currentGenParamDefaults = useMemo(() => toParamDefaults(genParams), [genParams]);
   const selectedFragmentIdRef = useRef<string | null>(null);
   const skipGenParamsWritebackFragmentIdRef = useRef<string | null>(null);
+  // Lifted renumber label-state for the edit-mode PromptBuilder. Persisting it
+  // here (always mounted) lets a marker change made while PromptBuilder is
+  // unmounted (e.g. switching model in preview mode) still migrate on remount.
+  const editLabelStateRef = useRef<Map<string, string>>(new Map());
+  const editLabelFragmentIdRef = useRef<string | null>(null);
+  // Tracks the (fragmentId, modelId) last seen by the degrade-defaults effect so
+  // it can tell a model switch on the SAME fragment (reset audio offsets to the
+  // new model's default — e.g. MiniMax multiplier 1 → SeedAudio offset 0) apart
+  // from a fragment switch (keep each fragment's stored value).
+  const prevResetStateRef = useRef<{ fragmentId: string | null; modelId: string | undefined }>({ fragmentId: null, modelId: undefined });
   genParamsRef.current = genParams;
 
   // Reset draft prompt when draft fragment changes
@@ -158,6 +169,13 @@ export function FragmentInspector() {
     ? scenes.find(s => s.id === selectedFragment.sceneId) ?? null
     : null;
   const selectedFragmentId = selectedFragment?.id ?? null;
+  // Reset lifted label-state on fragment switch (render-time, so it's cleared
+  // before the child PromptBuilder's renumber effect runs — otherwise stale
+  // labels from another fragment could collide with this fragment's prompt).
+  if (editLabelFragmentIdRef.current !== selectedFragmentId) {
+    editLabelFragmentIdRef.current = selectedFragmentId;
+    editLabelStateRef.current = new Map();
+  }
   // Computed early (before early returns) so the model-filtering useMemo can depend on it.
   const resolvedTrackType = tracks.find(t => t.id === selectedFragment?.trackId)?.type ?? 'video';
   const selectedFragmentDuration = selectedFragment?.duration;
@@ -357,6 +375,14 @@ export function FragmentInspector() {
   // Degrade global defaults when provider doesn't support them (e.g. 1080p → 720p for Seedance)
   useEffect(() => {
     if (!capabilityParams || !selectedFragmentId) return;
+    const prevReset = prevResetStateRef.current;
+    const fragmentChanged = prevReset.fragmentId !== selectedFragmentId;
+    // A model switch on the SAME fragment (fragmentChanged false, modelId changed)
+    // means the persisted speed/volume came from a different-semantic model —
+    // reset audio offsets to the new model's default below. A fragment switch
+    // keeps each fragment's own stored value (range-checked only).
+    const modelSwitched = !fragmentChanged && prevReset.modelId !== currentModel?.modelId;
+    prevResetStateRef.current = { fragmentId: selectedFragmentId, modelId: currentModel?.modelId };
     setGenParams((prev) => {
       const updates: Partial<GenerationParamsValue> = {};
       if (capabilityParams.resolution && !capabilityParams.resolution.includes(prev.resolution)) {
@@ -388,12 +414,24 @@ export function FragmentInspector() {
         const defaultEmotion = currentModel?.metadata?.defaultEmotion as string | undefined;
         const defaultSampleRate = currentModel?.metadata?.defaultSampleRate as string | undefined;
         const defaultVoiceId = currentModel?.metadata?.defaultVoiceId as string | undefined;
+        const defaultSpeed = currentModel?.metadata?.defaultSpeed as number | undefined;
 
         if (capabilityParams.voiceIds?.length && !prev.voiceId) {
           updates.voiceId = defaultVoiceId ?? capabilityParams.voiceIds[0].value;
         }
-        if (prev.speed === undefined) {
-          updates.speed = 1;
+        // Reset speed when undefined OR outside the model's declared range. The range
+        // check catches stale values persisted from an older version (e.g. speed=0 left
+        // over in localStorage defaultGenerationParams) that would otherwise survive the
+        // `=== undefined` guard and render as 0 in the slider instead of the model default.
+        const speedRange = capabilityParams.speedRange;
+        // Reset on a model switch too: a value persisted from a different-semantic
+        // model (e.g. MiniMax multiplier 1) can land inside the new model's range
+        // (SeedAudio offset [-50,100]) so the range check alone misses it — reset
+        // to the new model's declared default when the persisted value differs.
+        if (prev.speed === undefined
+          || (speedRange && (prev.speed < speedRange.min || prev.speed > speedRange.max))
+          || (modelSwitched && defaultSpeed !== undefined && prev.speed !== defaultSpeed)) {
+          updates.speed = defaultSpeed ?? 1;
         }
         if (capabilityParams.emotions?.length) {
           const fallbackEmotion = defaultEmotion ?? capabilityParams.emotions[0];
@@ -421,10 +459,14 @@ export function FragmentInspector() {
         const defaultPitch = currentModel?.metadata?.defaultPitch as number | undefined;
         const defaultBitrate = currentModel?.metadata?.defaultBitrate as number | undefined;
         const defaultChannel = currentModel?.metadata?.defaultChannel as number | undefined;
-        if (prev.volume === undefined) {
+        const volumeRange = capabilityParams.volumeRange;
+        if (prev.volume === undefined
+          || (volumeRange && (prev.volume < volumeRange.min || prev.volume > volumeRange.max))
+          || (modelSwitched && defaultVolume !== undefined && prev.volume !== defaultVolume)) {
           updates.volume = defaultVolume ?? 1;
         }
-        if (prev.pitch === undefined) {
+        const pitchRange = capabilityParams.pitchRange;
+        if (prev.pitch === undefined || (pitchRange && (prev.pitch < pitchRange.min || prev.pitch > pitchRange.max))) {
           updates.pitch = defaultPitch ?? 0;
         }
         if (capabilityParams.bitrates?.length) {
@@ -473,7 +515,13 @@ export function FragmentInspector() {
       if (Object.keys(updates).length === 0) return prev;
       return { ...prev, ...updates };
     });
-  }, [capabilityParams, currentModel, selectedFragmentId]);
+  // Include selectedFragment so this re-runs after useEffect 300 writes providerSelection
+  // back to the fragment — that write creates a new fragment object that retriggers the
+  // reset effect above (which would otherwise clobber the defaults applied here), and the
+  // other deps don't change on a providerSelection-only update. This effect runs after the
+  // reset (declared later), so it re-applies model defaults on top of the fresh base. The
+  // updater is idempotent: if prev already holds valid defaults, `updates` is empty.
+  }, [capabilityParams, currentModel, selectedFragmentId, selectedFragment]);
 
   // Sync degraded genParams to fragment after local state settles
   useEffect(() => {
@@ -715,6 +763,8 @@ export function FragmentInspector() {
             assets={assets}
             trackType={resolvedTrackType}
             voiceFetcher={voiceFetcher}
+            inputRequirements={currentModel?.inputRequirements}
+            labelStateRef={editLabelStateRef}
           />
         ) : (
           <PreviewModeContent
@@ -727,6 +777,7 @@ export function FragmentInspector() {
             trackType={resolvedTrackType}
             firstFrameAsReference={activeGeneration?.firstFrameAsReference}
             capabilityParams={capabilityParams}
+            inputRequirements={currentModel?.inputRequirements}
           />
         )}
       </div>
@@ -750,6 +801,8 @@ function EditModeContent({
   assets,
   trackType,
   voiceFetcher,
+  inputRequirements,
+  labelStateRef,
 }: {
   fragment: Fragment;
   genParams: GenerationParamsValue;
@@ -764,6 +817,8 @@ function EditModeContent({
   assets: Asset[];
   trackType: 'video' | 'audio';
   voiceFetcher?: () => Promise<Array<{ value: string; label: string }>>;
+  inputRequirements?: InputRequirements;
+  labelStateRef?: { current: Map<string, string> };
 }) {
   const { t } = useTranslation();
   const isAudio = trackType === 'audio';
@@ -800,10 +855,12 @@ function EditModeContent({
           warnings={validation?.promptWarnings}
           references={fragment.references}
           assets={assets}
+          inputRequirements={inputRequirements}
+          labelStateRef={labelStateRef}
         />
       </Panel>
 
-      {!isAudio && (
+      {(fragment.references.length > 0 || (inputRequirements ? supportsAnyReference(inputRequirements) : !isAudio)) && (
         <Panel title={t('inspector.labels.referenceAssets')}>
           <ReferenceSelector
             references={fragment.references}
@@ -811,6 +868,8 @@ function EditModeContent({
             onChange={(refs) => updateFragment(fragment.id, { references: refs })}
             fragmentId={fragment.id}
             indicators={indicators}
+            supportsImageRoles={capabilityParams?.outputType === 'video'}
+            inputRequirements={inputRequirements}
           />
         </Panel>
       )}
@@ -838,6 +897,7 @@ function PreviewModeContent({
   trackType,
   firstFrameAsReference,
   capabilityParams,
+  inputRequirements,
 }: {
   fragment: Fragment;
   genParams: GenerationParamsValue;
@@ -848,12 +908,14 @@ function PreviewModeContent({
   trackType: 'video' | 'audio';
   firstFrameAsReference?: boolean;
   capabilityParams?: CapabilityParams;
+  inputRequirements?: InputRequirements;
 }) {
   const { t, i18n } = useTranslation();
+  const marker = useMemo(() => resolveMarkerForUi(inputRequirements, t), [inputRequirements, t]);
   const labelToRef = useMemo(() => {
     const refs = fragment.references ?? [];
     if (refs.length === 0) return new Map<string, { ref: Reference; asset: Asset }>();
-    const idLabels = getReferenceLabels(refs);
+    const idLabels = getReferenceLabels(refs, marker);
     const map = new Map<string, { ref: Reference; asset: Asset }>();
     for (const ref of refs) {
       const label = idLabels.get(ref.id);
@@ -863,7 +925,7 @@ function PreviewModeContent({
       }
     }
     return map;
-  }, [fragment.references, getAssetById]);
+  }, [fragment.references, getAssetById, marker]);
 
   const promptElements = useMemo(() => {
     if (!fragment.prompt) return null;
@@ -876,6 +938,7 @@ function PreviewModeContent({
     return parsePromptLabels(
       effectivePrompt,
       labelToRef,
+      marker,
       (label, info, key) => (
         <span
           key={key}
@@ -892,6 +955,7 @@ function PreviewModeContent({
   }, [
     fragment.prompt,
     labelToRef,
+    marker,
     genParams.enableAudio,
     genParams.enableMusic,
     genParams.enableSubtitle,

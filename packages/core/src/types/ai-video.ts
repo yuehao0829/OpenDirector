@@ -84,6 +84,53 @@ export interface MinimaxGetVoicesResult {
   voices: MinimaxVoice[];
 }
 
+// ─── SeedAudio TTS (→ Rust seedaudio_tts.rs) ───
+
+/**
+ * A reference input for SeedAudio TTS — speaker / audio / image are mutually
+ * exclusive cloning sources. Per entry, exactly one field is populated:
+ *
+ * - `speaker` — a free-form voice ID.
+ * - `audio_url` / `image_url` — a remote (TOS presigned) URL, used when an
+ *   asset provider is configured. Passed through verbatim by Rust.
+ * - `audio_file_path` / `image_file_path` — a local path; Rust base64-encodes
+ *   it inline as `audio_data` / `image_data` (the no-TOS fallback).
+ *
+ * The controller builds up to 3 audio entries (priority: audios > image >
+ * speaker), preserving the user's `@音频N` positional order. Pure-text
+ * generation yields an empty array.
+ */
+export interface SeedAudioReferenceInput {
+  speaker?: string;
+  audio_file_path?: string;
+  image_file_path?: string;
+  /** Remote audio URL (TOS) — mutually exclusive with audio_file_path. */
+  audio_url?: string;
+  /** Remote image URL (TOS) — mutually exclusive with image_file_path. */
+  image_url?: string;
+}
+
+/** Parameters for seedaudio_tts_start_generation. */
+export interface SeedAudioTtsStartGenerationParams {
+  provider_id: string;
+  password: string;
+  task_id: string;
+  project_path: string;
+  fragment_id: string;
+  model: string;
+  text_prompt: string;
+  /** Resolved reference inputs (up to 3 audio / 1 image / 1 speaker; empty = pure-text generation). */
+  references: SeedAudioReferenceInput[];
+  audio_format?: string;
+  sample_rate?: number;
+  /** speech_rate ← speed */
+  speech_rate?: number;
+  /** loudness_rate ← volume */
+  loudness_rate?: number;
+  /** pitch_rate ← pitch */
+  pitch_rate?: number;
+}
+
 // ─── Seedance Content & Task Params (→ Rust CreateTaskParams) ───
 
 export type SeedanceContentRole =

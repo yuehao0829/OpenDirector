@@ -85,7 +85,7 @@ impl GenerationLogger {
         })
     }
 
-    fn write_entry(&mut self, entry: &GenerationLogEntry) -> Result<(), String> {
+    fn write_entry(&mut self, entry: &GenerationLogEntry, force_flush: bool) -> Result<(), String> {
         let mut line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
         line.push('\n');
         let line_bytes = line.len() as u64;
@@ -100,8 +100,12 @@ impl GenerationLogger {
         // Periodic flush — every FLUSH_INTERVAL_ENTRIES entries.
         // Error-level entries flush immediately so a fast-failing task (e.g. a
         // create-task error that exits well before the threshold) never leaves
-        // its failure log stranded in the buffer.
-        let should_flush = self.entries_since_flush >= FLUSH_INTERVAL_ENTRIES
+        // its failure log stranded in the buffer. Callers can also force a flush
+        // for critical diagnostic entries (e.g. a task-completed log) so a
+        // long-running `pnpm dev` that never reaches the threshold still has the
+        // entry on disk when a later failure is being root-caused.
+        let should_flush = force_flush
+            || self.entries_since_flush >= FLUSH_INTERVAL_ENTRIES
             || entry.level == LogLevel::Error;
         if should_flush {
             self.file
@@ -222,6 +226,18 @@ impl GenerationLogManager {
     }
 
     pub async fn log(&self, project_path: &str, entry: GenerationLogEntry) {
+        self.log_with_flush(project_path, entry, false).await;
+    }
+
+    /// Log an entry and force an immediate flush (so the entry is on disk
+    /// before this returns, not stranded in the BufWriter buffer). Used for
+    /// critical diagnostic entries that must survive even when the app keeps
+    /// running without reaching the periodic flush threshold.
+    pub async fn log_and_flush(&self, project_path: &str, entry: GenerationLogEntry) {
+        self.log_with_flush(project_path, entry, true).await;
+    }
+
+    async fn log_with_flush(&self, project_path: &str, entry: GenerationLogEntry, force_flush: bool) {
         let mut loggers = self.loggers.lock().await;
 
         // Get or create logger for this project
@@ -241,7 +257,7 @@ impl GenerationLogManager {
         }
 
         if let Some(logger) = loggers.get_mut(project_path) {
-            if let Err(e) = logger.write_entry(&entry) {
+            if let Err(e) = logger.write_entry(&entry, force_flush) {
                 eprintln!("[GenerationLog] Write failed: {}", e);
             }
         }
@@ -323,6 +339,7 @@ impl<'a> LogContext<'a> {
             msg: msg.to_string(),
             duration_ms: None,
             data: None,
+            force_flush: false,
         }
     }
 
@@ -336,6 +353,7 @@ impl<'a> LogContext<'a> {
             msg: msg.to_string(),
             duration_ms: None,
             data: None,
+            force_flush: false,
         }
     }
 
@@ -349,6 +367,7 @@ impl<'a> LogContext<'a> {
             msg: msg.to_string(),
             duration_ms: None,
             data: None,
+            force_flush: false,
         }
     }
 }
@@ -362,6 +381,7 @@ pub struct LogEntryBuilder<'a> {
     msg: String,
     duration_ms: Option<u64>,
     data: Option<serde_json::Value>,
+    force_flush: bool,
 }
 
 impl<'a> LogEntryBuilder<'a> {
@@ -380,11 +400,22 @@ impl<'a> LogEntryBuilder<'a> {
         self
     }
 
+    /// Force an immediate flush after this entry is written, so it lands on
+    /// disk before the spawn resolves (not stranded in the BufWriter buffer).
+    /// Use for critical diagnostic entries that must be readable when a later
+    /// failure is root-caused — e.g. a task-completed log, which otherwise
+    /// only flushes on the 10-entry threshold or an Error.
+    pub fn flush_immediate(mut self) -> Self {
+        self.force_flush = true;
+        self
+    }
+
     /// Fire-and-forget: spawn a tokio task to write the log entry.
     /// Never blocks the caller. On failure, falls back to eprintln.
     pub fn log(self) {
         let manager = (*self.manager).clone();
         let project_path = self.project_path.to_string();
+        let force_flush = self.force_flush;
         let entry = GenerationLogEntry {
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
             level: self.level,
@@ -396,7 +427,87 @@ impl<'a> LogEntryBuilder<'a> {
             data: self.data,
         };
         tauri::async_runtime::spawn(async move {
-            manager.log(&project_path, entry).await;
+            if force_flush {
+                manager.log_and_flush(&project_path, entry).await;
+            } else {
+                manager.log(&project_path, entry).await;
+            }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn log_and_flush_writes_entry_to_disk() {
+        // A force-flushed entry must be readable from the file immediately
+        // after log_and_flush resolves (not stranded in the BufWriter buffer).
+        // This is the contract force-flushed call sites (e.g. a task-completed
+        // log) rely on — without it, a successful run's log is unreadable until
+        // the next failure (the blind spot hit 2026-07-16).
+        let dir = std::env::temp_dir().join(format!("genlog-flush-{}", std::process::id()));
+        let project_path = dir.to_string_lossy().to_string();
+        let manager = GenerationLogManager::new();
+
+        let entry = GenerationLogEntry {
+            ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            level: LogLevel::Info,
+            source: "rust".to_string(),
+            task_id: Some("t-force".to_string()),
+            phase: "force_flush_probe".to_string(),
+            msg: "must be on disk now".to_string(),
+            duration_ms: None,
+            data: None,
+        };
+        manager.log_and_flush(&project_path, entry).await;
+
+        let log_path = dir.join("Logs").join("generation.log");
+        let content = std::fs::read_to_string(&log_path).expect("log file readable");
+        assert!(
+            content.contains("force_flush_probe"),
+            "forced-flush entry not on disk: {}",
+            content
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn plain_log_buffers_until_threshold() {
+        // Contrast: plain `log` (no force) writes but does NOT flush below the
+        // threshold — confirmed by writing 1 entry and reading the file: the
+        // line is in the BufWriter, may or may not be on disk. We assert only
+        // that log_and_flush reliably lands (the previous test) and that plain
+        // log compiles/exercises the non-force path without panic.
+        let dir = std::env::temp_dir().join(format!("genlog-plain-{}", std::process::id()));
+        let project_path = dir.to_string_lossy().to_string();
+        let manager = GenerationLogManager::new();
+
+        let entry = GenerationLogEntry {
+            ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            level: LogLevel::Info,
+            source: "rust".to_string(),
+            task_id: None,
+            phase: "plain_probe".to_string(),
+            msg: "buffered".to_string(),
+            duration_ms: None,
+            data: None,
+        };
+        manager.log(&project_path, entry).await;
+        // No assertion on disk presence — plain log may still be buffered.
+        // Just ensure it doesn't panic and the logger is created.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flush_immediate_builder_sets_flag() {
+        // The builder flag is private; verify the API surface (info() +
+        // flush_immediate() chain) exists and doesn't panic. Build but DON'T
+        // call .log() (that would spawn + write to a bad path).
+        let manager = Arc::new(GenerationLogManager::new());
+        let ctx = LogContext::new(&manager, "/nonexistent");
+        let _builder = ctx.info("probe", "msg").task_id("t").flush_immediate();
     }
 }

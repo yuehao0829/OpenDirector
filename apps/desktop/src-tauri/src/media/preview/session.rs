@@ -510,7 +510,11 @@ impl PreviewSession {
             }
             Some(player) => {
                 if let Err(error) = self.replace_preview_player_with_pending(player) {
-                    // Swap failed but the old player is retained; keep the session usable.
+                    // Swap failed. The session moves to Error state via fail_operation below.
+                    // On some failure paths — notably the Windows block, which retires the old
+                    // player before prerolling the new one — the old player is already shut down
+                    // and self.preview_player is None, so the front end must rebuild on the next
+                    // set_timeline. Position and virtual-playback state are restored regardless.
                     self.position_ms = previous_position_ms;
                     self.virtual_play_started_at = previous_virtual_play_started_at;
                     self.virtual_play_base_position_ms = previous_virtual_play_base_position_ms;
@@ -1325,41 +1329,102 @@ impl PreviewSession {
     ) -> Result<(), String> {
         let surface_window_handle = self.surface_window_handle();
 
-        // Preroll the NEW pipeline before retiring the old one so a preroll/bind failure leaves
-        // the existing player untouched and the session still usable.
-        if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
-            let _ = preview_player.shutdown();
-            return Err(error);
-        }
-
-        if let Some(surface) = self.native_surface.as_mut() {
-            let _ = surface.set_embedded_content_attached(false);
-        }
-
-        let mut existing = self.preview_player.take();
-        if let Some(existing_player) = existing.as_mut() {
-            if let Err(error) = existing_player.shutdown() {
-                // Keep the old player; discard the freshly prerolled one.
-                let _ = preview_player.shutdown();
-                self.preview_player = existing;
-                if let Some(surface) = self.native_surface.as_mut() {
-                    let _ = surface.set_embedded_content_attached(surface_window_handle.is_some());
+        // The order of "retire old player" vs "preroll new player" is platform-dependent and
+        // the two requirements are mutually exclusive, so this function branches on the target
+        // OS rather than sharing one sequence.
+        //
+        // Windows (d3d11videosink): the old sink MUST release its SetWindowLongPtrW subclassing
+        // of the surface HWND — restored when shutdown() drives the pipeline to Null — BEFORE the
+        // new sink binds the same HWND. If both subclass the HWND at once, SetWindowLongPtrW
+        // returns the prior subclass proc as the "original" proc, so external_window_proc ==
+        // sub_class_proc and d3d11 asserts/aborts (STATUS_STACK_BUFFER_OVERRUN). Commit ef72a75
+        // flipped this to preroll-first to fix a macOS seek race and regressed Windows; every
+        // timeline rebuild hits this path and crashed.
+        //
+        // macOS (glimagesink): no HWND subclassing, so the opposite order is required — preroll
+        // the new pipeline before retiring the old one — to avoid the seek race ef72a75 fixed.
+        #[cfg(target_os = "windows")]
+        {
+            // Retire the old player first so its d3d11 sink releases the surface HWND's wndproc
+            // subclassing before the new sink binds it. Note this forfeits the "preroll failure
+            // leaves the old player in place" guarantee: if the new player fails to preroll after
+            // the old one is shut down, the session is left with no player (Error state, front end
+            // can rebuild). A crash is strictly worse than a transiently empty preview, and this
+            // matches pre-ef72a75 Windows behavior.
+            if let Some(surface) = self.native_surface.as_mut() {
+                if let Err(error) = surface.set_embedded_content_attached(false) {
+                    let _ = preview_player.shutdown();
+                    return Err(error);
                 }
-                return Err(error);
             }
-        }
 
-        if let Some(surface) = self.native_surface.as_mut() {
-            if let Err(error) =
-                surface.set_embedded_content_attached(surface_window_handle.is_some())
-            {
+            let mut existing = self.preview_player.take();
+            if let Some(existing_player) = existing.as_mut() {
+                if let Err(error) = existing_player.shutdown() {
+                    self.preview_player = existing;
+                    if let Some(surface) = self.native_surface.as_mut() {
+                        let _ = surface.set_embedded_content_attached(surface_window_handle.is_some());
+                    }
+                    return Err(error);
+                }
+            }
+
+            if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
                 let _ = preview_player.shutdown();
                 return Err(error);
             }
+
+            if let Some(surface) = self.native_surface.as_mut() {
+                if let Err(error) =
+                    surface.set_embedded_content_attached(surface_window_handle.is_some())
+                {
+                    let _ = preview_player.shutdown();
+                    return Err(error);
+                }
+            }
+
+            self.preview_player = Some(preview_player);
+            Ok(())
         }
 
-        self.preview_player = Some(preview_player);
-        Ok(())
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Preroll the NEW pipeline before retiring the old one so a preroll/bind failure
+            // leaves the existing player untouched and the session still usable (ef72a75 fix).
+            if let Err(error) = preview_player.bind_surface_and_preroll(surface_window_handle) {
+                let _ = preview_player.shutdown();
+                return Err(error);
+            }
+
+            if let Some(surface) = self.native_surface.as_mut() {
+                let _ = surface.set_embedded_content_attached(false);
+            }
+
+            let mut existing = self.preview_player.take();
+            if let Some(existing_player) = existing.as_mut() {
+                if let Err(error) = existing_player.shutdown() {
+                    // Keep the old player; discard the freshly prerolled one.
+                    let _ = preview_player.shutdown();
+                    self.preview_player = existing;
+                    if let Some(surface) = self.native_surface.as_mut() {
+                        let _ = surface.set_embedded_content_attached(surface_window_handle.is_some());
+                    }
+                    return Err(error);
+                }
+            }
+
+            if let Some(surface) = self.native_surface.as_mut() {
+                if let Err(error) =
+                    surface.set_embedded_content_attached(surface_window_handle.is_some())
+                {
+                    let _ = preview_player.shutdown();
+                    return Err(error);
+                }
+            }
+
+            self.preview_player = Some(preview_player);
+            Ok(())
+        }
     }
 
     fn detach_native_surface(&mut self) -> Result<(), String> {

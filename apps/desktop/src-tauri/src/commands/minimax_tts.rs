@@ -20,7 +20,7 @@ use super::generation_task::{
     delete_pending_task, write_pending_task, GenerationEvent, PendingTaskRecord, PendingTaskStatus,
 };
 use super::seedance_api::{DownloadResult, SeedanceState};
-use super::util::MAX_DOWNLOAD_SIZE;
+use super::util::{truncate_body, MAX_DOWNLOAD_SIZE};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -837,18 +837,6 @@ async fn minimax_create_task_http(
             truncate_body(&body)
         )
     })
-}
-
-/// Truncate a response body for inclusion in error messages / logs, avoiding
-/// huge payloads while staying on UTF-8 char boundaries.
-fn truncate_body(body: &str) -> String {
-    const MAX_CHARS: usize = 2000;
-    let truncated: String = body.chars().take(MAX_CHARS).collect();
-    if truncated.len() < body.len() {
-        format!("{}...(truncated, {} bytes total)", truncated, body.len())
-    } else {
-        truncated
-    }
 }
 
 /// Parse a MiniMax t2a_async_v2 create response.

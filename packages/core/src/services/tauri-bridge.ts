@@ -23,6 +23,7 @@ import type {
   OpenAiImageGenerationResult,
   MinimaxTtsStartGenerationParams,
   MinimaxGetVoicesResult,
+  SeedAudioTtsStartGenerationParams,
 } from '../types/ai-video';
 import type { FileUploadResult } from '../types/asset-provider';
 import type {
@@ -278,6 +279,25 @@ export const minimaxTtsApi = {
   },
 };
 
+// ─── SeedAudio TTS API (X-Api-Key auth, single-shot create via Rust) ───
+
+export const seedaudioTtsApi = {
+  /** Start a single-shot TTS lifecycle (POST /api/v3/tts/create) in a Rust background task. Returns the local task_id. */
+  startGeneration(params: SeedAudioTtsStartGenerationParams): Promise<string> {
+    return invoke('seedaudio_tts_start_generation', { params });
+  },
+
+  /** Cancel a running TTS task (aborts the in-flight HTTP request) */
+  cancelGeneration(taskId: string): Promise<boolean> {
+    return invoke('seedaudio_tts_cancel_generation', { taskId });
+  },
+
+  /** Resume a pending TTS task after app restart (re-emits terminal state; no query endpoint) */
+  resumeGeneration(taskId: string, password: string): Promise<boolean> {
+    return invoke('seedaudio_tts_resume_generation', { taskId, password });
+  },
+};
+
 // ─── TOS API (SDK-backed via Rust) ───
 
 export const tosApi = {
@@ -509,6 +529,7 @@ export const tauriBridge = {
   seedanceApi,
   openAIImageApi,
   minimaxTtsApi,
+  seedaudioTtsApi,
   tosApi,
   assetTaskApi,
   mediaApi,

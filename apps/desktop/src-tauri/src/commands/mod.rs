@@ -15,6 +15,7 @@ pub mod poll_utils;
 pub mod provider_config;
 pub mod provider_key;
 pub mod seedance_api;
+pub mod seedaudio_tts;
 pub mod thumbnail;
 pub mod tos_api;
 pub mod util;

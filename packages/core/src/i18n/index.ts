@@ -31,7 +31,7 @@ void i18n.init({
   lng: DEFAULT_LANGUAGE,
   fallbackLng: DEFAULT_LANGUAGE,
   supportedLngs: [...SUPPORTED_LANGUAGES],
-  interpolation: { escapeValue: false },
+  interpolation: { escapeValue: false, skipOnVariables: true },
   returnNull: false,
   initAsync: false,
 });

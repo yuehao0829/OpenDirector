@@ -7,7 +7,7 @@
  */
 
 import type { Asset, Reference } from './asset';
-import { getEffectiveImageRole } from './asset';
+import { ASSET_TYPES, getEffectiveImageRole } from './asset';
 import { getProviderTypeRegistry } from '../services/service-locator';
 import { computeVisibleCropSize } from '../utils/crop';
 import { t as translate } from '../i18n';
@@ -64,6 +64,7 @@ export const BUILTIN_TYPE_IDS = {
   SEEDANCE: 'seedance',
   OPENAI_IMAGE: 'openai-image',
   MINIMAX: 'minimax',
+  SEEDAUDIO: 'seed-audio',
 } as const;
 
 // ── Capability Definitions ──
@@ -82,6 +83,35 @@ export interface InputRequirements {
     video?: { required: boolean; min?: number; max?: number; description?: string };
     audio?: { required: boolean; min?: number; max?: number; description?: string };
     maxTotal?: number;
+  };
+  /**
+   * Declarative reference-marker format — how references are cited inside the
+   * prompt. Each provider's server expects a different token shape (e.g.
+   * Seedance `[图片1]`/`[Image 1]`, SeedAudio `@音频1`/`@Audio1`); declaring it
+   * here lets the UI drive mention insertion / rendering / renumbering from one
+   * source instead of hardcoding `[类型N]`.
+   *
+   * A template uses `{{type}}` (type name) and `{{index}}` (1-based ordinal).
+   * `templateKey` is an i18n key resolved by the UI via `t()` so the template
+   * (and its spacing) can vary by language; `template` is a literal fallback for
+   * non-i18n use. Omit both to default to `'[{{type}}{{index}}]'`.
+   *
+   * Type names localize automatically from i18n (`common.image/video/audio`)
+   * when `typeNames` is omitted. Declare `typeNames` only when a server requires
+   * a fixed literal token regardless of UI language.
+   */
+  referenceMarker?: {
+    /** i18n key resolving to the per-language template (preferred for i18n). */
+    templateKey?: string;
+    /** Literal template (no i18n). Used when `templateKey` is absent/unresolved. */
+    template?: string;
+    /** Fixed cross-language type-name overrides; omit for localized names. */
+    typeNames?: { image?: string; video?: string; audio?: string };
+    /** Reference types that can be cited in the prompt via a marker. Defaults
+     *  to all supported reference types. E.g. SeedAudio's image is a
+     *  voice-cloning source (passed out-of-band), not a prompt citation, so it
+     *  declares `['audio']` to keep the mention UI from offering `@图片N`. */
+    mentionableTypes?: Array<'image' | 'video' | 'audio'>;
   };
   /** Constraints on individual reference assets at generation time (format, dimensions, size). */
   referenceAssetConstraints?: {
@@ -130,7 +160,7 @@ export interface InputRequirements {
   };
   /** Cross-reference constraints evaluated after per-type checks. */
   crossConstraints?: Array<{
-    rule: 'require_non_audio_reference';
+    rule: 'require_non_audio_reference' | 'forbid_image_audio_mix';
     message: string;
   }>;
   extraInputs?: Array<{
@@ -285,6 +315,15 @@ export function validateInputRequirements(
       if (cc.rule === 'require_non_audio_reference') {
         const nonAudioCount = references.filter((r) => r.type !== 'audio').length;
         if (nonAudioCount === 0) {
+          errors.push(cc.message);
+        }
+      } else if (cc.rule === 'forbid_image_audio_mix') {
+        // Some providers (e.g. SeedAudio voice cloning) treat image and audio
+        // references as mutually exclusive cloning sources — mixing them is
+        // rejected by the API. Block it here rather than silently dropping one.
+        const hasImage = references.some((r) => r.type === 'image');
+        const hasAudio = references.some((r) => r.type === 'audio');
+        if (hasImage && hasAudio) {
           errors.push(cc.message);
         }
       }
@@ -651,6 +690,85 @@ export function isAudioModel(params: CapabilityParams): boolean {
   if (params.outputType === 'audio') return true;
   if ((params.voiceIds?.length ?? 0) > 0) return true;
   return false;
+}
+
+/** The reference types a model supports: `max` undefined (treated as unlimited
+ *  — matching `validateInputRequirements`, which only enforces an upper bound
+ *  when `max` is defined) or explicitly > 0; only an explicit `max: 0` means
+ *  unsupported. Empty when no model is selected or the model supports no
+ *  references. */
+export function supportedReferenceTypes(req?: InputRequirements): Set<'image' | 'video' | 'audio'> {
+  const refs = req?.references;
+  if (!refs) return new Set();
+  return new Set(
+    ASSET_TYPES.filter((key) => {
+      const c = refs[key];
+      return !!c && (c.max === undefined || c.max > 0);
+    }),
+  );
+}
+
+/** Whether a model's InputRequirements allow any reference asset at all
+ *  (image / video / audio). Used to gate the reference-assets panel — e.g. an
+ *  audio fragment shows the panel for SeedAudio (audio/image cloning refs) but
+ *  not for MiniMax (no references). Returns false when requirements are absent
+ *  (no model selected / undeclared) — callers fall back to track-type heuristics. */
+export function supportsAnyReference(req?: InputRequirements): boolean {
+  return supportedReferenceTypes(req).size > 0;
+}
+
+// ── Reference Marker (declarative prompt citation format) ──
+
+/**
+ * Resolved reference-marker config — no optionals. `template` always has
+ * `{{type}}`/`{{index}}` placeholders; `typeNames` is fully populated;
+ * `mentionableTypes` lists the types that may be cited in the prompt.
+ */
+export interface ReferenceMarkerConfig {
+  template: string;
+  typeNames: { image: string; video: string; audio: string };
+  mentionableTypes: ReadonlyArray<'image' | 'video' | 'audio'>;
+}
+
+/**
+ * Resolve a model's `InputRequirements.referenceMarker` into a complete
+ * `ReferenceMarkerConfig`.
+ *
+ * - `template`: a declared `templateKey` is resolved via the module's own
+ *   `translate()` (this file already depends on i18n — see
+ *   `validateInputRequirements`); falls back to the literal `template`, then to
+ *   `'[{{type}}{{index}}]'`. i18next returns the key itself when the entry is
+ *   missing, which is treated as unresolved.
+ * - `typeNames`: provider-declared values win; gaps filled from
+ *   `fallbackTypeNames` (the UI passes localized `common.*` names; the default
+ *   uses `translate('common.*')` so the function is callable in isolation).
+ * - `mentionableTypes`: declared value, else all types (`ASSET_TYPES`).
+ */
+export function resolveReferenceMarker(
+  req?: InputRequirements,
+  fallbackTypeNames: { image: string; video: string; audio: string } = {
+    image: translate('common.image'),
+    video: translate('common.video'),
+    audio: translate('common.audio'),
+  },
+): ReferenceMarkerConfig {
+  const declared = req?.referenceMarker;
+  let template: string | undefined;
+  if (declared?.templateKey) {
+    const resolved = translate(declared.templateKey);
+    template = resolved && resolved !== declared.templateKey ? resolved.trim() : undefined;
+  }
+  template = template || declared?.template?.trim() || '[{{type}}{{index}}]';
+  const declaredNames = declared?.typeNames ?? {};
+  return {
+    template,
+    typeNames: {
+      image: declaredNames.image ?? fallbackTypeNames.image,
+      video: declaredNames.video ?? fallbackTypeNames.video,
+      audio: declaredNames.audio ?? fallbackTypeNames.audio,
+    },
+    mentionableTypes: declared?.mentionableTypes ?? ASSET_TYPES,
+  };
 }
 
 // ── Model Definitions ──

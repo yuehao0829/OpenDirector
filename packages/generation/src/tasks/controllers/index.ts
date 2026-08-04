@@ -10,11 +10,13 @@ import { registerTaskController } from '../task-controller-registry';
 import { seedanceController } from './seedance-controller';
 import { minimaxController } from './minimax-controller';
 import { gptImageController } from './gpt-image-controller';
+import { seedaudioController } from './seedaudio-controller';
 
 export function registerBuiltinTaskControllers(): void {
   registerTaskController(BUILTIN_TYPE_IDS.SEEDANCE, seedanceController);
   registerTaskController(BUILTIN_TYPE_IDS.MINIMAX, minimaxController);
   registerTaskController(BUILTIN_TYPE_IDS.OPENAI_IMAGE, gptImageController);
+  registerTaskController(BUILTIN_TYPE_IDS.SEEDAUDIO, seedaudioController);
 }
 
 // Auto-register on import so the controllers are available as soon as this

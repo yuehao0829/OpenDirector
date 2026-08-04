@@ -13,7 +13,7 @@ import { useTimelineStore } from '@opendirector/core/stores/timelineStore';
 import type { Generation } from '@opendirector/core/types/generation';
 import { isActiveGenerationStatus } from '@opendirector/core/types/generation';
 import { t } from '@opendirector/core/i18n';
-import { getErrorMessage, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
+import { getErrorMessage, getFileExtension, isAssetUrl, isRemoteUrl } from '@opendirector/core/utils/common';
 import { toWebViewUrl } from '@opendirector/core/utils/platform';
 import { generateId } from '@opendirector/core/utils/id';
 import {
@@ -33,6 +33,8 @@ import {
   generatedImagePath,
   GENERATED_VIDEO_DIR,
   recordToParams,
+  audioMimeForExtension,
+  isAudioExt,
 } from './generation-xml-repository';
 import { submitGenerationTask } from './task-submitter';
 import { resetFragmentIfGenerating } from './fragment-utils';
@@ -56,8 +58,11 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
   const gen = getGenerationById(taskId);
 
   const isAudioOutput = gen?.outputType === 'audio';
-  const outputPath = isAudioOutput ? generatedAudioPath(taskId) : generatedVideoPath(taskId);
-  const outputMime = isAudioOutput ? 'audio/mpeg' : 'video/mp4';
+  // SeedAudio can emit wav/pcm/ogg (not just mp3); derive the extension + mime
+  // from the file Rust actually wrote. MiniMax writes .mp3 so this stays mp3.
+  const audioExt = isAudioOutput ? audioExtensionFromPath(localPath) : 'mp3';
+  const outputPath = isAudioOutput ? generatedAudioPath(taskId, audioExt) : generatedVideoPath(taskId);
+  const outputMime = isAudioOutput ? audioMimeForExtension(audioExt) : 'video/mp4';
 
   const taskProjectPath = projectPath ?? extractProjectPath(localPath);
   taskLog.info(taskProjectPath, 'complete_start', 'Handling task completion', {
@@ -76,12 +81,13 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
       const xmlRecord = await readGenerationFromXml(taskProjectPath, taskId, fs);
       const isAudio = xmlRecord?.outputType === 'audio';
       const isImage = xmlRecord?.outputType === 'image';
+      const audioExt = isAudio ? audioExtensionFromPath(localPath) : 'mp3';
       const relPath = isAudio
-        ? generatedAudioPath(taskId)
+        ? generatedAudioPath(taskId, audioExt)
         : isImage
           ? generatedImagePath(taskId)
           : generatedVideoPath(taskId);
-      const mime = isAudio ? 'audio/mpeg' : isImage ? 'image/jpeg' : 'video/mp4';
+      const mime = isAudio ? audioMimeForExtension(audioExt) : isImage ? 'image/jpeg' : 'video/mp4';
 
       const assetId = generateId();
       // fs.getMediaMetadata and getDb()->getProjectsByFolderPath have no data dependency,
@@ -232,6 +238,11 @@ export async function handleTaskComplete(params: TaskCompleteParams): Promise<bo
       sampleRate: mediaMeta?.sampleRate,
       projectId,
       outputType: isAudioOutput ? 'audio' : 'video',
+      // Pass the derived mime/extension so SeedAudio ogg/wav/pcm assets are
+      // stored with their real MIME (buildGeneratedAsset defaults audio to
+      // 'audio/mpeg' + '.mp3' name when omitted). Matches the !gen path (118).
+      mimeType: outputMime,
+      fileExtension: audioExt,
     });
 
     const fragment = isCurrentProject
@@ -719,5 +730,11 @@ export function markRecordTerminal(
     id: generationsFile.generations[idx].id,
     updates: { status, ...(errorMsg ? { errorMessage: errorMsg } : {}) },
   });
+}
+
+/** Derive an audio file extension from a generated file path (defaults to mp3). */
+function audioExtensionFromPath(localPath: string): string {
+  const ext = getFileExtension(localPath);
+  return isAudioExt(ext) ? ext : 'mp3';
 }
 

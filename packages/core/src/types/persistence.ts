@@ -12,6 +12,13 @@
 export type AssetType = 'video' | 'image' | 'audio';
 
 /**
+ * Canonical asset-type tuple (image → video → audio) — the single source of
+ * truth for iteration order. Reuse this instead of re-declaring the tuple,
+ * so adding a type (or changing order) only touches one place.
+ */
+export const ASSET_TYPES = ['image', 'video', 'audio'] as const;
+
+/**
  * Asset source enum - where the asset comes from
  */
 export type AssetSource = 'original' | 'generated';

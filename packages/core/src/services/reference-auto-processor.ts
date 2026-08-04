@@ -182,10 +182,30 @@ export async function autoProcessReferences(options: AutoProcessOptions): Promis
     }
   }
 
-  // Execute processing plans in parallel (each processes a different asset)
+  // Execute processing plans in parallel (each processes a different asset).
+  // De-duplicate against a process cache keyed by (source asset id + size +
+  // processing signature): regenerating with the same over-limit reference
+  // reuses the prior processed asset instead of re-transcoding and orphaning
+  // duplicate files. Cached entries are validated via getAsset (the processed
+  // asset may have been deleted by the user).
   const results = await Promise.allSettled(
     plans.map(async (plan) => {
+      const cacheKey = `${plan.asset.id}:${plan.asset.fileSize ?? 0}:${planSignature(plan)}`;
+      const cachedId = processCache.get(cacheKey);
+      if (cachedId) {
+        const cached = getAsset(cachedId);
+        if (cached) {
+          return { plan, newAsset: cached };
+        }
+        processCache.delete(cacheKey);
+      }
       const newAsset = await processViaMediaPipeline(plan, projectPath, fs);
+      processCache.set(cacheKey, newAsset.id);
+      // Bound the cache so many distinct assets don't grow it without limit.
+      if (processCache.size > 64) {
+        const firstKey = processCache.keys().next().value;
+        if (firstKey !== undefined) processCache.delete(firstKey);
+      }
       return { plan, newAsset };
     }),
   );
@@ -201,6 +221,21 @@ export async function autoProcessReferences(options: AutoProcessOptions): Promis
 
   return { assetIdMap, newAssets };
 }
+
+/** Build a stable signature of a processing plan's transformation parameters. */
+function planSignature(plan: ProcessingPlan): string {
+  const tr = plan.reference.trimRange;
+  return [
+    plan.needsTranscode ? `t:${plan.targetFormat ?? ''}` : '',
+    plan.needsCompress ? `c:${plan.maxFileSize ?? ''}` : '',
+    plan.needsScale ? `s:${plan.maxWidth ?? ''}x${plan.maxHeight ?? ''}` : '',
+    plan.needsFpsAdjust ? `f:${plan.targetFps ?? ''}` : '',
+    tr ? `tr:${tr.startMs ?? 0}-${tr.endMs ?? 0}` : '',
+  ].join('|');
+}
+
+/** Reuse processed assets across regenerations: cacheKey → processedAssetId. */
+const processCache = new Map<string, string>();
 
 function determineTargetFormat(type: string, allowedFormats: string[]): string {
   if (type === 'video') {

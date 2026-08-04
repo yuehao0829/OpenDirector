@@ -21,4 +21,13 @@ describe('seedanceTypeDefinition', () => {
     );
     expect(apiKeyField?.key).toBe('api_key');
   });
+
+  it('declares the [图片N] / [Image N] citation form via an i18n templateKey', () => {
+    const req = seedanceTypeDefinition.modelFamilies[0].models[0].inputRequirements;
+    expect(req?.referenceMarker?.templateKey).toBe('generation.referenceMarker.seedance.template');
+    // No literal template/typeNames — the template localizes via i18n (zh no
+    // space, en with space) and type names come from common.* at render time.
+    expect(req?.referenceMarker?.template).toBeUndefined();
+    expect(req?.referenceMarker?.typeNames).toBeUndefined();
+  });
 });

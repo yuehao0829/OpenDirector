@@ -114,6 +114,8 @@ export function renderParam(props: RendererProps): React.ReactNode {
       return renderSlider(props);
     case 'select':
       return renderSelect(props);
+    case 'text-input':
+      return renderTextInput(props);
     case 'voice-selector':
       return renderVoiceSelector(props);
     case 'text-input-list':
@@ -364,6 +366,30 @@ function renderSelect({ item, value, onChange, disabled, params, t }: RendererPr
         options={options.map((o) => ({ value: String(o.value), label: o.label }))}
         disabled={disabled}
         placeholder={control.placeholder ? t(control.placeholder) : t(item.label)}
+      />
+    </SettingCard>
+  );
+}
+
+// ─── Text Input (single-line free text, e.g. SeedAudio speaker voice ID) ───
+
+function renderTextInput({ item, value, onChange, disabled, t }: RendererProps): React.ReactNode {
+  const control = item.control as Extract<ParamControl, { type: 'text-input' }>;
+  if (!item.label) return null;
+
+  const rawVal = value[item.valueKey as keyof GenerationParamsValue];
+  const val = rawVal !== undefined && rawVal !== null ? String(rawVal) : '';
+
+  return (
+    <SettingCard label={t(item.label)} icon={resolveParamIcon(item.icon)}>
+      <input
+        type={control.inputType ?? 'text'}
+        value={val}
+        maxLength={control.maxLength}
+        placeholder={control.placeholder ? t(control.placeholder) : undefined}
+        disabled={disabled}
+        onChange={(e) => onChange({ ...value, [item.valueKey as string]: e.target.value } as GenerationParamsValue)}
+        className="w-full px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800 text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
       />
     </SettingCard>
   );

@@ -625,7 +625,10 @@ function resolveGeneratedMediaPath(record: GenerationRecord): string {
     return generatedImagePath(record.id, mimeTypeToExtension(record.result?.mimeType) ?? 'jpg');
   }
   if (record.outputType === 'audio') {
-    return generatedAudioPath(record.id);
+    // Derive the extension from the recorded mimeType (symmetric with the image
+    // branch above) so a non-mp3 SeedAudio output (wav/ogg/pcm) resolves to its
+    // real file rather than a non-existent `<id>.mp3`.
+    return generatedAudioPath(record.id, mimeTypeToExtension(record.result?.mimeType) ?? 'mp3');
   }
   return generatedVideoPath(record.id);
 }

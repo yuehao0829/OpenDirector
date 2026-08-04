@@ -3,9 +3,11 @@
  */
 
 import type { AssetType, AssetSource } from './persistence';
+import { ASSET_TYPES } from './persistence';
 
 // Re-export for backward compatibility
 export type { AssetType, AssetSource };
+export { ASSET_TYPES };
 
 /**
  * Asset stored in project

@@ -98,6 +98,10 @@ class ProviderRuntimeRegistry {
           const { MiniMaxProvider } = await import('./minimax');
           return new MiniMaxProvider(instance.instanceId);
         }
+        case BUILTIN_TYPE_IDS.SEEDAUDIO: {
+          const { SeedAudioProvider } = await import('./seedaudio');
+          return new SeedAudioProvider(instance.instanceId);
+        }
         default:
           throw new Error(`No constructor for built-in provider: ${typeDef.typeId}`);
       }

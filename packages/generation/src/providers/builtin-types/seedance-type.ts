@@ -53,6 +53,13 @@ function createSeedanceInputRequirements(): InputRequirements {
       },
       maxTotal: 15,
     },
+    // Seedance cites references in the prompt as `[图片N]` (zh, no space) /
+    // `[Image N]` (en, with space) — bracketed. The template is i18n-driven
+    // (resources.ts `generation.referenceMarker.seedance`); type names localize
+    // from `common.*`.
+    referenceMarker: {
+      templateKey: 'generation.referenceMarker.seedance.template',
+    },
     referenceAssetConstraints: {
       image: {
         allowedFormats: [

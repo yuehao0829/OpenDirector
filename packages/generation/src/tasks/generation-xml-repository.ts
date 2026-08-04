@@ -73,12 +73,16 @@ export function buildGeneratedAsset(params: {
   const isImage = outputType === 'image';
   const isAudio = outputType === 'audio';
   const imageExtension = fileExtension ?? mimeTypeToExtension(mimeType) ?? 'jpg';
+  // Audio name must carry the real extension too — otherwise wav/ogg/pcm SeedAudio
+  // output gets a misleading `.mp3` name (the file + mimeType are correct, but
+  // name-based format inference would be wrong). Mirrors the image branch.
+  const audioExtension = fileExtension ?? mimeTypeToExtension(mimeType) ?? 'mp3';
   return {
     id: assetId,
     name: isImage
       ? formatGeneratedImageName(taskId, imageExtension)
       : isAudio
-        ? formatGeneratedAudioName(taskId)
+        ? formatGeneratedAudioName(taskId, audioExtension)
         : formatGeneratedAssetName(taskId),
     type: isImage ? 'image' : isAudio ? 'audio' : 'video',
     source: 'generated',
@@ -107,7 +111,34 @@ export function buildGeneratedAsset(params: {
   };
 }
 
+/** Audio codec registry — the single source of truth for ext ↔ MIME. */
+export const AUDIO_CODECS: ReadonlyArray<{ ext: string; mime: string }> = [
+  { ext: 'mp3', mime: 'audio/mpeg' },
+  { ext: 'wav', mime: 'audio/wav' },
+  { ext: 'pcm', mime: 'audio/pcm' },
+  { ext: 'flac', mime: 'audio/flac' },
+  { ext: 'ogg', mime: 'audio/ogg' },
+];
+
+/** Whether `ext` is a known audio extension (case-insensitive). */
+export function isAudioExt(ext: string): boolean {
+  const e = ext.toLowerCase();
+  return AUDIO_CODECS.some((c) => c.ext === e);
+}
+
+/** Map an audio file extension to its MIME type (defaults to `audio/mpeg`). */
+export function audioMimeForExtension(ext: string): string {
+  const e = ext.toLowerCase();
+  return AUDIO_CODECS.find((c) => c.ext === e)?.mime ?? 'audio/mpeg';
+}
+
 export function mimeTypeToExtension(mimeType: string | undefined): string | undefined {
+  if (mimeType === undefined) return undefined;
+  // Audio: single source — accept either the MIME or the extension. The
+  // comparison is case-sensitive (matching the prior switch), so a non-lowercase
+  // input still falls through to the image cases / default.
+  const audio = AUDIO_CODECS.find((c) => c.mime === mimeType || c.ext === mimeType);
+  if (audio) return audio.ext;
   switch (mimeType) {
     case 'image/png':
     case 'png':
@@ -119,18 +150,6 @@ export function mimeTypeToExtension(mimeType: string | undefined): string | unde
     case 'jpeg':
     case 'jpg':
       return 'jpg';
-    case 'audio/mpeg':
-    case 'mp3':
-      return 'mp3';
-    case 'audio/wav':
-    case 'wav':
-      return 'wav';
-    case 'audio/pcm':
-    case 'pcm':
-      return 'pcm';
-    case 'audio/flac':
-    case 'flac':
-      return 'flac';
     default:
       return undefined;
   }
@@ -188,9 +207,21 @@ export function resolveLocalFilePath(
 ): string | null {
   const asset = assets.find((a) => a.id === url);
   if (asset) {
-    if (asset.sourcePath) return asset.sourcePath;
-    if (asset.relativePath) return `${folderPath}/${asset.relativePath}`;
-    return null;
+    // Prefer the in-project copy (relativePath): it's the stable file the
+    // import created inside the project folder (copyFile → Assets/<type>/<id>.<ext>)
+    // or that generation produced (Generated/…). sourcePath is the ORIGINAL import
+    // path (e.g. D:\Downloads\clip.wav), which the user may delete after import —
+    // uploading/reading it would fail or grab a stale/missing file, so it's a
+    // fallback, not the default.
+    //
+    // Reference mode (copyToProject=false, currently unused) sets
+    // relativePath = sourcePath (an absolute path). The `!== sourcePath` guard
+    // detects that and falls through to return sourcePath verbatim instead of
+    // prefixing folderPath (which would yield an invalid drive-letter path).
+    if (asset.relativePath && asset.relativePath !== asset.sourcePath) {
+      return `${folderPath}/${asset.relativePath}`;
+    }
+    return asset.sourcePath ?? null;
   }
   if (!url.includes('://')) return url;
   return null;
@@ -231,12 +262,14 @@ export function buildProviderParams(modelId: string, params: GenerationParams, m
     imageBackground: params.imageBackground,
     imageModeration: params.imageModeration,
     imageOutputCompression: params.imageOutputCompression,
-    // TTS (MiniMax)
+    // TTS (MiniMax / SeedAudio)
     voiceId: params.voiceId,
     speed: params.speed,
     emotion: params.emotion,
     audioFormat: params.audioFormat,
     sampleRate: params.sampleRate,
+    volume: params.volume,
+    pitch: params.pitch,
   };
 }
 
@@ -268,12 +301,14 @@ export function recordToParams(record: GenerationRecord): GenerationParams {
     imageBackground: pp.imageBackground as string | undefined,
     imageModeration: pp.imageModeration as string | undefined,
     imageOutputCompression: pp.imageOutputCompression as number | undefined,
-    // TTS (MiniMax)
+    // TTS (MiniMax / SeedAudio)
     voiceId: pp.voiceId as string | undefined,
     speed: pp.speed as number | undefined,
     emotion: pp.emotion as string | undefined,
     audioFormat: pp.audioFormat as string | undefined,
     sampleRate: pp.sampleRate as string | undefined,
+    volume: pp.volume as number | undefined,
+    pitch: pp.pitch as number | undefined,
   };
 }
 

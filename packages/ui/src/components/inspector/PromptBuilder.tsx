@@ -1,10 +1,23 @@
 import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { Asset, Reference } from '@opendirector/core/types/asset';
+import type { InputRequirements } from '@opendirector/core/types/provider-system';
 import { useTranslation } from 'react-i18next';
-import { MentionPopup, getReferenceLabels, buildMentionItems, escapeRegex } from './prompt-editor';
+import { MentionPopup, getReferenceLabels, buildMentionItems, escapeRegex, resolveMarkerForUi } from './prompt-editor';
 
 const PROMPT_TEXTAREA_MIN_HEIGHT = 144;
+
+/**
+ * Regex matching a reference `label` as a whole token, for renumber/deletion.
+ * For labels ending in a digit (delimiter-less markers like `@音频1`), append a
+ * `(?!\d)` boundary so `@音频1` does not match inside `@音频10`. Bracketed
+ * labels (`[图片1]`) end in `]`, so no boundary is needed — and adding one would
+ * wrongly reject `[图片1]` followed by a digit.
+ */
+function labelReplaceRegex(label: string): RegExp {
+  const trailingDigit = /\d$/.test(label);
+  return new RegExp(escapeRegex(label) + (trailingDigit ? '(?!\\d)' : ''), 'g');
+}
 
 interface PromptBuilderProps {
   prompt: string;
@@ -16,6 +29,13 @@ interface PromptBuilderProps {
   references?: Reference[];
   assets?: Asset[];
   autoFocus?: boolean;
+  /** Model input requirements — drives the declarative reference marker
+   *  (`referenceMarker`). Omit to fall back to the default `[类型N]` marker. */
+  inputRequirements?: InputRequirements;
+  /** Lifted label-state ref (from the always-mounted parent). Lets the renumber
+   *  effect survive this input unmounting (e.g. switching to preview mode) so a
+   *  marker change during unmount is still migrated on remount. */
+  labelStateRef?: { current: Map<string, string> };
 }
 
 export function PromptBuilder({
@@ -28,8 +48,14 @@ export function PromptBuilder({
   references = [],
   assets = [],
   autoFocus = false,
+  inputRequirements,
+  labelStateRef,
 }: PromptBuilderProps) {
   const { t } = useTranslation();
+  // Marker is recomputed when the model (inputRequirements) or language (t)
+  // changes — no module-level cache, so mention insertion/rendering/renumbering
+  // always follow the declared format (e.g. SeedAudio `@音频1` vs Seedance `[图片1]`).
+  const marker = useMemo(() => resolveMarkerForUi(inputRequirements, t), [inputRequirements, t]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
@@ -180,50 +206,64 @@ export function PromptBuilder({
     setMentionFilter('');
   }, [setMentionOpenTracked]);
 
-  // Auto-sync: remove deleted ref labels and re-number when references change
-  const prevLabelsRef = useRef<Map<string, string>>(new Map());
+  // Auto-sync: remove deleted ref labels and re-number when references/marker
+  // change. `labelStateRef` is lifted from the always-mounted parent so a
+  // marker change while this input is unmounted (e.g. switching model in
+  // preview mode) is still migrated on remount — `prevLabels` retains the
+  // old-format labels.
+  const internalLabelStateRef = useRef<Map<string, string>>(new Map());
+  const prevLabelsRef = labelStateRef ?? internalLabelStateRef;
+  // Read the latest prompt via a ref instead of a dep, so this effect does NOT
+  // re-run on every keystroke (renumbering only depends on references/marker).
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
 
   useEffect(() => {
-    const currentLabels = getReferenceLabels(references);
-
-    if (prevLabelsRef.current.size > 0) {
-      let updatedPrompt = prompt;
-      let changed = false;
-
-      for (const [id, oldLabel] of prevLabelsRef.current) {
-        if (!currentLabels.has(id)) {
-          const next = updatedPrompt.replace(new RegExp(escapeRegex(oldLabel), 'g'), '');
-          if (next !== updatedPrompt) {
-            updatedPrompt = next;
-            changed = true;
-          }
-        }
-      }
-
-      for (const [id, currentLabel] of currentLabels) {
-        const oldLabel = prevLabelsRef.current.get(id);
-        if (oldLabel && oldLabel !== currentLabel) {
-          const next = updatedPrompt.replace(new RegExp(escapeRegex(oldLabel), 'g'), currentLabel);
-          if (next !== updatedPrompt) {
-            updatedPrompt = next;
-            changed = true;
-          }
-        }
-      }
-
-      if (changed) {
-        onPromptChange(updatedPrompt);
-      }
+    const currentLabels = getReferenceLabels(references, marker);
+    if (prevLabelsRef.current.size === 0) {
+      prevLabelsRef.current = references.length === 0 ? new Map() : currentLabels;
+      return;
     }
 
-    if (references.length === 0) {
-      prevLabelsRef.current.clear();
-    } else {
-      prevLabelsRef.current = currentLabels;
+    // Collect deletions (removed refs) and renames (index/marker changed).
+    const deletions: string[] = [];
+    const renames: Array<{ from: string; to: string }> = [];
+    for (const [id, oldLabel] of prevLabelsRef.current) {
+      const newLabel = currentLabels.get(id);
+      if (newLabel === undefined) deletions.push(oldLabel);
+      else if (newLabel !== oldLabel) renames.push({ from: oldLabel, to: newLabel });
     }
-  }, [references, prompt, onPromptChange]);
 
-  const mentionItems = useMemo(() => buildMentionItems(references, assets), [references, assets]);
+    if (deletions.length === 0 && renames.length === 0) {
+      prevLabelsRef.current = references.length === 0 ? new Map() : currentLabels;
+      return;
+    }
+
+    let updated = promptRef.current;
+    // Phase 1 — rename each oldLabel → a unique placeholder. A function
+    // replacer avoids `$`-pattern interpretation; placeholders avoid clobbering
+    // when two refs swap indices; the `(?!\d)` boundary (for digit-ending
+    // labels) stops `@音频1` matching inside `@音频10`.
+    const pending = renames.map((r, i) => ({ ...r, ph: `__pb_ph_${i}__` }));
+    for (const r of pending) {
+      updated = updated.replace(labelReplaceRegex(r.from), () => r.ph);
+    }
+    // Phase 2 — delete removed labels.
+    for (const oldLabel of deletions) {
+      updated = updated.replace(labelReplaceRegex(oldLabel), '');
+    }
+    // Phase 3 — resolve placeholders → new labels (split/join is literal, no `$`).
+    for (const r of pending) {
+      updated = updated.split(r.ph).join(r.to);
+    }
+
+    if (updated !== promptRef.current) {
+      onPromptChange(updated);
+    }
+    prevLabelsRef.current = references.length === 0 ? new Map() : currentLabels;
+  }, [references, onPromptChange, marker, prevLabelsRef]);
+
+  const mentionItems = useMemo(() => buildMentionItems(references, assets, marker), [references, assets, marker]);
 
   return (
     <div className="space-y-3" data-testid="prompt-builder">

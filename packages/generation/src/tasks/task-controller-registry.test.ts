@@ -27,6 +27,7 @@ describe('TaskController registry', () => {
       BUILTIN_TYPE_IDS.SEEDANCE,
       BUILTIN_TYPE_IDS.MINIMAX,
       BUILTIN_TYPE_IDS.OPENAI_IMAGE,
+      BUILTIN_TYPE_IDS.SEEDAUDIO,
     ] as const;
 
     for (const typeId of expectedTypeIds) {
@@ -61,6 +62,14 @@ describe('TaskController registry', () => {
 
     it('GPT Image controller does NOT implement polling methods (synchronous)', () => {
       const controller = requireTaskController(BUILTIN_TYPE_IDS.OPENAI_IMAGE);
+      expect(controller.batchQuery).toBeUndefined();
+      expect(controller.getTaskStatus).toBeUndefined();
+      expect(controller.downloadResult).toBeUndefined();
+      expect(controller.refreshActive).toBeUndefined();
+    });
+
+    it('SeedAudio controller does NOT implement polling methods (event-driven, single-shot)', () => {
+      const controller = requireTaskController(BUILTIN_TYPE_IDS.SEEDAUDIO);
       expect(controller.batchQuery).toBeUndefined();
       expect(controller.getTaskStatus).toBeUndefined();
       expect(controller.downloadResult).toBeUndefined();

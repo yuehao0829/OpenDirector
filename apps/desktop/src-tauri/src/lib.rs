@@ -8,6 +8,7 @@ use commands::generation_log::GenerationLogManager;
 use commands::generation_task::GenerationTaskManager;
 use commands::minimax_tts::MinimaxTaskManager;
 use commands::seedance_api::SeedanceState;
+use commands::seedaudio_tts::SeedAudioTaskManager;
 use db::DbState;
 use media::preview::PreviewSessionManager;
 use tauri::Manager;
@@ -161,6 +162,9 @@ pub fn run() {
             commands::minimax_tts::minimax_tts_cancel_generation,
             commands::minimax_tts::minimax_tts_resume_generation,
             commands::minimax_tts::minimax_get_voices,
+            commands::seedaudio_tts::seedaudio_tts_start_generation,
+            commands::seedaudio_tts::seedaudio_tts_cancel_generation,
+            commands::seedaudio_tts::seedaudio_tts_resume_generation,
             commands::generation_log::write_generation_log,
             commands::seedance_api::seedance_create_task,
             commands::seedance_api::seedance_get_task_status,
@@ -260,6 +264,7 @@ pub fn run() {
                 client.clone(),
                 log_manager.clone(),
             ));
+            app.manage(SeedAudioTaskManager::new(log_manager.clone()));
             app.manage(AssetTaskManager::new(
                 app.handle().clone(),
                 client,
